@@ -9,7 +9,8 @@
 #import <QuartzCore/QuartzCore.h>
 struct Key { const char* name; int scan; float width=1; };
 static const std::vector<std::vector<Key>> rows = {
-    {{"STOP",0x60},{"COPY",0x61},{"F1",0x62},{"F2",0x63},{"F3",0x64},{"F4",0x65},{"F5",0x66},{"F6",0x67},{"F7",0x68},{"F8",0x69},{"F9",0x6A},{"F10",0x6B},{"VF1",0x52},{"VF2",0x53},{"VF3",0x54},{"VF4",0x55},{"VF5",0x56}},
+    {{"VF1",0x52},{"VF2",0x53},{"VF3",0x54},{"VF4",0x55},{"VF5",0x56}},
+    {{"STOP",0x60},{"COPY",0x61},{"F1",0x62},{"F2",0x63},{"F3",0x64},{"F4",0x65},{"F5",0x66},{"F6",0x67},{"F7",0x68},{"F8",0x69},{"F9",0x6A},{"F10",0x6B}},
     {{"ESC",0},{"1",1},{"2",2},{"3",3},{"4",4},{"5",5},{"6",6},{"7",7},{"8",8},{"9",9},{"0",10},{"-",11},{"^",12},{"¥",13},{"BS",14,1.4}},
     {{"TAB",15,1.4},{"Q",16},{"W",17},{"E",18},{"R",19},{"T",20},{"Y",21},{"U",22},{"I",23},{"O",24},{"P",25},{"@",26},{"[",27},{"↵",28,1.4}},
     {{"CTRL",0x74,1.4},{"A",29},{"S",30},{"D",31},{"F",32},{"G",33},{"H",34},{"J",35},{"K",36},{"L",37},{";",38},{":",39},{"]",40},{"↵",28,1.4}},
@@ -99,30 +100,40 @@ static const std::vector<std::vector<Key>> rows = {
     CGRect shell=CGRectInset(self.bounds,.5,.5);
     PC98Gradient(shell,PC98Plastic(.91),PC98Plastic(.69),10);
     [PC98Plastic(.97) setStroke]; UIBezierPath* edge=[UIBezierPath bezierPathWithRoundedRect:CGRectInset(shell,1,1) cornerRadius:9]; edge.lineWidth=1; [edge stroke];
-    // Blank recessed nameplate and indicator lamps; no manufacturer mark.
-    PC98Gradient(CGRectMake(12,8,MAX(1,self.bounds.size.width*.58),14),PC98Plastic(.75),PC98Plastic(.87),1);
+    // The top deck has indicators on the left and a separate VF bank on the right.
+    PC98Gradient(CGRectMake(10,7,78,31),PC98Plastic(.77),PC98Plastic(.85),2);
+    NSArray* lampNames=@[@"CAPS",@"かな",@"GRPH"];
     for(int i=0;i<3;++i) {
-        CGFloat x=self.bounds.size.width-54+i*15;
-        [PC98Plastic(.41) setFill]; UIRectFill(CGRectMake(x,12,5,3));
-        if(latched.count(0x71+i)) { [[UIColor colorWithRed:.64 green:.76 blue:.30 alpha:1] setFill]; UIRectFill(CGRectMake(x+1,12,3,2)); }
+        CGFloat x=19+i*24;
+        [PC98Plastic(.41) setFill]; UIRectFill(CGRectMake(x+3,13,7,3));
+        if(latched.count(0x71+i)) { [[UIColor colorWithRed:.64 green:.76 blue:.30 alpha:1] setFill]; UIRectFill(CGRectMake(x+4,13,5,2)); }
+        [lampNames[i] drawAtPoint:CGPointMake(x-2,23) withAttributes:@{NSFontAttributeName:[UIFont systemFontOfSize:6],NSForegroundColorAttributeName:[UIColor colorWithWhite:.27 alpha:1]}];
     }
-    CGRect well=CGRectMake(8,28,self.bounds.size.width-16,self.bounds.size.height-38);
+    PC98Gradient(CGRectInset([self vfBankFrame],-2,-2),PC98Plastic(.40),PC98Plastic(.60),3);
+    CGRect well=CGRectMake(8,46,self.bounds.size.width-16,self.bounds.size.height-56);
     PC98Gradient(well,PC98Plastic(.37),PC98Plastic(.54),3);
     // Separate the function keys and the auxiliary/numeric bank with case ribs.
     CGFloat content=well.size.height-8, rowHeight=content/8.0;
     [PC98Plastic(.73) setFill]; UIRectFill(CGRectMake(8,well.origin.y+rowHeight-1,well.size.width,4));
     UIRectFill(CGRectMake(8,well.origin.y+rowHeight*6-1,well.size.width,4));
 }
+- (CGRect)vfBankFrame {
+    CGFloat width=MIN((self.bounds.size.width-20)*.58,232);
+    return CGRectMake(self.bounds.size.width-10-width,8,width,30);
+}
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGFloat gap=3, left=10, top=30, usable=self.bounds.size.width-20;
-    CGFloat h=(self.bounds.size.height-top-12-gap*(rows.size()-1))/rows.size();
-    for(size_t r=0;r<rows.size();++r) {
+    CGFloat gap=3, left=10, top=48, usable=self.bounds.size.width-20;
+    CGRect bank=[self vfBankFrame]; CGFloat vfWidth=(bank.size.width-gap*4)/5;
+    for(NSUInteger i=0;i<5;++i)
+        self.keys[0][i].frame=CGRectMake(bank.origin.x+i*(vfWidth+gap),bank.origin.y,vfWidth,bank.size.height);
+    CGFloat h=(self.bounds.size.height-top-12-gap*(rows.size()-2))/(rows.size()-1);
+    for(size_t r=1;r<rows.size();++r) {
         float units=0; for(auto k:rows[r]) units+=k.width;
         CGFloat unit=(usable-gap*(rows[r].size()-1))/units, x=left;
         for(size_t c=0;c<rows[r].size();++c) {
             CGFloat w=unit*rows[r][c].width;
-            self.keys[r][c].frame=CGRectMake(x,top+r*(h+gap),w,MAX(1,h)); x+=w+gap;
+            self.keys[r][c].frame=CGRectMake(x,top+(r-1)*(h+gap),w,MAX(1,h)); x+=w+gap;
         }
     }
     [self setNeedsDisplay];
