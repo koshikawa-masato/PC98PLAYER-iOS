@@ -26,6 +26,7 @@ done
 mkdir -p out/ios-smoke
 cp "$container/Documents/smoke-result.json" out/ios-smoke/result.json
 cp "$container/Documents/duo-smoke.png" out/ios-smoke/duo.png
+cp "$container/Documents/portrait-smoke.png" out/ios-smoke/portrait.png
 python3 - <<'PY'
 import json
 from pathlib import Path

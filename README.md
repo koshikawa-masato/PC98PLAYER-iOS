@@ -20,7 +20,9 @@ C++の共通エミュレータコアをUIKitで動かすiOS版です。iOS 17以
 
 NAS上のゲームを更新したときはキャッシュを消去してから再取得します。変更済みファイルは保存領域のものが優先されます。Root=を使う場合は、選択フォルダ内を指す相対パスにしてください。ディスク・CDなどのホストパスにも選択フォルダ内の相対パスを使います。
 
-## Duoの操作
+## iPhoneとDuoの操作
+
+通常のiPhoneは縦画面に固定し、上にモニタ、下にPC-98キーボードを常時表示します。Duo表示を指定した場合とヒンジを検出した場合は、折り目に合わせて回転できます。
 
 「表示 → Duo上下表示を固定」で、上側に640×400のモニタ、下側にPC-98ソフトキーボードを表示します。iOS 27.0.1ではこの手動指定を使います。画面の開閉による物理ディスプレイの選択はOSが管理します。
 
@@ -50,6 +52,13 @@ IOS_SDK=iphoneos ./build_ios.sh
 IOS_SDK=iphoneos IOS_DEVELOPMENT_TEAM=YOUR_TEAM_ID ./build_ios.sh
 # Release構成も指定可能
 IOS_SDK=iphoneos IOS_CONFIGURATION=Release ./build_ios.sh
+```
+
+USBでiPhoneを接続し、ロック解除・信頼許可・デベロッパモードを確認してから、インストールと起動を実行できます。
+
+```sh
+xcrun devicectl list devices
+IOS_DEVELOPMENT_TEAM=YOUR_TEAM_ID ./tools/install_ios_device.sh DEVICE_UDID
 ```
 
 `IOS_BUNDLE_ID` で自分用のBundle IDに変更できます。生成された実機用プロジェクトをXcodeで開き、接続したiPhoneを選んで実行します。署名なしの `.app` はそのまま実機にインストールできません。App Store / TestFlightへの配信は行っていません。

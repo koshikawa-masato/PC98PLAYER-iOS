@@ -15,4 +15,8 @@ cmake -S . -B "build/ios-$sdk" -G Xcode \
   -DPC98PLAYER_IOS_BUNDLE_ID="${IOS_BUNDLE_ID:-jp.pc98player.ios}" \
   -DPC98PLAYER_IOS_DEVELOPMENT_TEAM="${IOS_DEVELOPMENT_TEAM:-}" \
   -DBUILD_TESTING=OFF
-cmake --build "build/ios-$sdk" --config "$configuration" --parallel 4
+if [ "$signing" = ON ]; then
+  cmake --build "build/ios-$sdk" --config "$configuration" --parallel 4 -- -allowProvisioningUpdates
+else
+  cmake --build "build/ios-$sdk" --config "$configuration" --parallel 4
+fi

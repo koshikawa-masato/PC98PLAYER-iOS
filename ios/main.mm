@@ -64,6 +64,11 @@ static UIImage* frameImage(Player* p) {
 @property NSString* currentID;
 @end
 @implementation PlayerController
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    if(self.traitCollection.userInterfaceIdiom==UIUserInterfaceIdiomPhone && !manualDuo && !hingeDuo)
+        return UIInterfaceOrientationMaskPortrait;
+    return UIInterfaceOrientationMaskAllButUpsideDown;
+}
 - (BOOL)canBecomeFirstResponder { return YES; }
 - (void)viewDidLoad {
     [super viewDidLoad]; self.view.backgroundColor=UIColor.blackColor; paused=YES;
@@ -98,7 +103,7 @@ static UIImage* frameImage(Player* p) {
         UIHingeInteraction* interaction=[[UIHingeInteraction alloc] initWithUpdateHandler:^(UIHingeInteraction* interaction,UIHingeInteractionUpdate* update) {
             PlayerController* s=weak; if(!s) return;
             BOOL duo=update.hinge && update.hinge.status==UIHingeStatusPartiallyOpen;
-            if(s->hingeDuo!=duo) { [s releaseKeys]; s->hingeDuo=duo; [s.view setNeedsLayout]; }
+            if(s->hingeDuo!=duo) { [s releaseKeys]; s->hingeDuo=duo; [s setNeedsUpdateOfSupportedInterfaceOrientations]; [s.view setNeedsLayout]; }
         }];
         [self.view addInteraction:interaction];
     }
@@ -334,7 +339,7 @@ static UIImage* frameImage(Player* p) {
     UIAlertController* menu=[UIAlertController alertControllerWithTitle:@"表示" message:@"Duo上下：上にモニタ、下にPC-98キーボード。iOS 27.1以降では半開きに自動追従します。" preferredStyle:UIAlertControllerStyleAlert];
     __weak PlayerController* weak=self;
     for(NSNumber* choice in @[@NO,@YES]) [menu addAction:[UIAlertAction actionWithTitle:choice.boolValue?@"Duo上下表示を固定":@"自動／通常表示" style:UIAlertActionStyleDefault handler:^(UIAlertAction* a) {
-        PlayerController* s=weak; if(!s) return; [s releaseKeys]; s->manualDuo=choice.boolValue;
+        PlayerController* s=weak; if(!s) return; [s releaseKeys]; s->manualDuo=choice.boolValue; [s setNeedsUpdateOfSupportedInterfaceOrientations];
         [NSUserDefaults.standardUserDefaults setBool:s->manualDuo forKey:@"PC98ManualDuo"]; [s.view setNeedsLayout];
     }]];
     [menu addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
@@ -398,6 +403,13 @@ static UIImage* frameImage(Player* p) {
     uint8_t previous=player->m->ram[0x90000]; player->m->ram[0x90000]=previous^0xFF;
     bool loaded=player->load_state(7,&error);
     result[@"stateRoundtrip"]=@(saved && loaded && player->m->ram[0x90000]==previous);
+    manualDuo=NO; hingeDuo=NO; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
+    result[@"phonePortraitOrientation"]=@(self.traitCollection.userInterfaceIdiom!=UIUserInterfaceIdiomPhone || self.supportedInterfaceOrientations==UIInterfaceOrientationMaskPortrait);
+    result[@"phoneKeyboardBelowMonitor"]=@(CGRectGetMinY(self.keyboard.frame)>CGRectGetMaxY(self.topPanel.frame));
+    UIGraphicsImageRenderer* portraitRenderer=[[UIGraphicsImageRenderer alloc] initWithBounds:self.view.bounds];
+    self.monitor.image=frameImage(player.get());
+    UIImage* portrait=[portraitRenderer imageWithActions:^(UIGraphicsImageRendererContext* context) { [self.view.layer renderInContext:context.CGContext]; }];
+    [UIImagePNGRepresentation(portrait) writeToURL:area(NSDocumentDirectory,@"portrait-smoke.png") atomically:YES];
     manualDuo=YES; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     CGFloat mid=CGRectGetMidY(self.view.bounds);
     result[@"duoMonitorAboveFold"]=@(CGRectGetMaxY(self.topPanel.frame)<mid);
