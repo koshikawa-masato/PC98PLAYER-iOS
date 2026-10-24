@@ -136,6 +136,12 @@ static const std::vector<std::vector<Key>> rows = {
             self.keys[r][c].frame=CGRectMake(x,top+(r-1)*(h+gap),w,MAX(1,h)); x+=w+gap;
         }
     }
+    // The two row slots form one tall Return key; the numeric Return stays separate.
+    UIButton* upperReturn=self.keys[3].lastObject;
+    UIButton* lowerReturn=self.keys[4].lastObject;
+    upperReturn.frame=CGRectUnion(upperReturn.frame,lowerReturn.frame);
+    lowerReturn.hidden=YES; lowerReturn.isAccessibilityElement=NO;
+    [self bringSubviewToFront:upperReturn];
     [self setNeedsDisplay];
 }
 - (BOOL)isLatch:(int)scan { return scan==0x70 || scan==0x71 || scan==0x72 || scan==0x73 || scan==0x74; }
@@ -155,9 +161,16 @@ static const std::vector<std::vector<Key>> rows = {
         b.retroPressed=counts[scan]>0 || latched.count(scan);
     [self setNeedsDisplay];
 }
+- (UIButton*)keyAtPoint:(CGPoint)point {
+    for(NSArray* row in self.keys) for(UIButton* key in row)
+        if(!key.hidden && CGRectContainsPoint(key.frame,point)) return key;
+    return nil;
+}
 - (void)touchesBegan:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
-    for(UITouch* t in set) for(NSArray* row in self.keys) for(UIButton* b in row)
-        if(CGRectContainsPoint(b.frame,[t locationInView:self])) { touches[t]=b; [self updateKey:b down:YES]; }
+    for(UITouch* t in set) {
+        UIButton* key=[self keyAtPoint:[t locationInView:self]];
+        if(key) { touches[t]=key; [self updateKey:key down:YES]; }
+    }
 }
 - (void)touchesEnded:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
     for(UITouch* t in set) { auto it=touches.find(t); if(it!=touches.end()) { [self updateKey:it->second down:NO]; touches.erase(it); } }
@@ -168,8 +181,19 @@ static const std::vector<std::vector<Key>> rows = {
     for(auto& pair:repeatAt) if(now>=pair.second) { if(self.keyChanged) self.keyChanged(pair.first,YES); pair.second=now+0.05; }
 }
 #ifdef PC98PLAYER_TESTING
+- (BOOL)tapReturnSectionsForTesting {
+    [self layoutIfNeeded];
+    UIButton* key=self.keys[3].lastObject;
+    // Include the former seam as well as the upper and lower ends.
+    for(CGFloat fraction : {.15,.5,.85}) {
+        CGPoint point=CGPointMake(CGRectGetMidX(key.frame),key.frame.origin.y+key.frame.size.height*fraction);
+        UIButton* hit=[self keyAtPoint:point];
+        if(hit!=key || hit.tag!=28 || ![hit accessibilityActivate]) return NO;
+    }
+    return YES;
+}
 - (BOOL)tapScanForTesting:(int)scan {
-    for(NSArray* row in self.keys) for(UIButton* b in row) if(b.tag==scan) return [b accessibilityActivate];
+    for(NSArray* row in self.keys) for(UIButton* b in row) if(b.tag==scan && !b.hidden) return [b accessibilityActivate];
     return NO;
 }
 #endif

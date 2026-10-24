@@ -406,6 +406,12 @@ static UIImage* frameImage(Player* p) {
             vfKeys &= player->m->kb_queue[queued]==scan && player->m->kb_queue[queued+1]==(scan|0x80);
     }
     result[@"vfKeysMakeBreak"]=@(vfKeys);
+    size_t beforeReturn=player->m->kb_queue.size();
+    bool joinedReturn=[self.keyboard tapReturnSectionsForTesting];
+    joinedReturn &= player->m->kb_queue.size()==beforeReturn+6 && !player->m->kb_down[28];
+    if(player->m->kb_queue.size()==beforeReturn+6)
+        for(size_t i=0;i<6;++i) joinedReturn &= player->m->kb_queue[beforeReturn+i]==(i%2 ? 0x9C : 0x1C);
+    result[@"joinedReturnInput"]=@(joinedReturn);
     [self.keyboard tapScanForTesting:0x74]; [self.keyboard tapScanForTesting:0x73];
     result[@"ctrlAndGrphLatched"]=@(player->m->kb_down[0x74] && player->m->kb_down[0x73]);
     [self releaseKeys];

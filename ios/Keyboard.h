@@ -5,6 +5,7 @@
 - (void)releaseAll;
 - (void)repeatHeldKeys;
 #ifdef PC98PLAYER_TESTING
+- (BOOL)tapReturnSectionsForTesting;
 - (BOOL)tapScanForTesting:(int)scan;
 #endif
 @end
