@@ -28,6 +28,10 @@ NAS上のゲームを更新したときはキャッシュを消去してから�
 
 ## iPhoneとDuoの操作
 
+内画面の仕様は [Appleの技術仕様](https://www.apple.com/iphone-duo/specs/) で7.6インチ・1878×2670ピクセルです。シミュレータ／[App Store向け画像](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications) は2007×2853ピクセル（横向き2853×2007）で、今回のUIKitの論理領域は669×951ptでした。実パネルの解像度と描画用画像のサイズは区別します。配置には固定の解像度を使わず、その時点のview.bounds、safe area、折り目の予約領域を使います。予約領域のframeにはOS側の操作余白も含まれます。
+
+Debug版を `--demo --layout-report` で起動すると、表示中の画面・ビュー・safe area・折り目・上下パネルの寸法をDocumentsの `layout-report.json` へ出力します。閉じた外画面と開いた内画面を切り替えて実測するための開発用機能です。
+
 通常のiPhoneは縦画面に固定し、上にモニタ、下にPC-98キーボードを常時表示します。Duo表示を指定した場合とヒンジを検出した場合は、折り目に合わせて回転できます。
 
 「表示 → Duo上下表示を固定」で、上側に640×400のモニタ、下側にPC-98ソフトキーボードを表示します。iOS 27.0.1ではこの手動指定を使います。画面の開閉による物理ディスプレイの選択はOSが管理します。

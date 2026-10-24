@@ -153,6 +153,20 @@ static UIImage* frameImage(Player* p) {
     self.status.frame=[self.topPanel statusFrame]; self.toolbar.frame=[self.topPanel controlsFrame];
     self.monitor.frame=[self.topPanel screenFrame]; self.spinner.center=CGPointMake(w/2,h/2);
     [self.topPanel setNeedsDisplay];
+#ifdef PC98PLAYER_TESTING
+    if([NSProcessInfo.processInfo.arguments containsObject:@"--layout-report"]) {
+        auto rect=[](CGRect r)->id { if(CGRectIsNull(r)) return NSNull.null; return @[@(r.origin.x),@(r.origin.y),@(r.size.width),@(r.size.height)]; };
+        UIScreen* screen=self.view.window.windowScene.screen;
+        NSDictionary* report=@{@"viewBounds":rect(self.view.bounds),@"safeBounds":rect(safe),
+            @"screenBounds":rect(screen.bounds),@"screenNativeBounds":rect(screen.nativeBounds),
+            @"displayScale":@(self.traitCollection.displayScale),@"nativeScale":@(screen.nativeScale),
+            @"divisionRegion":rect(division),@"monitorPanel":rect(self.topPanel.frame),
+            @"keyboardPanel":rect(self.keyboard.frame),@"hardwareKeyboard":@(self.keyboard.hardwareLayout),
+            @"hingeAvailable":@(duoHardware),@"hingePartial":@(hingeDuo),@"manualDuo":@(manualDuo)};
+        [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]
+            writeToURL:area(NSDocumentDirectory,@"layout-report.json") atomically:YES];
+    }
+#endif
 }
 - (void)message:(NSString*)message {
     UIAlertController* a=[UIAlertController alertControllerWithTitle:@"PC98PLAYER" message:message preferredStyle:UIAlertControllerStyleAlert];
@@ -432,7 +446,7 @@ static UIImage* frameImage(Player* p) {
     manualDuo=YES; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     result[@"duoPhysicalKeyboard"]=@([self.keyboard hardwareLayoutForTesting]);
     bool adaptive=true;
-    for(CGSize size : {CGSizeMake(400,360),CGSizeMake(900,300)}) {
+    for(CGSize size : {CGSizeMake(400,360),CGSizeMake(900,300),CGSizeMake(669,413.5),CGSizeMake(855,280.45)}) {
         PC98Keyboard* probe=[[PC98Keyboard alloc] initWithFrame:CGRectMake(0,0,size.width,size.height)];
         probe.hardwareLayout=YES;
         adaptive &= [probe hardwareLayoutForTesting];
