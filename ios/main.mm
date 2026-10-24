@@ -72,7 +72,7 @@ static UIImage* frameImage(Player* p) {
 }
 - (BOOL)canBecomeFirstResponder { return YES; }
 - (void)viewDidLoad {
-    [super viewDidLoad]; self.view.backgroundColor=[UIColor colorWithRed:.20 green:.22 blue:.21 alpha:1]; paused=YES;
+    [super viewDidLoad]; self.view.backgroundColor=PC98Plastic(.84); paused=YES;
     manualDuo=[NSUserDefaults.standardUserDefaults boolForKey:@"PC98ManualDuo"];
     self.topPanel=[PC98MonitorCabinet new]; [self.view addSubview:self.topPanel];
     self.monitor=[UIImageView new]; self.monitor.contentMode=UIViewContentModeScaleAspectFit;
@@ -124,6 +124,7 @@ static UIImage* frameImage(Player* p) {
     CGRect safe=UIEdgeInsetsInsetRect(self.view.bounds,self.view.safeAreaInsets);
     BOOL duo=manualDuo || hingeDuo;
     self.keyboard.hardwareLayout=duo || duoHardware;
+    self.topPanel.expandedDisplay=duo || duoHardware;
     CGRect division=CGRectNull;
 #if __has_include(<UIKit/UIViewReservedRegion.h>)
     if(@available(iOS 27.1,*)) {
@@ -445,6 +446,9 @@ static UIImage* frameImage(Player* p) {
     [UIImagePNGRepresentation(portrait) writeToURL:area(NSDocumentDirectory,@"portrait-smoke.png") atomically:YES];
     manualDuo=YES; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     result[@"duoPhysicalKeyboard"]=@([self.keyboard hardwareLayoutForTesting]);
+    CGRect monitor=[self.topPanel screenFrame];
+    CGFloat usableMonitorHeight=MIN(self.topPanel.bounds.size.height-48,(self.topPanel.bounds.size.width-16)/1.6);
+    result[@"duoLargeMonitor"]=@(CGRectContainsRect(self.topPanel.bounds,monitor) && monitor.size.height>=usableMonitorHeight*.9 && fabs(monitor.size.width/monitor.size.height-1.6)<.001);
     bool adaptive=true;
     for(CGSize size : {CGSizeMake(400,360),CGSizeMake(900,300),CGSizeMake(669,413.5),CGSizeMake(855,280.45)}) {
         PC98Keyboard* probe=[[PC98Keyboard alloc] initWithFrame:CGRectMake(0,0,size.width,size.height)];

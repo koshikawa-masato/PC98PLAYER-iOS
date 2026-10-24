@@ -152,7 +152,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     CGRect available=CGRectInset(self.bounds,2,4);
     // A portrait outer display or side pane must not stretch the six rows into
     // thin vertical strips. Use the full width and keep a keyboard-like height.
-    CGFloat height=MAX(1,MIN(available.size.height,available.size.width*.40));
+    CGFloat height=MAX(1,MIN(available.size.height,available.size.width*.44));
     return CGRectMake(available.origin.x,CGRectGetMidY(available)-height/2,available.size.width,height);
 }
 - (CGFloat)hardwareY:(CGFloat)y {
