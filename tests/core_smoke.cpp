@@ -52,6 +52,34 @@ int main(int argc,char** argv) {
         }
         machine_key(p->m,0x1D,true); check(p->m->kb_down[0x1D],"key down");
         machine_key(p->m,0x1D,false); check(!p->m->kb_down[0x1D],"key up");
+        // The guest loops without reading keys, so inspect the real BIOS buffer
+        // after queued keyboard events have traversed the emulated 8251/IRQ.
+        for(int i=0;i<4;++i) p->run_frame();
+        while(bios_key_available(p->m)) bios_key_read(p->m,true);
+        const uint16_t vfExpected[4][5]={
+            {0x5200,0x5300,0x5400,0x5500,0x5600},
+            {0xC200,0xC300,0xC400,0xC500,0xC600},
+            {0xD200,0xD300,0xD400,0xD500,0xD600},
+            {0xD200,0xD300,0xD400,0xD500,0xD600}
+        };
+        for(int mode=0;mode<4;++mode) {
+            if(mode&1) machine_key(p->m,0x70,true);
+            if(mode&2) machine_key(p->m,0x74,true);
+            for(int scan=0x52;scan<=0x56;++scan) {
+                machine_key(p->m,scan,true); machine_key(p->m,scan,false);
+            }
+            for(int i=0;i<4;++i) p->run_frame();
+            check(bios_key_available(p->m)==5,"VF1-5 reach BIOS buffer once per press");
+            for(int i=0;i<5;++i) {
+                check(bios_key_read(p->m,true)==vfExpected[mode][i],"VF BIOS key code and modifier priority");
+                int scan=0x52+i;
+                check(!(p->m->ram[0x52A+(scan>>3)] & (1u<<(scan&7))),"VF release clears BIOS key bitmap");
+            }
+            if(mode&1) machine_key(p->m,0x70,false);
+            if(mode&2) machine_key(p->m,0x74,false);
+            for(int i=0;i<4;++i) p->run_frame();
+            check(bios_key_available(p->m)==0,"VF releases do not enqueue extra keys");
+        }
         machine_mouse(p->m,3,-2,1);
         check(p->save_state(0,&error),"save state");
         p->m->ram[0x90000]=123;

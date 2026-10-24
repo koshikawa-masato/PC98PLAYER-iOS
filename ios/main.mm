@@ -397,6 +397,15 @@ static UIImage* frameImage(Player* p) {
     bool lowercase=false,uppercase=false;
     for(int i=0;i<2000;++i) { if(player->m->tvram[i*2]=='a') lowercase=true; if(player->m->tvram[i*2]=='A') uppercase=true; }
     result[@"guestLowercase"]=@(lowercase); result[@"guestUppercase"]=@(uppercase);
+    bool vfKeys=true;
+    for(int scan=0x52;scan<=0x56;++scan) {
+        size_t queued=player->m->kb_queue.size();
+        vfKeys &= [self.keyboard tapScanForTesting:scan];
+        vfKeys &= player->m->kb_queue.size()==queued+2 && !player->m->kb_down[scan];
+        if(player->m->kb_queue.size()==queued+2)
+            vfKeys &= player->m->kb_queue[queued]==scan && player->m->kb_queue[queued+1]==(scan|0x80);
+    }
+    result[@"vfKeysMakeBreak"]=@(vfKeys);
     [self.keyboard tapScanForTesting:0x74]; [self.keyboard tapScanForTesting:0x73];
     result[@"ctrlAndGrphLatched"]=@(player->m->kb_down[0x74] && player->m->kb_down[0x73]);
     [self releaseKeys];

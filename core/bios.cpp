@@ -121,7 +121,8 @@ void bios_key_irq(Machine* m) {
     //   （0Bh・0Ah などへの置き換えは MS-DOS の CON がキーコードを見て行う。BIOS で文字コードを付けると、
     //    INT 18h AH=00h で AX=3A00h などと比べるソフトで矢印キーが効かない）
     // ・XFER・NFER・HOME/CLR・f･1〜f･10 は AH だけ（SHIFT・CTRL で AH が変わる）、AL = 0。
-    // ・vf･1〜vf･5 など、コードの無いキーと STOP・COPY は積まない
+    // ・vf･1〜vf･5 は通常 52h〜56h、SHIFT で C2h〜C6h、CTRL で D2h〜D6h。
+    // ・STOP・COPY は積まない
     bool shift = (sh & 0x01) != 0, ctrl = (sh & 0x10) != 0;
     uint16_t code;
     if (sc == 0x35 || sc == 0x51) {                         // XFER / NFER
@@ -134,13 +135,15 @@ void bios_key_irq(Machine* m) {
         code = (uint16_t)(sc << 8);
     } else if (sc >= 0x62 && sc <= 0x6B) {                  // f･1〜f･10（SHIFT +20h、CTRL +30h）
         code = (uint16_t)((sc + (ctrl ? 0x30 : shift ? 0x20 : 0)) << 8);
+    } else if (sc >= 0x52 && sc <= 0x56) {                  // vf･1〜vf･5（SHIFT +70h、CTRL +80h）
+        code = (uint16_t)((sc + (ctrl ? 0x80 : shift ? 0x70 : 0)) << 8);
     } else if (sc < 0x52) {
         uint8_t ch = shift ? k_shift[sc] : k_norm[sc];
         if (sc == 0x33 && !shift) return;                   // 「＿」のキーは SHIFT なしではコード無し
         if ((sh & 0x02) && ch >= 'a' && ch <= 'z') ch = (uint8_t)(ch - 0x20);   // CAPS
         if (ctrl && ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '@' && ch <= '_'))) ch = (uint8_t)(ch & 0x1F);
         code = (uint16_t)((sc << 8) | ch);
-    } else return;                                          // vf･1〜vf･5・STOP・COPY など
+    } else return;                                          // STOP・COPY など
     kb_push(m, code);
 }
 

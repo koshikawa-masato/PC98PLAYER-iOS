@@ -36,7 +36,9 @@ iOS 27.1以降は公開の `UIHingeInteraction` で半開きを検出し、Duo�
 
 - 通常キーは押している間だけON。複数キーを同時に押せます。長押しはリピートします。
 - SHIFT / CTRL / GRPH / CAPS / かなはタップで保持し、再タップで解除。小さい端末でも修飾キーを併用できます。
-- F1〜F10、STOP、COPY、XFER/NFER、HELP、ROLL、INS/DEL、矢印、テンキーを搭載。
+- F1〜F10、VF1〜VF5、STOP、COPY、XFER/NFER、HELP、ROLL、INS/DEL、矢印、テンキーを搭載。VF1〜VF5はスキャンコード52h〜56hを送信し、BIOS入力とSHIFT／CTRL併用にも対応します。
+VFキーのコードは [TMKの実機キーボード資料](https://github.com/tmk/tmk_keyboard/wiki/PC-9801-Keyboard)、修飾時のBIOSコードは [DOSBox-Xの対照表](https://dosbox-x.com/doxygen/html/bios__keyboard_8cpp_source.html) を参照しています。
+
 - 外付けキーボードもUSB HIDからPC-98スキャンコードへ変換します。OSが予約するキーは受け取れない場合があります。
 - モニタをドラッグしてマウス移動、タップで左クリック、上部の「右クリック」で右クリック。
 - 「保存」「読込」は8スロット。アプリが非アクティブになったら一時停止し、キーを解放します。復帰後は▶︎で再開します。
