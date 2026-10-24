@@ -149,7 +149,11 @@ static std::vector<HardwareKey> hardwareKeys() {
     [self releaseAll]; _hardwareLayout=value; [self setNeedsLayout]; [self setNeedsDisplay];
 }
 - (CGRect)hardwareFrame {
-    return CGRectInset(self.bounds,2,4);
+    CGRect available=CGRectInset(self.bounds,2,4);
+    // A portrait outer display or side pane must not stretch the six rows into
+    // thin vertical strips. Use the full width and keep a keyboard-like height.
+    CGFloat height=MAX(1,MIN(available.size.height,available.size.width*.40));
+    return CGRectMake(available.origin.x,CGRectGetMidY(available)-height/2,available.size.width,height);
 }
 - (CGFloat)hardwareY:(CGFloat)y {
     // Keep the original row order and stagger; spend the available height on keys,
@@ -352,7 +356,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     }
     if(visibleCount!=hardwareKeys().size()) return NO;
     CGRect fitted=[self hardwareFrame];
-    if(fitted.size.height<self.bounds.size.height*.9 || seven.frame.size.height<self.bounds.size.height*.11) return NO;
+    if(fitted.size.width<self.bounds.size.width*.9 || !CGRectContainsRect(self.bounds,fitted) || seven.frame.size.height>seven.frame.size.width*1.65) return NO;
     PC98KeyButton* a=visible(29); PC98KeyButton* s=visible(30);
     CGPoint gap=CGPointMake(CGRectGetMaxX(a.frame)+(CGRectGetMinX(s.frame)-CGRectGetMaxX(a.frame))*.25,CGRectGetMidY(a.frame));
     if([self keyAtPoint:gap]!=a) return NO;
