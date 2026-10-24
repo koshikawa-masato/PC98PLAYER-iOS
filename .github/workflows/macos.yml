@@ -21,15 +21,3 @@ jobs:
         with:
           name: PC98PLAYER-macOS-universal
           path: build/PC98PLAYER-macOS-universal.zip
-  ios:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build iOS Simulator
-        run: ./build_ios.sh
-      - name: Build unsigned iOS device app
-        run: IOS_SDK=iphoneos ./build_ios.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: PC98PLAYER-iOS-Simulator
-          path: build/ios-iphonesimulator/Debug-iphonesimulator/PC98PLAYERiOS.app

@@ -1,0 +1,36 @@
+name: iOS
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build iOS Simulator
+        run: ./build_ios.sh
+      - name: Test iOS Simulator
+        shell: bash
+        run: |
+          device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
+          xcrun simctl boot "$device" || true
+          xcrun simctl bootstatus "$device" -b
+          ./tools/test_ios_simulator.sh "$device"
+      - name: Build unsigned iOS device app
+        run: IOS_SDK=iphoneos IOS_CONFIGURATION=Release ./build_ios.sh
+      - name: Package apps
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent build/ios-iphonesimulator/Debug-iphonesimulator/PC98PLAYERiOS.app build/PC98PLAYER-iOS-Simulator.zip
+          ditto -c -k --sequesterRsrc --keepParent build/ios-iphoneos/Release-iphoneos/PC98PLAYERiOS.app build/PC98PLAYER-iOS-device-unsigned.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PC98PLAYER-iOS-development
+          path: build/PC98PLAYER-iOS-*.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iOS-smoke-test
+          path: out/ios-smoke/

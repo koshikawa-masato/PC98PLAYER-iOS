@@ -47,6 +47,14 @@ elseif(APPLE)
   find_package(Iconv REQUIRED)
   target_link_libraries(pc98core PUBLIC Iconv::Iconv)
   if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(PC98PLAYER_IOS_BUNDLE_ID "jp.pc98player.ios" CACHE STRING "iOS bundle identifier")
+    set(PC98PLAYER_IOS_DEVELOPMENT_TEAM "" CACHE STRING "Apple development team for device signing")
+    option(PC98PLAYER_IOS_SIGNING "Enable iOS code signing" OFF)
+    if(PC98PLAYER_IOS_SIGNING)
+      set(IOS_SIGNING_ALLOWED YES)
+    else()
+      set(IOS_SIGNING_ALLOWED NO)
+    endif()
     set(IOS_RESOURCES LICENSE THIRD-PARTY-ymfm-LICENSE.txt)
     set_source_files_properties(${IOS_RESOURCES} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     add_executable(PC98PLAYERiOS MACOSX_BUNDLE ios/main.mm ios/Keyboard.mm apple/font.mm apple/GameLibrary.mm ${IOS_RESOURCES})
@@ -56,10 +64,12 @@ elseif(APPLE)
     target_link_libraries(PC98PLAYERiOS PRIVATE pc98core "-framework Foundation" "-framework CoreGraphics" "-framework QuartzCore" "-framework UIKit" "-framework CoreText" "-framework AudioToolbox" "-framework AVFoundation" "-framework UniformTypeIdentifiers")
     set_target_properties(PC98PLAYERiOS PROPERTIES
       MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist.in"
-      MACOSX_BUNDLE_GUI_IDENTIFIER "jp.pc98player.ios"
-      XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "jp.pc98player.ios"
+      MACOSX_BUNDLE_GUI_IDENTIFIER "${PC98PLAYER_IOS_BUNDLE_ID}"
+      XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${PC98PLAYER_IOS_BUNDLE_ID}"
       XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
-      XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO")
+      XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "${IOS_SIGNING_ALLOWED}"
+      XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
+      XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${PC98PLAYER_IOS_DEVELOPMENT_TEAM}")
   else()
     set(MAC_RESOURCES LICENSE THIRD-PARTY-ymfm-LICENSE.txt)
     set_source_files_properties(${MAC_RESOURCES} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
