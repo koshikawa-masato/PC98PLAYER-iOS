@@ -14,6 +14,22 @@
 #include <set>
 #include <algorithm>
 
+// Keep the largest 8:5 display area clear of an OS camera or system occlusion.
+static CGRect monitorAvoiding(CGRect panel,CGRect obstacle) {
+    CGRect cut=CGRectIntersection(panel,obstacle);
+    if(CGRectIsNull(cut) || CGRectIsEmpty(cut)) return panel;
+    CGRect candidates[]={
+        CGRectMake(panel.origin.x,panel.origin.y,panel.size.width,CGRectGetMinY(cut)-panel.origin.y),
+        CGRectMake(panel.origin.x,CGRectGetMaxY(cut),panel.size.width,CGRectGetMaxY(panel)-CGRectGetMaxY(cut)),
+        CGRectMake(panel.origin.x,panel.origin.y,CGRectGetMinX(cut)-panel.origin.x,panel.size.height),
+        CGRectMake(CGRectGetMaxX(cut),panel.origin.y,CGRectGetMaxX(panel)-CGRectGetMaxX(cut),panel.size.height)};
+    CGRect best=CGRectZero; CGFloat bestHeight=-1;
+    for(CGRect r:candidates) {
+        CGFloat height=MIN(r.size.height,r.size.width/1.6);
+        if(height>bestHeight) { best=r; bestHeight=height; }
+    }
+    return best;
+}
 static NSString* text(const std::string& s) { return [NSString stringWithUTF8String:s.c_str()] ?: @""; }
 static NSURL* area(NSSearchPathDirectory directory,NSString* component) {
     return [[NSFileManager.defaultManager URLsForDirectory:directory inDomains:NSUserDomainMask].firstObject URLByAppendingPathComponent:component isDirectory:YES];
@@ -70,6 +86,7 @@ static UIImage* frameImage(Player* p) {
         return UIInterfaceOrientationMaskPortrait;
     return UIInterfaceOrientationMaskAll;
 }
+- (BOOL)prefersStatusBarHidden { return manualDuo || hingeDuo || duoHardware; }
 - (BOOL)canBecomeFirstResponder { return YES; }
 - (void)viewDidLoad {
     [super viewDidLoad]; self.view.backgroundColor=PC98Plastic(.84); paused=YES;
@@ -105,7 +122,7 @@ static UIImage* frameImage(Player* p) {
             PlayerController* s=weak; if(!s) return;
             BOOL hardware=update.hinge!=nil;
             BOOL duo=hardware && update.hinge.status==UIHingeStatusPartiallyOpen;
-            if(s->hingeDuo!=duo || s->duoHardware!=hardware) { [s releaseKeys]; s->duoHardware=hardware; s->hingeDuo=duo; [s setNeedsUpdateOfSupportedInterfaceOrientations]; [s.view setNeedsLayout]; }
+            if(s->hingeDuo!=duo || s->duoHardware!=hardware) { [s releaseKeys]; s->duoHardware=hardware; s->hingeDuo=duo; [s setNeedsUpdateOfSupportedInterfaceOrientations]; [s setNeedsStatusBarAppearanceUpdate]; [s.view setNeedsLayout]; }
         }];
         [self.view addInteraction:interaction];
     }
@@ -150,6 +167,16 @@ static UIImage* frameImage(Player* p) {
             self.keyboard.frame=CGRectMake(safe.origin.x,CGRectGetMaxY(division)+8,safe.size.width,MAX(1,CGRectGetMaxY(safe)-CGRectGetMaxY(division)-8));
         }
     }
+    NSMutableArray* occlusions=[NSMutableArray new];
+#if __has_include(<UIKit/UIViewReservedRegion.h>)
+    if(@available(iOS 27.1,*)) {
+        for(UIViewReservedRegion* region in [self.view reservedRegionsOfKind:UIViewReservedRegionKind.occlusionRegionKind options:UIViewReservedRegionQueryOptionsIncludeInactive]) {
+            [occlusions addObject:@{@"frame":@[@(region.frame.origin.x),@(region.frame.origin.y),@(region.frame.size.width),@(region.frame.size.height)],@"active":@(region.isActive)}];
+            if(!region.isActive) continue;
+            self.topPanel.frame=monitorAvoiding(self.topPanel.frame,region.frame);
+        }
+    }
+#endif
     CGFloat w=self.topPanel.bounds.size.width,h=self.topPanel.bounds.size.height;
     // Move controls into spare space above the keyboard when a horizontal fold permits it.
     CGFloat keyboardSlack=(self.keyboard.bounds.size.height-MIN(self.keyboard.bounds.size.height-8,(self.keyboard.bounds.size.width-4)*.44))/2;
@@ -176,7 +203,9 @@ static UIImage* frameImage(Player* p) {
             @"displayScale":@(self.traitCollection.displayScale),@"nativeScale":@(screen.nativeScale),
             @"divisionRegion":rect(division),@"monitorPanel":rect(self.topPanel.frame),
             @"keyboardPanel":rect(self.keyboard.frame),@"hardwareKeyboard":@(self.keyboard.hardwareLayout),
-            @"hingeAvailable":@(duoHardware),@"hingePartial":@(hingeDuo),@"manualDuo":@(manualDuo)};
+            @"hingeAvailable":@(duoHardware),@"hingePartial":@(hingeDuo),@"manualDuo":@(manualDuo),@"statusBarHidden":@(self.prefersStatusBarHidden),
+            @"occlusions":occlusions,
+            @"monitorScreen":rect([self.topPanel convertRect:self.monitor.frame toView:self.view])};
         [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]
             writeToURL:area(NSDocumentDirectory,@"layout-report.json") atomically:YES];
     }
@@ -371,7 +400,7 @@ static UIImage* frameImage(Player* p) {
     UIAlertController* menu=[UIAlertController alertControllerWithTitle:@"表示" message:@"Duo上下：上にモニタ、下にPC-98キーボード。iOS 27.1以降では半開きに自動追従します。" preferredStyle:UIAlertControllerStyleAlert];
     __weak PlayerController* weak=self;
     for(NSNumber* choice in @[@NO,@YES]) [menu addAction:[UIAlertAction actionWithTitle:choice.boolValue?@"Duo上下表示を固定":@"自動／通常表示" style:UIAlertActionStyleDefault handler:^(UIAlertAction* a) {
-        PlayerController* s=weak; if(!s) return; [s releaseKeys]; s->manualDuo=choice.boolValue; [s setNeedsUpdateOfSupportedInterfaceOrientations];
+        PlayerController* s=weak; if(!s) return; [s releaseKeys]; s->manualDuo=choice.boolValue; [s setNeedsUpdateOfSupportedInterfaceOrientations]; [s setNeedsStatusBarAppearanceUpdate];
         [NSUserDefaults.standardUserDefaults setBool:s->manualDuo forKey:@"PC98ManualDuo"]; [s.view setNeedsLayout];
     }]];
     [menu addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
@@ -458,6 +487,9 @@ static UIImage* frameImage(Player* p) {
     UIImage* portrait=[portraitRenderer imageWithActions:^(UIGraphicsImageRendererContext* context) { [self.view.layer renderInContext:context.CGContext]; }];
     [UIImagePNGRepresentation(portrait) writeToURL:area(NSDocumentDirectory,@"portrait-smoke.png") atomically:YES];
     manualDuo=YES; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
+    CGRect camera=CGRectMake(540,0,129,82), panel=CGRectMake(0,0,669,448);
+    CGRect clear=monitorAvoiding(panel,camera);
+    result[@"monitorAvoidsCamera"]=@(CGRectContainsRect(panel,clear) && !CGRectIntersectsRect(clear,camera) && clear.size.width>0 && clear.size.height>0 && CGRectEqualToRect(monitorAvoiding(panel,CGRectMake(0,600,80,80)),panel));
     result[@"duoPhysicalKeyboard"]=@([self.keyboard hardwareLayoutForTesting]);
     CGRect monitor=[self.topPanel screenFrame];
     CGFloat usableMonitorHeight=MIN(self.topPanel.bounds.size.height-48,(self.topPanel.bounds.size.width-16)/1.6);

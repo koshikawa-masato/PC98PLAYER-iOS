@@ -22,8 +22,8 @@ void PC98Gradient(CGRect r,UIColor* top,UIColor* bottom,CGFloat radius) {
 }
 - (CGRect)cabinetFrame {
     if(self.expandedDisplay) {
-        CGFloat screenHeight=MAX(1,MIN(self.bounds.size.height-(self.separateControls?24:71),(self.bounds.size.width-36)/1.6));
-        CGFloat width=screenHeight*1.6+24, height=screenHeight+(self.separateControls?20:67);
+        CGFloat screenHeight=MAX(1,MIN(self.bounds.size.height-(self.separateControls?20:71),(self.bounds.size.width-(self.separateControls?28:36))/1.6));
+        CGFloat width=screenHeight*1.6+(self.separateControls?16:24), height=screenHeight+(self.separateControls?16:67);
         return CGRectMake((self.bounds.size.width-width)/2,(self.bounds.size.height-height)/2,width,height);
     }
     CGFloat width=MAX(1,MIN(self.bounds.size.width-12,(self.bounds.size.height-42)*1.31));
@@ -32,7 +32,7 @@ void PC98Gradient(CGRect r,UIColor* top,UIColor* bottom,CGFloat radius) {
 }
 - (CGRect)screenFrame {
     CGRect r=[self cabinetFrame];
-    CGFloat side=self.expandedDisplay?12:22, top=self.expandedDisplay?10:22;
+    CGFloat side=self.expandedDisplay?(self.separateControls?8:12):22, top=self.expandedDisplay?(self.separateControls?8:10):22;
     return CGRectMake(r.origin.x+side,r.origin.y+top,MAX(1,r.size.width-side*2),MAX(1,(r.size.width-side*2)/1.6));
 }
 - (CGRect)controlsFrame { CGRect r=[self cabinetFrame],s=[self screenFrame]; return CGRectMake(r.origin.x+15,CGRectGetMaxY(s)+(self.expandedDisplay?10:13),r.size.width-30,self.expandedDisplay?28:30); }
