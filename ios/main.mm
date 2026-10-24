@@ -68,7 +68,7 @@ static UIImage* frameImage(Player* p) {
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
     if(self.traitCollection.userInterfaceIdiom==UIUserInterfaceIdiomPhone && !manualDuo && !hingeDuo && !duoHardware)
         return UIInterfaceOrientationMaskPortrait;
-    return UIInterfaceOrientationMaskAllButUpsideDown;
+    return UIInterfaceOrientationMaskAll;
 }
 - (BOOL)canBecomeFirstResponder { return YES; }
 - (void)viewDidLoad {

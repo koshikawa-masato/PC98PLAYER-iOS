@@ -30,6 +30,8 @@ Duoのモニターは枠を薄くし台座を省いて、上側領域の高さ�
 
 ## iPhoneとDuoの操作
 
+Duoでは背面カメラのある半分をキーボード側にして置けるよう、上下反転を含む全方向を許可します。通常iPhoneは縦向きを維持します。時計などのシステム表示の位置はOSが決めるため、アプリから下半分への移動は行いません。
+
 内画面の仕様は [Appleの技術仕様](https://www.apple.com/iphone-duo/specs/) で7.6インチ・1878×2670ピクセルです。シミュレータ／[App Store向け画像](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications) は2007×2853ピクセル（横向き2853×2007）で、今回のUIKitの論理領域は669×951ptでした。実パネルの解像度と描画用画像のサイズは区別します。配置には固定の解像度を使わず、その時点のview.bounds、safe area、折り目の予約領域を使います。予約領域のframeにはOS側の操作余白も含まれます。
 
 Debug版を `--demo --layout-report` で起動すると、表示中の画面・ビュー・safe area・折り目・上下パネルの寸法をDocumentsの `layout-report.json` へ出力します。閉じた外画面と開いた内画面を切り替えて実測するための開発用機能です。
