@@ -82,12 +82,12 @@ static UIImage* frameImage(Player* p) {
     UITapGestureRecognizer* tap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(leftClick:)]; [self.monitor addGestureRecognizer:tap];
     self.status=[UILabel new]; self.status.text=@"ゲームフォルダを選択してください";
     self.status.textColor=[UIColor colorWithWhite:.24 alpha:1]; self.status.font=[UIFont monospacedSystemFontOfSize:8 weight:UIFontWeightRegular]; self.status.numberOfLines=1; self.status.adjustsFontSizeToFitWidth=YES;
-    [self.topPanel addSubview:self.status];
+    [self.view addSubview:self.status];
     self.toolbar=[UIStackView new]; self.toolbar.axis=UILayoutConstraintAxisHorizontal; self.toolbar.distribution=UIStackViewDistributionFillEqually; self.toolbar.spacing=3;
     NSArray* titles=@[@"開く",@"場所",@"▶︎ / Ⅱ",@"保存",@"読込",@"表示",@"右クリック"];
     SEL actions[]={@selector(openFolder),@selector(showLibrary),@selector(togglePause),@selector(saveSlot),@selector(loadSlot),@selector(layoutMenu),@selector(rightClick)};
     for(NSUInteger i=0;i<titles.count;++i) { UIButton* b=[UIButton buttonWithType:UIButtonTypeSystem]; [b setTitle:titles[i] forState:UIControlStateNormal]; b.titleLabel.font=[UIFont systemFontOfSize:10 weight:UIFontWeightMedium]; [b setTitleColor:[UIColor colorWithWhite:.18 alpha:1] forState:UIControlStateNormal]; [b setTitleColor:UIColor.grayColor forState:UIControlStateHighlighted]; b.backgroundColor=PC98Plastic(.87); b.layer.cornerRadius=2; b.layer.borderWidth=1; b.layer.borderColor=PC98Plastic(.55).CGColor; b.layer.shadowColor=UIColor.blackColor.CGColor; b.layer.shadowOffset=CGSizeMake(0,1); b.layer.shadowOpacity=.25; b.layer.shadowRadius=0; b.titleLabel.adjustsFontSizeToFitWidth=YES; [b addTarget:self action:actions[i] forControlEvents:UIControlEventTouchUpInside]; [self.toolbar addArrangedSubview:b]; }
-    [self.topPanel addSubview:self.toolbar];
+    [self.view addSubview:self.toolbar];
     self.keyboard=[PC98Keyboard new]; __weak PlayerController* weak=self;
     self.keyboard.keyChanged=^(int scan,BOOL down) {
         PlayerController* s=weak; if(!s) return;
@@ -151,7 +151,20 @@ static UIImage* frameImage(Player* p) {
         }
     }
     CGFloat w=self.topPanel.bounds.size.width,h=self.topPanel.bounds.size.height;
-    self.status.frame=[self.topPanel statusFrame]; self.toolbar.frame=[self.topPanel controlsFrame];
+    // Move controls into spare space above the keyboard when a horizontal fold permits it.
+    CGFloat keyboardSlack=(self.keyboard.bounds.size.height-MIN(self.keyboard.bounds.size.height-8,(self.keyboard.bounds.size.width-4)*.44))/2;
+    BOOL separateControls=duo && !verticalDivision && keyboardSlack>=54;
+    self.topPanel.separateControls=separateControls;
+    if(separateControls) {
+        CGRect lower=self.keyboard.frame;
+        self.toolbar.frame=CGRectMake(lower.origin.x+12,lower.origin.y+4,lower.size.width-24,32);
+        self.status.frame=CGRectMake(lower.origin.x+15,lower.origin.y+40,lower.size.width-30,10);
+    } else {
+        self.status.frame=[self.topPanel convertRect:[self.topPanel statusFrame] toView:self.view];
+        self.toolbar.frame=[self.topPanel convertRect:[self.topPanel controlsFrame] toView:self.view];
+    }
+    [self.view bringSubviewToFront:self.toolbar];
+    [self.view bringSubviewToFront:self.status];
     self.monitor.frame=[self.topPanel screenFrame]; self.spinner.center=CGPointMake(w/2,h/2);
     [self.topPanel setNeedsDisplay];
 #ifdef PC98PLAYER_TESTING
