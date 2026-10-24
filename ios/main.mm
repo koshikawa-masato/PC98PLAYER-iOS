@@ -5,6 +5,7 @@
 #import <CommonCrypto/CommonDigest.h>
 #import "GameLibrary.h"
 #import "Keyboard.h"
+#import "RetroHardware.h"
 #include "AudioOut.h"
 #include "font.h"
 #include "player.h"
@@ -54,7 +55,7 @@ static UIImage* frameImage(Player* p) {
     std::set<int> touchKeys;
 }
 @property UIImageView* monitor;
-@property UIView* topPanel;
+@property PC98MonitorCabinet* topPanel;
 @property PC98Keyboard* keyboard;
 @property UILabel* status;
 @property UIStackView* toolbar;
@@ -71,21 +72,21 @@ static UIImage* frameImage(Player* p) {
 }
 - (BOOL)canBecomeFirstResponder { return YES; }
 - (void)viewDidLoad {
-    [super viewDidLoad]; self.view.backgroundColor=UIColor.blackColor; paused=YES;
+    [super viewDidLoad]; self.view.backgroundColor=[UIColor colorWithRed:.20 green:.22 blue:.21 alpha:1]; paused=YES;
     manualDuo=[NSUserDefaults.standardUserDefaults boolForKey:@"PC98ManualDuo"];
-    self.topPanel=[UIView new]; [self.view addSubview:self.topPanel];
+    self.topPanel=[PC98MonitorCabinet new]; [self.view addSubview:self.topPanel];
     self.monitor=[UIImageView new]; self.monitor.contentMode=UIViewContentModeScaleAspectFit;
-    self.monitor.layer.magnificationFilter=kCAFilterNearest; self.monitor.userInteractionEnabled=YES;
+    self.monitor.layer.cornerRadius=4; self.monitor.clipsToBounds=YES; self.monitor.backgroundColor=[UIColor colorWithRed:.035 green:.055 blue:.052 alpha:1]; self.monitor.layer.magnificationFilter=kCAFilterNearest; self.monitor.userInteractionEnabled=YES;
     [self.topPanel addSubview:self.monitor];
     UIPanGestureRecognizer* pan=[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(moveMouse:)]; [self.monitor addGestureRecognizer:pan];
     UITapGestureRecognizer* tap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(leftClick:)]; [self.monitor addGestureRecognizer:tap];
     self.status=[UILabel new]; self.status.text=@"ゲームフォルダを選択してください";
-    self.status.textColor=UIColor.whiteColor; self.status.font=[UIFont systemFontOfSize:12]; self.status.numberOfLines=2;
+    self.status.textColor=[UIColor colorWithWhite:.24 alpha:1]; self.status.font=[UIFont monospacedSystemFontOfSize:8 weight:UIFontWeightRegular]; self.status.numberOfLines=1; self.status.adjustsFontSizeToFitWidth=YES;
     [self.topPanel addSubview:self.status];
-    self.toolbar=[UIStackView new]; self.toolbar.axis=UILayoutConstraintAxisHorizontal; self.toolbar.distribution=UIStackViewDistributionFillEqually;
+    self.toolbar=[UIStackView new]; self.toolbar.axis=UILayoutConstraintAxisHorizontal; self.toolbar.distribution=UIStackViewDistributionFillEqually; self.toolbar.spacing=3;
     NSArray* titles=@[@"開く",@"場所",@"▶︎ / Ⅱ",@"保存",@"読込",@"表示",@"右クリック"];
     SEL actions[]={@selector(openFolder),@selector(showLibrary),@selector(togglePause),@selector(saveSlot),@selector(loadSlot),@selector(layoutMenu),@selector(rightClick)};
-    for(NSUInteger i=0;i<titles.count;++i) { UIButton* b=[UIButton buttonWithType:UIButtonTypeSystem]; [b setTitle:titles[i] forState:UIControlStateNormal]; b.titleLabel.font=[UIFont systemFontOfSize:13 weight:UIFontWeightSemibold]; b.titleLabel.adjustsFontSizeToFitWidth=YES; [b addTarget:self action:actions[i] forControlEvents:UIControlEventTouchUpInside]; [self.toolbar addArrangedSubview:b]; }
+    for(NSUInteger i=0;i<titles.count;++i) { UIButton* b=[UIButton buttonWithType:UIButtonTypeSystem]; [b setTitle:titles[i] forState:UIControlStateNormal]; b.titleLabel.font=[UIFont systemFontOfSize:10 weight:UIFontWeightMedium]; [b setTitleColor:[UIColor colorWithWhite:.18 alpha:1] forState:UIControlStateNormal]; [b setTitleColor:UIColor.grayColor forState:UIControlStateHighlighted]; b.backgroundColor=PC98Plastic(.87); b.layer.cornerRadius=2; b.layer.borderWidth=1; b.layer.borderColor=PC98Plastic(.55).CGColor; b.layer.shadowColor=UIColor.blackColor.CGColor; b.layer.shadowOffset=CGSizeMake(0,1); b.layer.shadowOpacity=.25; b.layer.shadowRadius=0; b.titleLabel.adjustsFontSizeToFitWidth=YES; [b addTarget:self action:actions[i] forControlEvents:UIControlEventTouchUpInside]; [self.toolbar addArrangedSubview:b]; }
     [self.topPanel addSubview:self.toolbar];
     self.keyboard=[PC98Keyboard new]; __weak PlayerController* weak=self;
     self.keyboard.keyChanged=^(int scan,BOOL down) {
@@ -94,7 +95,7 @@ static UIImage* frameImage(Player* p) {
         [s updateScan:scan];
     };
     [self.view addSubview:self.keyboard];
-    self.spinner=[[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge]; self.spinner.color=UIColor.whiteColor; [self.topPanel addSubview:self.spinner];
+    self.spinner=[[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge]; self.spinner.color=PC98Plastic(.8); [self.topPanel addSubview:self.spinner];
     self.displayLink=[CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
     [self.displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
     [NSFileManager.defaultManager createDirectoryAtURL:area(NSDocumentDirectory,@"Games") withIntermediateDirectories:YES attributes:nil error:nil];
@@ -136,7 +137,7 @@ static UIImage* frameImage(Player* p) {
     if(duo && !CGRectIsNull(division) && !verticalDivision) split=CGRectGetMidY(division);
     split=std::clamp(split,safe.origin.y+100,CGRectGetMaxY(safe)-100);
     self.topPanel.frame=CGRectMake(safe.origin.x,safe.origin.y,safe.size.width,split-safe.origin.y-12);
-    self.keyboard.frame=CGRectMake(safe.origin.x,split+12,safe.size.width,MAX(1,CGRectGetMaxY(safe)-split-12));
+    self.keyboard.frame=CGRectMake(safe.origin.x+6,split+12,safe.size.width-12,MAX(1,CGRectGetMaxY(safe)-split-18));
     if(duo && !CGRectIsNull(division)) {
         if(verticalDivision) {
             self.topPanel.frame=CGRectMake(safe.origin.x,safe.origin.y,MAX(1,CGRectGetMinX(division)-safe.origin.x-8),safe.size.height);
@@ -147,8 +148,9 @@ static UIImage* frameImage(Player* p) {
         }
     }
     CGFloat w=self.topPanel.bounds.size.width,h=self.topPanel.bounds.size.height;
-    self.status.frame=CGRectMake(8,0,w-16,32); self.toolbar.frame=CGRectMake(4,32,w-8,40);
-    self.monitor.frame=CGRectMake(0,76,w,MAX(1,h-76)); self.spinner.center=CGPointMake(w/2,h/2);
+    self.status.frame=[self.topPanel statusFrame]; self.toolbar.frame=[self.topPanel controlsFrame];
+    self.monitor.frame=[self.topPanel screenFrame]; self.spinner.center=CGPointMake(w/2,h/2);
+    [self.topPanel setNeedsDisplay];
 }
 - (void)message:(NSString*)message {
     UIAlertController* a=[UIAlertController alertControllerWithTitle:@"PC98PLAYER" message:message preferredStyle:UIAlertControllerStyleAlert];
