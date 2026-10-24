@@ -23,6 +23,7 @@ void PC98Gradient(CGRect r,UIColor* top,UIColor* bottom,CGFloat radius) {
 - (CGRect)cabinetFrame {
     if(self.expandedDisplay) {
         CGFloat screenHeight=MAX(1,MIN(self.bounds.size.height-(self.separateControls?20:71),(self.bounds.size.width-(self.separateControls?28:36))/1.6));
+        if(self.separateControls) screenHeight*=.96; // Keep the bezel clear of the display’s rounded corners.
         CGFloat width=screenHeight*1.6+(self.separateControls?16:24), height=screenHeight+(self.separateControls?16:67);
         return CGRectMake((self.bounds.size.width-width)/2,(self.bounds.size.height-height)/2,width,height);
     }
