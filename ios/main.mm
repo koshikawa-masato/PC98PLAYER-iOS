@@ -431,6 +431,13 @@ static UIImage* frameImage(Player* p) {
     [UIImagePNGRepresentation(portrait) writeToURL:area(NSDocumentDirectory,@"portrait-smoke.png") atomically:YES];
     manualDuo=YES; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     result[@"duoPhysicalKeyboard"]=@([self.keyboard hardwareLayoutForTesting]);
+    bool adaptive=true;
+    for(CGSize size : {CGSizeMake(400,360),CGSizeMake(900,300)}) {
+        PC98Keyboard* probe=[[PC98Keyboard alloc] initWithFrame:CGRectMake(0,0,size.width,size.height)];
+        probe.hardwareLayout=YES;
+        adaptive &= [probe hardwareLayoutForTesting];
+    }
+    result[@"duoAdaptiveSizing"]=@(adaptive);
     CGFloat mid=CGRectGetMidY(self.view.bounds);
     result[@"duoMonitorAboveFold"]=@(CGRectGetMaxY(self.topPanel.frame)<mid);
     result[@"duoKeyboardBelowFold"]=@(CGRectGetMinY(self.keyboard.frame)>mid);

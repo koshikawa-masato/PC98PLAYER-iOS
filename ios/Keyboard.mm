@@ -52,6 +52,7 @@ static std::vector<HardwareKey> hardwareKeys() {
 @property BOOL modifier;
 @property BOOL steppedReturn;
 @property CGFloat detailScale;
+@property BOOL expandedLegends;
 @property NSString* kana;
 @end
 @implementation PC98KeyButton
@@ -74,7 +75,8 @@ static std::vector<HardwareKey> hardwareKeys() {
     return CGRectMake(inset,(self.retroPressed?4:2)*self.detailScale,MAX(1,self.bounds.size.width-inset*2),self.bounds.size.height*(self.kana.length?.56:.85));
 }
 - (void)layoutSubviews {
-    self.titleLabel.font=[UIFont monospacedSystemFontOfSize:MAX(3,MIN(13*self.detailScale,MIN(self.bounds.size.width*.36,self.bounds.size.height*.32))) weight:UIFontWeightMedium];
+    CGFloat size=self.expandedLegends ? MAX(5,MIN(16,MIN(self.bounds.size.width*.58,self.bounds.size.height*.34))) : MAX(3,MIN(13*self.detailScale,MIN(self.bounds.size.width*.36,self.bounds.size.height*.32)));
+    self.titleLabel.font=[UIFont monospacedSystemFontOfSize:size weight:UIFontWeightMedium];
     [super layoutSubviews];
 }
 - (void)drawRect:(CGRect)rect {
@@ -93,7 +95,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     [PC98Plastic(MIN(1,tone+.08)) setStroke];
     UIBezierPath* edge=[self capPath:CGRectInset(face,.5*detail,.5*detail)]; edge.lineWidth=.6*detail; [edge stroke];
     if(self.kana.length) {
-        CGFloat size=MAX(3,MIN(10*detail,MIN(self.bounds.size.width*.30,self.bounds.size.height*.28)));
+        CGFloat size=self.expandedLegends ? MAX(4,MIN(12,MIN(self.bounds.size.width*.48,self.bounds.size.height*.24))) : MAX(3,MIN(10*detail,MIN(self.bounds.size.width*.30,self.bounds.size.height*.28)));
         NSDictionary* style=@{NSFontAttributeName:[UIFont systemFontOfSize:size],NSForegroundColorAttributeName:[UIColor colorWithWhite:.30 alpha:1]};
         CGSize label=[self.kana sizeWithAttributes:style];
         [self.kana drawAtPoint:CGPointMake(CGRectGetMaxX(face)-label.width-2*detail,CGRectGetMaxY(face)-label.height-detail) withAttributes:style];
@@ -147,30 +149,55 @@ static std::vector<HardwareKey> hardwareKeys() {
     [self releaseAll]; _hardwareLayout=value; [self setNeedsLayout]; [self setNeedsDisplay];
 }
 - (CGRect)hardwareFrame {
-    CGFloat scale=MAX(.01,MIN(self.bounds.size.width/760,self.bounds.size.height/310));
-    return CGRectMake((self.bounds.size.width-760*scale)/2,(self.bounds.size.height-310*scale)/2,760*scale,310*scale);
+    return CGRectInset(self.bounds,2,4);
+}
+- (CGFloat)hardwareY:(CGFloat)y {
+    // Keep the original row order and stagger; spend the available height on keys,
+    // rather than uniformly scaling the photograph's unused case margins.
+    CGFloat height=[self hardwareFrame].size.height;
+    CGFloat top=MIN(16,height*.04), bottom=MIN(12,height*.03), gap=MIN(5,MAX(2,height*.012));
+    CGFloat keyHeight=MAX(1,(height-top-bottom-gap*5-4)/6);
+    const CGFloat source[]={0,56,86,104,134,138,168,171,201,204,234,237,267,310};
+    CGFloat target[]={0,top,top+keyHeight,0,0,0,0,0,0,0,0,0,height-bottom,height};
+    target[3]=target[2]+gap+4;
+    target[4]=target[3]+keyHeight; target[5]=target[4]+gap;
+    target[6]=target[5]+keyHeight; target[7]=target[6]+gap;
+    target[8]=target[7]+keyHeight; target[9]=target[8]+gap;
+    target[10]=target[9]+keyHeight; target[11]=target[10]+gap;
+    for(int i=0;i<13;++i) if(y<=source[i+1])
+        return target[i]+(y-source[i])/(source[i+1]-source[i])*(target[i+1]-target[i]);
+    return height;
+}
+- (CGFloat)hardwareX:(CGFloat)x {
+    CGFloat width=[self hardwareFrame].size.width, edge=MIN(6,width*.02);
+    if(x<26) return edge*x/26;
+    if(x>743) return width-edge+(x-743)*edge/17;
+    return edge+(x-26)*(width-edge*2)/717;
+}
+- (CGRect)hardwareRect:(CGRect)r {
+    CGRect frame=[self hardwareFrame];
+    CGFloat left=[self hardwareX:r.origin.x], right=[self hardwareX:CGRectGetMaxX(r)];
+    CGFloat top=[self hardwareY:r.origin.y], bottom=[self hardwareY:CGRectGetMaxY(r)];
+    return CGRectMake(frame.origin.x+left,frame.origin.y+top,MAX(1,right-left),MAX(1,bottom-top));
 }
 - (void)drawHardwareCase {
-    CGRect frame=[self hardwareFrame]; CGFloat scale=frame.size.width/760;
-    CGContextRef c=UIGraphicsGetCurrentContext(); CGContextSaveGState(c);
-    CGContextTranslateCTM(c,frame.origin.x,frame.origin.y); CGContextScaleCTM(c,scale,scale);
-    CGRect shell=CGRectMake(1,1,758,308);
-    PC98Gradient(shell,PC98Plastic(.91),PC98Plastic(.69),13);
-    [PC98Plastic(.98) setStroke]; [[UIBezierPath bezierPathWithRoundedRect:CGRectInset(shell,1,1) cornerRadius:12] stroke];
-    PC98Gradient(CGRectMake(56,9,470,39),PC98Plastic(.75),PC98Plastic(.87),1);
-    PC98Gradient(CGRectMake(26,53,717,36),PC98Plastic(.35),PC98Plastic(.57),1);
-    PC98Gradient(CGRectMake(26,101,580,170),PC98Plastic(.35),PC98Plastic(.57),1);
-    PC98Gradient(CGRectMake(610,101,133,170),PC98Plastic(.35),PC98Plastic(.57),1);
-    // The reference has case plastic beside Kana and below the right Shift.
-    PC98Gradient(CGRectMake(27,236,59,35),PC98Plastic(.84),PC98Plastic(.74),1);
-    PC98Gradient(CGRectMake(475,236,57,35),PC98Plastic(.84),PC98Plastic(.74),1);
+    CGRect frame=[self hardwareFrame];
+    auto rect=[&](CGFloat x,CGFloat y,CGFloat w,CGFloat h) { return [self hardwareRect:CGRectMake(x,y,w,h)]; };
+    PC98Gradient(frame,PC98Plastic(.91),PC98Plastic(.69),10);
+    [PC98Plastic(.98) setStroke]; [[UIBezierPath bezierPathWithRoundedRect:CGRectInset(frame,1,1) cornerRadius:9] stroke];
+    PC98Gradient(rect(56,9,470,39),PC98Plastic(.75),PC98Plastic(.87),1);
+    PC98Gradient(rect(26,53,717,36),PC98Plastic(.35),PC98Plastic(.57),2);
+    PC98Gradient(rect(26,101,580,170),PC98Plastic(.35),PC98Plastic(.57),2);
+    PC98Gradient(rect(610,101,133,170),PC98Plastic(.35),PC98Plastic(.57),2);
+    PC98Gradient(rect(27,236,59,35),PC98Plastic(.84),PC98Plastic(.74),1);
+    PC98Gradient(rect(475,236,57,35),PC98Plastic(.84),PC98Plastic(.74),1);
     NSArray* names=@[@"CAPS",@"かな"];
     for(int i=0;i<2;++i) {
-        [PC98Plastic(.38) setFill]; UIRectFill(CGRectMake(33,244+i*10,4,3));
-        if(latched.count(0x71+i)) { [[UIColor colorWithRed:.64 green:.76 blue:.30 alpha:1] setFill]; UIRectFill(CGRectMake(33,244+i*10,3,2)); }
-        [names[i] drawAtPoint:CGPointMake(42,242+i*10) withAttributes:@{NSFontAttributeName:[UIFont systemFontOfSize:6],NSForegroundColorAttributeName:PC98Plastic(.30)}];
+        [PC98Plastic(.38) setFill]; UIRectFill(rect(33,244+i*10,4,3));
+        if(latched.count(0x71+i)) { [[UIColor colorWithRed:.64 green:.76 blue:.30 alpha:1] setFill]; UIRectFill(rect(33,244+i*10,3,2)); }
+        CGRect label=rect(42,242+i*10,40,8);
+        [names[i] drawAtPoint:label.origin withAttributes:@{NSFontAttributeName:[UIFont systemFontOfSize:MAX(6,MIN(8,label.size.height))],NSForegroundColorAttributeName:PC98Plastic(.30)}];
     }
-    CGContextRestoreGState(c);
 }
 - (void)drawRect:(CGRect)rect {
     if(self.hardwareLayout) { [self drawHardwareCase]; return; }
@@ -202,7 +229,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     [super layoutSubviews];
     for(size_t r=0;r<rows.size();++r) for(size_t i=0;i<rows[r].size();++i) {
         PC98KeyButton* key=(PC98KeyButton*)self.keys[r][i]; const Key& definition=rows[r][i];
-        key.hidden=NO; key.isAccessibilityElement=YES; key.steppedReturn=NO; key.detailScale=1;
+        key.hidden=NO; key.isAccessibilityElement=YES; key.steppedReturn=NO; key.detailScale=1; key.expandedLegends=NO;
         [key setTitle:[NSString stringWithUTF8String:definition.name] forState:UIControlStateNormal];
         key.modifier=(definition.scan==0 || definition.scan==14 || definition.scan==15 || definition.scan==28 || definition.scan==0x60 || definition.scan==0x61 || definition.scan>=0x70 || definition.scan==0x51 || definition.scan==0x35 || definition.scan==0x34);
     }
@@ -237,8 +264,8 @@ static std::vector<HardwareKey> hardwareKeys() {
         for(NSArray* row in self.keys) for(PC98KeyButton* key in row)
             if(!button && key.tag==spec.scan && !placed.count(key)) button=key;
         if(!button) continue;
-        placed.insert(button); button.detailScale=scale; button.hidden=NO; button.isAccessibilityElement=YES;
-        button.frame=CGRectMake(frame.origin.x+spec.x*scale,frame.origin.y+spec.y*scale,spec.w*scale,spec.h*scale);
+        placed.insert(button); button.detailScale=scale; button.expandedLegends=YES; button.hidden=NO; button.isAccessibilityElement=YES;
+        button.frame=[self hardwareRect:CGRectMake(spec.x,spec.y,spec.w,spec.h)];
         button.steppedReturn=spec.scan==28 && spec.h>40;
         if(spec.scan==0x34) [button setTitle:@"" forState:UIControlStateNormal];
         if(spec.scan>=0x52 && spec.scan<=0x6B) button.modifier=YES;
@@ -264,9 +291,22 @@ static std::vector<HardwareKey> hardwareKeys() {
     [self setNeedsDisplay];
 }
 - (UIButton*)keyAtPoint:(CGPoint)point {
-    for(NSArray* row in self.keys) for(UIButton* key in row)
-        if(!key.hidden && CGRectContainsPoint(key.frame,point) && [(PC98KeyButton*)key containsKeyPoint:CGPointMake(point.x-key.frame.origin.x,point.y-key.frame.origin.y)]) return key;
-    return nil;
+    for(NSArray* row in self.keys) for(PC98KeyButton* key in row)
+        if(!key.hidden && CGRectContainsPoint(key.frame,point) && [key containsKeyPoint:CGPointMake(point.x-key.frame.origin.x,point.y-key.frame.origin.y)]) return key;
+    if(!self.hardwareLayout) return nil;
+    // Fill narrow gaps with the nearest adjacent key. Large case areas and the
+    // Return notch remain inactive; no key receives an overlapping touch target.
+    UIButton* nearest=nil; CGFloat best=CGFLOAT_MAX;
+    for(NSArray* row in self.keys) for(PC98KeyButton* key in row) if(!key.hidden) {
+        CGPoint local=CGPointMake(point.x-key.frame.origin.x,point.y-key.frame.origin.y);
+        if(key.steppedReturn && CGRectContainsPoint(key.bounds,local) && ![key containsKeyPoint:local]) continue;
+        if(!CGRectContainsPoint(CGRectInset(key.frame,-1.5,-3),point)) continue;
+        CGFloat dx=MAX(MAX(CGRectGetMinX(key.frame)-point.x,point.x-CGRectGetMaxX(key.frame)),0);
+        CGFloat dy=MAX(MAX(CGRectGetMinY(key.frame)-point.y,point.y-CGRectGetMaxY(key.frame)),0);
+        CGFloat distance=dx*dx+dy*dy;
+        if(distance<best) { best=distance; nearest=key; }
+    }
+    return nearest;
 }
 - (void)touchesBegan:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
     for(UITouch* t in set) {
@@ -311,6 +351,11 @@ static std::vector<HardwareKey> hardwareKeys() {
         if([self keyAtPoint:CGPointMake(CGRectGetMidX(key.frame),CGRectGetMidY(key.frame))]!=key) return NO;
     }
     if(visibleCount!=hardwareKeys().size()) return NO;
+    CGRect fitted=[self hardwareFrame];
+    if(fitted.size.height<self.bounds.size.height*.9 || seven.frame.size.height<self.bounds.size.height*.11) return NO;
+    PC98KeyButton* a=visible(29); PC98KeyButton* s=visible(30);
+    CGPoint gap=CGPointMake(CGRectGetMaxX(a.frame)+(CGRectGetMinX(s.frame)-CGRectGetMaxX(a.frame))*.25,CGRectGetMidY(a.frame));
+    if([self keyAtPoint:gap]!=a) return NO;
     // The empty lower-left notch must not trigger Return.
     CGPoint notch=CGPointMake(enter.frame.origin.x+enter.frame.size.width*.08,enter.frame.origin.y+enter.frame.size.height*.75);
     return [self keyAtPoint:notch]!=enter && [self tapReturnSectionsForTesting];
