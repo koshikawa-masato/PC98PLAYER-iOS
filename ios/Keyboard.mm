@@ -19,40 +19,86 @@ static const std::vector<std::vector<Key>> rows = {
     {{"HELP",0x3F},{"HOME",0x3E},{"INS",0x38},{"DEL",0x39},{"R↓",0x37},{"R↑",0x36},{"7",0x42},{"8",0x43},{"9",0x44},{"/",0x41},{"*",0x45},{"-",0x40}},
     {{"4",0x46},{"5",0x47},{"6",0x48},{"+",0x49},{"1",0x4A},{"2",0x4B},{"3",0x4C},{"=",0x4D},{"0",0x4E},{",",0x4F},{".",0x50},{"↵",28}}
 };
+struct HardwareKey {int scan; CGFloat x,y,w,h;};
+static std::vector<HardwareKey> hardwareKeys() {
+    std::vector<HardwareKey> keys;
+    auto add=[&](int scan,CGFloat x,CGFloat y,CGFloat w=29,CGFloat h=30) { keys.push_back({scan,x,y,w,h}); };
+    add(0x60,28,56,35); add(0x61,70,56,35);
+    for(int i=0;i<10;++i) add(0x62+i,111+i*41+(i>=5?7:0),56,37);
+    for(int i=0;i<5;++i) add(0x52+i,537+i*40,56,36);
+    add(0,28,104,38);
+    for(int i=0;i<13;++i) add(1+i,71+i*33,104);
+    add(14,500,104,32);
+    add(15,28,138,54);
+    for(int i=0;i<12;++i) add(16+i,86+i*32.5,138);
+    add(28,476,138,56,63);
+    add(0x74,28,171,26); add(0x71,58,171,26);
+    for(int i=0;i<12;++i) add(29+i,88+i*33,171);
+    add(0x70,28,204,79);
+    for(int i=0;i<11;++i) add(41+i,111+i*33,204);
+    add(0x70,476,204,56);
+    add(0x72,91,237,29); add(0x73,125,237,29); add(0x51,160,237,44);
+    add(0x34,210,237,208); add(0x35,424,237,46);
+    add(0x38,536,104,32); add(0x39,572,104,32);
+    add(0x36,536,138,32); add(0x37,572,138,32);
+    add(0x3A,536,171,68); add(0x3B,536,204,32); add(0x3C,572,204,32); add(0x3D,536,237,68);
+    const int pad[5][4]={{0x3E,0x3F,0x40,0x41},{0x42,0x43,0x44,0x45},{0x46,0x47,0x48,0x49},{0x4A,0x4B,0x4C,0x4D},{0x4E,0x4F,0x50,28}};
+    for(int row=0;row<5;++row) for(int col=0;col<4;++col) add(pad[row][col],612+col*33,104+row*33.25,29);
+    return keys;
+}
 @interface PC98KeyButton : UIButton
 @property(copy) BOOL (^activate)(void);
-@property BOOL retroPressed;
+@property(nonatomic) BOOL retroPressed;
 @property BOOL modifier;
+@property BOOL steppedReturn;
+@property CGFloat detailScale;
 @property NSString* kana;
 @end
 @implementation PC98KeyButton
 - (BOOL)accessibilityActivate { return self.activate ? self.activate() : NO; }
 - (void)setRetroPressed:(BOOL)value { _retroPressed=value; [self setNeedsDisplay]; [self setNeedsLayout]; }
+- (UIBezierPath*)capPath:(CGRect)r {
+    if(!self.steppedReturn) return [UIBezierPath bezierPathWithRoundedRect:r cornerRadius:2*self.detailScale];
+    CGFloat notch=r.size.width*12/56, step=r.origin.y+r.size.height*31/63;
+    UIBezierPath* p=[UIBezierPath bezierPath];
+    [p moveToPoint:r.origin]; [p addLineToPoint:CGPointMake(CGRectGetMaxX(r),r.origin.y)];
+    [p addLineToPoint:CGPointMake(CGRectGetMaxX(r),CGRectGetMaxY(r))];
+    [p addLineToPoint:CGPointMake(r.origin.x+notch,CGRectGetMaxY(r))];
+    [p addLineToPoint:CGPointMake(r.origin.x+notch,step)];
+    [p addLineToPoint:CGPointMake(r.origin.x,step)]; [p closePath]; return p;
+}
+- (BOOL)containsKeyPoint:(CGPoint)point { return [[self capPath:self.bounds] containsPoint:point]; }
 - (CGRect)titleRectForContentRect:(CGRect)contentRect {
-    CGFloat inset=self.bounds.size.width<24 ? 2 : 4;
-    return CGRectMake(inset,self.retroPressed?4:2,MAX(1,self.bounds.size.width-inset*2),self.bounds.size.height*(self.kana.length?.56:.85));
+    if(self.steppedReturn) return CGRectMake(self.bounds.size.width*.25,self.bounds.size.height*.28,self.bounds.size.width*.67,self.bounds.size.height*.4);
+    CGFloat inset=(self.bounds.size.width<24 ? 2 : 4)*self.detailScale;
+    return CGRectMake(inset,(self.retroPressed?4:2)*self.detailScale,MAX(1,self.bounds.size.width-inset*2),self.bounds.size.height*(self.kana.length?.56:.85));
 }
 - (void)layoutSubviews {
-    self.titleLabel.font=[UIFont monospacedSystemFontOfSize:MAX(7,MIN(13,self.bounds.size.width*.36)) weight:UIFontWeightMedium];
+    self.titleLabel.font=[UIFont monospacedSystemFontOfSize:MAX(3,MIN(13*self.detailScale,MIN(self.bounds.size.width*.36,self.bounds.size.height*.32))) weight:UIFontWeightMedium];
     [super layoutSubviews];
 }
 - (void)drawRect:(CGRect)rect {
-    CGRect r=CGRectInset(self.bounds,.5,.5);
-    [[UIColor colorWithWhite:.20 alpha:1] setFill]; [[UIBezierPath bezierPathWithRoundedRect:r cornerRadius:3] fill];
-    CGRect base=CGRectInset(r,1,1);
-    PC98Gradient(base,PC98Plastic(.76),PC98Plastic(.48),2.5);
-    CGRect face=CGRectMake(2,self.retroPressed?4:1.5,MAX(1,r.size.width-3),MAX(1,r.size.height-(self.retroPressed?5:6)));
+    CGFloat detail=self.detailScale;
+    CGRect r=CGRectInset(self.bounds,.5*detail,.5*detail);
+    [[UIColor colorWithWhite:.20 alpha:1] setFill]; [[self capPath:r] fill];
+    CGContextRef context=UIGraphicsGetCurrentContext(); CGContextSaveGState(context);
+    [[self capPath:r] addClip];
+    CGRect base=CGRectInset(r,detail,detail);
+    PC98Gradient(base,PC98Plastic(.76),PC98Plastic(.48),2.5*detail);
+    CGRect face=CGRectMake(2*detail,(self.retroPressed?4:1.5)*detail,MAX(1,r.size.width-3*detail),MAX(1,r.size.height-(self.retroPressed?5:6)*detail));
     CGFloat tone=self.modifier?.75:.95;
     if(self.retroPressed) tone-=.13;
-    PC98Gradient(face,PC98Plastic(tone),PC98Plastic(tone-.10),2);
+    CGContextSaveGState(context); [[self capPath:face] addClip];
+    PC98Gradient(face,PC98Plastic(tone),PC98Plastic(tone-.10),2*detail); CGContextRestoreGState(context);
     [PC98Plastic(MIN(1,tone+.08)) setStroke];
-    UIBezierPath* edge=[UIBezierPath bezierPathWithRoundedRect:CGRectInset(face,.5,.5) cornerRadius:1.5]; edge.lineWidth=.6; [edge stroke];
+    UIBezierPath* edge=[self capPath:CGRectInset(face,.5*detail,.5*detail)]; edge.lineWidth=.6*detail; [edge stroke];
     if(self.kana.length) {
-        CGFloat size=MAX(6,MIN(10,self.bounds.size.width*.30));
+        CGFloat size=MAX(3,MIN(10*detail,MIN(self.bounds.size.width*.30,self.bounds.size.height*.28)));
         NSDictionary* style=@{NSFontAttributeName:[UIFont systemFontOfSize:size],NSForegroundColorAttributeName:[UIColor colorWithWhite:.30 alpha:1]};
         CGSize label=[self.kana sizeWithAttributes:style];
-        [self.kana drawAtPoint:CGPointMake(CGRectGetMaxX(face)-label.width-2,CGRectGetMaxY(face)-label.height-1) withAttributes:style];
+        [self.kana drawAtPoint:CGPointMake(CGRectGetMaxX(face)-label.width-2*detail,CGRectGetMaxY(face)-label.height-detail) withAttributes:style];
     }
+    CGContextRestoreGState(context);
     if(self.retroPressed && self.tag>=0x70 && self.tag<=0x74) {
         [[UIColor colorWithRed:.55 green:.29 blue:.08 alpha:1] setFill];
         UIRectFill(CGRectMake(CGRectGetMaxX(face)-5,CGRectGetMinY(face)+2,3,2));
@@ -76,7 +122,7 @@ static const std::vector<std::vector<Key>> rows = {
         for(const auto& row:rows) {
             NSMutableArray* group=[NSMutableArray new];
             for(const auto& k:row) {
-                PC98KeyButton* b=[PC98KeyButton buttonWithType:UIButtonTypeCustom]; b.tag=k.scan;
+                PC98KeyButton* b=[PC98KeyButton buttonWithType:UIButtonTypeCustom]; b.tag=k.scan; b.detailScale=1;
                 [b setTitle:[NSString stringWithUTF8String:k.name] forState:UIControlStateNormal];
                 b.titleLabel.font=[UIFont monospacedSystemFontOfSize:13 weight:UIFontWeightSemibold];
                 b.titleLabel.adjustsFontSizeToFitWidth=YES; b.titleLabel.minimumScaleFactor=0.5;
@@ -96,7 +142,38 @@ static const std::vector<std::vector<Key>> rows = {
     }
     return self;
 }
+- (void)setHardwareLayout:(BOOL)value {
+    if(_hardwareLayout==value) return;
+    [self releaseAll]; _hardwareLayout=value; [self setNeedsLayout]; [self setNeedsDisplay];
+}
+- (CGRect)hardwareFrame {
+    CGFloat scale=MAX(.01,MIN(self.bounds.size.width/760,self.bounds.size.height/310));
+    return CGRectMake((self.bounds.size.width-760*scale)/2,(self.bounds.size.height-310*scale)/2,760*scale,310*scale);
+}
+- (void)drawHardwareCase {
+    CGRect frame=[self hardwareFrame]; CGFloat scale=frame.size.width/760;
+    CGContextRef c=UIGraphicsGetCurrentContext(); CGContextSaveGState(c);
+    CGContextTranslateCTM(c,frame.origin.x,frame.origin.y); CGContextScaleCTM(c,scale,scale);
+    CGRect shell=CGRectMake(1,1,758,308);
+    PC98Gradient(shell,PC98Plastic(.91),PC98Plastic(.69),13);
+    [PC98Plastic(.98) setStroke]; [[UIBezierPath bezierPathWithRoundedRect:CGRectInset(shell,1,1) cornerRadius:12] stroke];
+    PC98Gradient(CGRectMake(56,9,470,39),PC98Plastic(.75),PC98Plastic(.87),1);
+    PC98Gradient(CGRectMake(26,53,717,36),PC98Plastic(.35),PC98Plastic(.57),1);
+    PC98Gradient(CGRectMake(26,101,580,170),PC98Plastic(.35),PC98Plastic(.57),1);
+    PC98Gradient(CGRectMake(610,101,133,170),PC98Plastic(.35),PC98Plastic(.57),1);
+    // The reference has case plastic beside Kana and below the right Shift.
+    PC98Gradient(CGRectMake(27,236,59,35),PC98Plastic(.84),PC98Plastic(.74),1);
+    PC98Gradient(CGRectMake(475,236,57,35),PC98Plastic(.84),PC98Plastic(.74),1);
+    NSArray* names=@[@"CAPS",@"かな"];
+    for(int i=0;i<2;++i) {
+        [PC98Plastic(.38) setFill]; UIRectFill(CGRectMake(33,244+i*10,4,3));
+        if(latched.count(0x71+i)) { [[UIColor colorWithRed:.64 green:.76 blue:.30 alpha:1] setFill]; UIRectFill(CGRectMake(33,244+i*10,3,2)); }
+        [names[i] drawAtPoint:CGPointMake(42,242+i*10) withAttributes:@{NSFontAttributeName:[UIFont systemFontOfSize:6],NSForegroundColorAttributeName:PC98Plastic(.30)}];
+    }
+    CGContextRestoreGState(c);
+}
 - (void)drawRect:(CGRect)rect {
+    if(self.hardwareLayout) { [self drawHardwareCase]; return; }
     CGRect shell=CGRectInset(self.bounds,.5,.5);
     PC98Gradient(shell,PC98Plastic(.91),PC98Plastic(.69),10);
     [PC98Plastic(.97) setStroke]; UIBezierPath* edge=[UIBezierPath bezierPathWithRoundedRect:CGRectInset(shell,1,1) cornerRadius:9]; edge.lineWidth=1; [edge stroke];
@@ -123,6 +200,13 @@ static const std::vector<std::vector<Key>> rows = {
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
+    for(size_t r=0;r<rows.size();++r) for(size_t i=0;i<rows[r].size();++i) {
+        PC98KeyButton* key=(PC98KeyButton*)self.keys[r][i]; const Key& definition=rows[r][i];
+        key.hidden=NO; key.isAccessibilityElement=YES; key.steppedReturn=NO; key.detailScale=1;
+        [key setTitle:[NSString stringWithUTF8String:definition.name] forState:UIControlStateNormal];
+        key.modifier=(definition.scan==0 || definition.scan==14 || definition.scan==15 || definition.scan==28 || definition.scan==0x60 || definition.scan==0x61 || definition.scan>=0x70 || definition.scan==0x51 || definition.scan==0x35 || definition.scan==0x34);
+    }
+    if(self.hardwareLayout) { [self layoutHardwareKeys]; return; }
     CGFloat gap=3, left=10, top=48, usable=self.bounds.size.width-20;
     CGRect bank=[self vfBankFrame]; CGFloat vfWidth=(bank.size.width-gap*4)/5;
     for(NSUInteger i=0;i<5;++i)
@@ -144,6 +228,24 @@ static const std::vector<std::vector<Key>> rows = {
     [self bringSubviewToFront:upperReturn];
     [self setNeedsDisplay];
 }
+- (void)layoutHardwareKeys {
+    CGRect frame=[self hardwareFrame]; CGFloat scale=frame.size.width/760;
+    for(NSArray* row in self.keys) for(UIButton* key in row) { key.hidden=YES; key.isAccessibilityElement=NO; }
+    std::set<UIButton*> placed;
+    for(const HardwareKey& spec:hardwareKeys()) {
+        PC98KeyButton* button=nil;
+        for(NSArray* row in self.keys) for(PC98KeyButton* key in row)
+            if(!button && key.tag==spec.scan && !placed.count(key)) button=key;
+        if(!button) continue;
+        placed.insert(button); button.detailScale=scale; button.hidden=NO; button.isAccessibilityElement=YES;
+        button.frame=CGRectMake(frame.origin.x+spec.x*scale,frame.origin.y+spec.y*scale,spec.w*scale,spec.h*scale);
+        button.steppedReturn=spec.scan==28 && spec.h>40;
+        if(spec.scan==0x34) [button setTitle:@"" forState:UIControlStateNormal];
+        if(spec.scan>=0x52 && spec.scan<=0x6B) button.modifier=YES;
+        [button setNeedsDisplay];
+    }
+    [self setNeedsDisplay];
+}
 - (BOOL)isLatch:(int)scan { return scan==0x70 || scan==0x71 || scan==0x72 || scan==0x73 || scan==0x74; }
 - (void)updateKey:(UIButton*)key down:(BOOL)down {
     int scan=(int)key.tag;
@@ -163,7 +265,7 @@ static const std::vector<std::vector<Key>> rows = {
 }
 - (UIButton*)keyAtPoint:(CGPoint)point {
     for(NSArray* row in self.keys) for(UIButton* key in row)
-        if(!key.hidden && CGRectContainsPoint(key.frame,point)) return key;
+        if(!key.hidden && CGRectContainsPoint(key.frame,point) && [(PC98KeyButton*)key containsKeyPoint:CGPointMake(point.x-key.frame.origin.x,point.y-key.frame.origin.y)]) return key;
     return nil;
 }
 - (void)touchesBegan:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
@@ -186,11 +288,32 @@ static const std::vector<std::vector<Key>> rows = {
     UIButton* key=self.keys[3].lastObject;
     // Include the former seam as well as the upper and lower ends.
     for(CGFloat fraction : {.15,.5,.85}) {
-        CGPoint point=CGPointMake(CGRectGetMidX(key.frame),key.frame.origin.y+key.frame.size.height*fraction);
+        CGPoint point=CGPointMake(key.frame.origin.x+key.frame.size.width*.65,key.frame.origin.y+key.frame.size.height*fraction);
         UIButton* hit=[self keyAtPoint:point];
         if(hit!=key || hit.tag!=28 || ![hit accessibilityActivate]) return NO;
     }
     return YES;
+}
+- (BOOL)hardwareLayoutForTesting {
+    if(!self.hardwareLayout) return NO;
+    [self layoutIfNeeded];
+    auto visible=[&](int scan)->PC98KeyButton* {
+        for(NSArray* row in self.keys) for(PC98KeyButton* key in row) if(key.tag==scan && !key.hidden) return key;
+        return nil;
+    };
+    PC98KeyButton* enter=visible(28); PC98KeyButton* vf=visible(0x52); PC98KeyButton* f10=visible(0x6B);
+    PC98KeyButton* seven=visible(0x42); PC98KeyButton* insert=visible(0x38); PC98KeyButton* space=visible(0x34);
+    if(!enter || !vf || !f10 || !seven || !insert || !space || !enter.steppedReturn) return NO;
+    if(!(CGRectGetMinX(seven.frame)>CGRectGetMaxX(insert.frame) && CGRectGetMinX(vf.frame)>CGRectGetMaxX(f10.frame) && space.frame.size.width>seven.frame.size.width*6)) return NO;
+    NSUInteger visibleCount=0;
+    for(NSArray* row in self.keys) for(UIButton* key in row) if(!key.hidden) {
+        ++visibleCount;
+        if([self keyAtPoint:CGPointMake(CGRectGetMidX(key.frame),CGRectGetMidY(key.frame))]!=key) return NO;
+    }
+    if(visibleCount!=hardwareKeys().size()) return NO;
+    // The empty lower-left notch must not trigger Return.
+    CGPoint notch=CGPointMake(enter.frame.origin.x+enter.frame.size.width*.08,enter.frame.origin.y+enter.frame.size.height*.75);
+    return [self keyAtPoint:notch]!=enter && [self tapReturnSectionsForTesting];
 }
 - (BOOL)tapScanForTesting:(int)scan {
     for(NSArray* row in self.keys) for(UIButton* b in row) if(b.tag==scan && !b.hidden) return [b accessibilityActivate];

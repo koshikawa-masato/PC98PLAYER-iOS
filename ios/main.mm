@@ -49,7 +49,7 @@ static UIImage* frameImage(Player* p) {
     std::unique_ptr<Player> player;
     AudioOut audio;
     double nextFrame;
-    BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo;
+    BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware;
     int mouseButtons;
     std::set<NSInteger> physicalKeys;
     std::set<int> touchKeys;
@@ -66,7 +66,7 @@ static UIImage* frameImage(Player* p) {
 @end
 @implementation PlayerController
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    if(self.traitCollection.userInterfaceIdiom==UIUserInterfaceIdiomPhone && !manualDuo && !hingeDuo)
+    if(self.traitCollection.userInterfaceIdiom==UIUserInterfaceIdiomPhone && !manualDuo && !hingeDuo && !duoHardware)
         return UIInterfaceOrientationMaskPortrait;
     return UIInterfaceOrientationMaskAllButUpsideDown;
 }
@@ -103,8 +103,9 @@ static UIImage* frameImage(Player* p) {
     if(@available(iOS 27.1,*)) {
         UIHingeInteraction* interaction=[[UIHingeInteraction alloc] initWithUpdateHandler:^(UIHingeInteraction* interaction,UIHingeInteractionUpdate* update) {
             PlayerController* s=weak; if(!s) return;
-            BOOL duo=update.hinge && update.hinge.status==UIHingeStatusPartiallyOpen;
-            if(s->hingeDuo!=duo) { [s releaseKeys]; s->hingeDuo=duo; [s setNeedsUpdateOfSupportedInterfaceOrientations]; [s.view setNeedsLayout]; }
+            BOOL hardware=update.hinge!=nil;
+            BOOL duo=hardware && update.hinge.status==UIHingeStatusPartiallyOpen;
+            if(s->hingeDuo!=duo || s->duoHardware!=hardware) { [s releaseKeys]; s->duoHardware=hardware; s->hingeDuo=duo; [s setNeedsUpdateOfSupportedInterfaceOrientations]; [s.view setNeedsLayout]; }
         }];
         [self.view addInteraction:interaction];
     }
@@ -122,6 +123,7 @@ static UIImage* frameImage(Player* p) {
     [super viewDidLayoutSubviews];
     CGRect safe=UIEdgeInsetsInsetRect(self.view.bounds,self.view.safeAreaInsets);
     BOOL duo=manualDuo || hingeDuo;
+    self.keyboard.hardwareLayout=duo || duoHardware;
     CGRect division=CGRectNull;
 #if __has_include(<UIKit/UIViewReservedRegion.h>)
     if(@available(iOS 27.1,*)) {
@@ -420,7 +422,7 @@ static UIImage* frameImage(Player* p) {
     uint8_t previous=player->m->ram[0x90000]; player->m->ram[0x90000]=previous^0xFF;
     bool loaded=player->load_state(7,&error);
     result[@"stateRoundtrip"]=@(saved && loaded && player->m->ram[0x90000]==previous);
-    manualDuo=NO; hingeDuo=NO; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
+    manualDuo=NO; hingeDuo=NO; duoHardware=NO; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     result[@"phonePortraitOrientation"]=@(self.traitCollection.userInterfaceIdiom!=UIUserInterfaceIdiomPhone || self.supportedInterfaceOrientations==UIInterfaceOrientationMaskPortrait);
     result[@"phoneKeyboardBelowMonitor"]=@(CGRectGetMinY(self.keyboard.frame)>CGRectGetMaxY(self.topPanel.frame));
     UIGraphicsImageRenderer* portraitRenderer=[[UIGraphicsImageRenderer alloc] initWithBounds:self.view.bounds];
@@ -428,6 +430,7 @@ static UIImage* frameImage(Player* p) {
     UIImage* portrait=[portraitRenderer imageWithActions:^(UIGraphicsImageRendererContext* context) { [self.view.layer renderInContext:context.CGContext]; }];
     [UIImagePNGRepresentation(portrait) writeToURL:area(NSDocumentDirectory,@"portrait-smoke.png") atomically:YES];
     manualDuo=YES; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
+    result[@"duoPhysicalKeyboard"]=@([self.keyboard hardwareLayoutForTesting]);
     CGFloat mid=CGRectGetMidY(self.view.bounds);
     result[@"duoMonitorAboveFold"]=@(CGRectGetMaxY(self.topPanel.frame)<mid);
     result[@"duoKeyboardBelowFold"]=@(CGRectGetMinY(self.keyboard.frame)>mid);

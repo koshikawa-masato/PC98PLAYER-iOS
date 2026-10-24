@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 #import <UIKit/UIKit.h>
 @interface PC98Keyboard : UIView
+@property(nonatomic) BOOL hardwareLayout;
 @property(copy) void (^keyChanged)(int scan, BOOL down);
 - (void)releaseAll;
 - (void)repeatHeldKeys;
 #ifdef PC98PLAYER_TESTING
 - (BOOL)tapReturnSectionsForTesting;
+- (BOOL)hardwareLayoutForTesting;
 - (BOOL)tapScanForTesting:(int)scan;
 #endif
 @end
