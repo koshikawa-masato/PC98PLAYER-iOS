@@ -150,13 +150,16 @@ static UIImage* frameImage(Player* p) {
     manualDuo=[NSUserDefaults.standardUserDefaults boolForKey:@"PC98ManualDuo"];
     self.topPanel=[PC98MonitorCabinet new]; [self.view addSubview:self.topPanel];
     self.monitor=[UIImageView new]; self.monitor.contentMode=UIViewContentModeScaleAspectFit;
-    self.monitor.layer.cornerRadius=4; self.monitor.clipsToBounds=YES; self.monitor.backgroundColor=[UIColor colorWithRed:.035 green:.055 blue:.052 alpha:1]; self.monitor.layer.magnificationFilter=kCAFilterNearest; self.monitor.userInteractionEnabled=YES;
+    self.monitor.layer.cornerRadius=4; self.monitor.clipsToBounds=YES; self.monitor.backgroundColor=[UIColor colorWithRed:.035 green:.055 blue:.052 alpha:1]; self.monitor.layer.magnificationFilter=kCAFilterNearest; self.monitor.userInteractionEnabled=YES; self.monitor.multipleTouchEnabled=YES;
     [self.topPanel addSubview:self.monitor];
-    UIPanGestureRecognizer* pan=[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(moveMouse:)]; [self.monitor addGestureRecognizer:pan];
+    UIPanGestureRecognizer* pan=[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(moveMouse:)];
+    pan.maximumNumberOfTouches=1;[self.monitor addGestureRecognizer:pan];
+    UITapGestureRecognizer* twoFingerTap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(rightClick)];
+    twoFingerTap.numberOfTouchesRequired=2;[self.monitor addGestureRecognizer:twoFingerTap];
     UITapGestureRecognizer* doubleTap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(toggleFullScreen)];
-    doubleTap.numberOfTapsRequired=2;[self.monitor addGestureRecognizer:doubleTap];
+    doubleTap.numberOfTapsRequired=2;[doubleTap requireGestureRecognizerToFail:twoFingerTap];[self.monitor addGestureRecognizer:doubleTap];
     UITapGestureRecognizer* tap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(leftClick:)];
-    [tap requireGestureRecognizerToFail:doubleTap];[self.monitor addGestureRecognizer:tap];
+    [tap requireGestureRecognizerToFail:doubleTap];[tap requireGestureRecognizerToFail:twoFingerTap];[self.monitor addGestureRecognizer:tap];
     self.status=[UILabel new]; self.status.text=@"ゲームフォルダを選択してください";
     self.status.textColor=[UIColor colorWithWhite:.24 alpha:1]; self.status.font=[UIFont monospacedSystemFontOfSize:8 weight:UIFontWeightRegular]; self.status.numberOfLines=1; self.status.adjustsFontSizeToFitWidth=YES;
     [self.view addSubview:self.status];
@@ -774,6 +777,14 @@ static UIImage* frameImage(Player* p) {
     self.monitor.image=frameImage(player.get());
     UIImage* portrait=[portraitRenderer imageWithActions:^(UIGraphicsImageRendererContext* context) { [self.view.layer renderInContext:context.CGContext]; }];
     [UIImagePNGRepresentation(portrait) writeToURL:area(NSDocumentDirectory,@"portrait-smoke.png") atomically:YES];
+    BOOL hasTwoFingerTap=NO,hasSingleFingerDoubleTap=NO;
+    for(UIGestureRecognizer* gesture in self.monitor.gestureRecognizers) if([gesture isKindOfClass:UITapGestureRecognizer.class]) {
+        UITapGestureRecognizer* tap=(UITapGestureRecognizer*)gesture;
+        hasTwoFingerTap |= tap.numberOfTouchesRequired==2 && tap.numberOfTapsRequired==1;
+        hasSingleFingerDoubleTap |= tap.numberOfTouchesRequired==1 && tap.numberOfTapsRequired==2;
+    }
+    result[@"monitorTwoFingerGesture"]=@(self.monitor.multipleTouchEnabled && hasTwoFingerTap && hasSingleFingerDoubleTap);
+    [self rightClick];result[@"monitorRightClick"]=@(player->m->mouse.buttons==2);[self releaseKeys];
     CGRect previousMonitor=self.monitor.frame;
     [self.keyboard pressScansForTesting:@[@0x70,@29]];
     [self toggleFullScreen];
@@ -781,6 +792,7 @@ static UIImage* frameImage(Player* p) {
     CGRect fullscreenSafe=UIEdgeInsetsInsetRect(self.view.bounds,self.view.safeAreaInsets);
     result[@"fullscreenAspectFit"]=@(CGRectContainsRect(fullscreenSafe,self.monitor.frame) && fabs(self.monitor.frame.size.width/self.monitor.frame.size.height-1.6)<.001);
     result[@"fullscreenReleasesKeys"]=@(!player->m->kb_down[0x70] && !player->m->kb_down[29]);
+    [self rightClick];result[@"fullscreenRightClick"]=@(player->m->mouse.buttons==2);[self releaseKeys];
     [self toggleFullScreen];
     result[@"fullscreenRestoresLayout"]=@(!fullScreen && !self.topPanel.hidden && !self.keyboard.hidden && !self.toolbar.hidden && !self.status.hidden && self.monitor.superview==self.topPanel && CGRectEqualToRect(previousMonitor,self.monitor.frame));
     manualDuo=YES; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
