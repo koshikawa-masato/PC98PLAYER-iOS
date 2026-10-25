@@ -4,6 +4,7 @@
 
 @interface PC98MonitorCabinet ()
 @property CALayer* playbackLamp;
+@property CALayer* playbackGlow;
 @end
 
 UIColor* PC98Plastic(CGFloat b) { return [UIColor colorWithRed:b green:b*0.985 blue:b*0.91 alpha:1]; }
@@ -16,12 +17,29 @@ void PC98Gradient(CGRect r,UIColor* top,UIColor* bottom,CGFloat radius) {
     CGContextDrawLinearGradient(c,gradient,CGPointMake(CGRectGetMidX(r),CGRectGetMinY(r)),CGPointMake(CGRectGetMidX(r),CGRectGetMaxY(r)),0);
     CGGradientRelease(gradient); CGColorSpaceRelease(space); CGContextRestoreGState(c);
 }
+// A tiny native-resolution sprite keeps the lens and stepped light halo crisp.
+static UIImage* playbackLampImage(BOOL illuminated,BOOL red) {
+    static const char* dots[]={"0001111000","0123443210","1234554321","1234554321","0123443210","0001111000"};
+    NSArray<UIColor*>* shades;
+    if(!illuminated) shades=@[UIColor.clearColor,[UIColor colorWithWhite:.2 alpha:.2],[UIColor colorWithWhite:.16 alpha:1],[UIColor colorWithWhite:.24 alpha:1],[UIColor colorWithWhite:.3 alpha:1],[UIColor colorWithWhite:.38 alpha:1]];
+    else if(red) shades=@[UIColor.clearColor,[UIColor colorWithRed:1 green:.12 blue:.03 alpha:.22],[UIColor colorWithRed:.48 green:.04 blue:.02 alpha:1],[UIColor colorWithRed:.85 green:.08 blue:.03 alpha:1],[UIColor colorWithRed:1 green:.3 blue:.1 alpha:1],[UIColor colorWithRed:1 green:.78 blue:.5 alpha:1]];
+    else shades=@[UIColor.clearColor,[UIColor colorWithRed:.4 green:1 blue:.12 alpha:.22],[UIColor colorWithRed:.12 green:.33 blue:.04 alpha:1],[UIColor colorWithRed:.3 green:.65 blue:.06 alpha:1],[UIColor colorWithRed:.6 green:1 blue:.18 alpha:1],[UIColor colorWithRed:.88 green:1 blue:.62 alpha:1]];
+    UIGraphicsBeginImageContextWithOptions(CGSizeMake(10,6),NO,1);
+    CGContextSetShouldAntialias(UIGraphicsGetCurrentContext(),NO);
+    for(int y=0;y<6;++y) for(int x=0;x<10;++x) {
+        [shades[dots[y][x]-'0'] setFill];UIRectFill(CGRectMake(x,y,1,1));
+    }
+    UIImage* image=UIGraphicsGetImageFromCurrentImageContext();UIGraphicsEndImageContext();return image;
+}
 @implementation PC98MonitorCabinet
 - (instancetype)initWithFrame:(CGRect)frame {
     if((self=[super initWithFrame:frame])) { self.backgroundColor=UIColor.clearColor; self.opaque=NO; self.contentMode=UIViewContentModeRedraw;
-        self.playbackLamp=[CALayer layer];self.playbackLamp.cornerRadius=1;
-        self.playbackLamp.backgroundColor=[UIColor colorWithWhite:.28 alpha:1].CGColor;
-        [self.layer addSublayer:self.playbackLamp];
+        self.playbackLamp=[CALayer layer];
+        self.playbackLamp.contents=(__bridge id)playbackLampImage(NO,NO).CGImage;
+        self.playbackLamp.magnificationFilter=kCAFilterNearest;self.playbackLamp.minificationFilter=kCAFilterNearest;
+        self.playbackGlow=[CALayer layer];self.playbackGlow.hidden=YES;
+        self.playbackGlow.magnificationFilter=kCAFilterNearest;self.playbackGlow.minificationFilter=kCAFilterNearest;
+        [self.playbackLamp addSublayer:self.playbackGlow];[self.layer addSublayer:self.playbackLamp];
     }
     return self;
 }
@@ -29,21 +47,25 @@ void PC98Gradient(CGRect r,UIColor* top,UIColor* bottom,CGFloat radius) {
     if(_playbackState==value) return;
     _playbackState=value;
     [CATransaction begin];[CATransaction setDisableActions:YES];
-    [self.playbackLamp removeAnimationForKey:@"pausedBlink"];
-    self.playbackLamp.opacity=1;
-    self.playbackLamp.backgroundColor=(value==PC98PlaybackStatePaused?[UIColor colorWithRed:.9 green:.12 blue:.08 alpha:1]:value==PC98PlaybackStateRunning?[UIColor colorWithRed:.4 green:.7 blue:.2 alpha:1]:[UIColor colorWithWhite:.28 alpha:1]).CGColor;
+    [self.playbackGlow removeAnimationForKey:@"pausedBlink"];
+    self.playbackGlow.opacity=1;self.playbackGlow.hidden=value==PC98PlaybackStateInactive;
+    self.playbackGlow.contents=(__bridge id)playbackLampImage(YES,value==PC98PlaybackStatePaused).CGImage;
     [CATransaction commit];
     if(value==PC98PlaybackStatePaused) {
-        CABasicAnimation* blink=[CABasicAnimation animationWithKeyPath:@"opacity"];
-        blink.fromValue=@1;blink.toValue=@.15;blink.duration=.6;blink.autoreverses=YES;blink.repeatCount=HUGE_VALF;
-        [self.playbackLamp addAnimation:blink forKey:@"pausedBlink"];
+        // Discrete on/off frames, with the unlit lens visible between flashes.
+        CAKeyframeAnimation* blink=[CAKeyframeAnimation animationWithKeyPath:@"opacity"];
+        blink.values=@[@1,@0,@0];blink.keyTimes=@[@0,@.5,@1];blink.calculationMode=kCAAnimationDiscrete;
+        blink.duration=1.2;blink.repeatCount=HUGE_VALF;
+        [self.playbackGlow addAnimation:blink forKey:@"pausedBlink"];
     }
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGRect status=[self statusFrame];
     [CATransaction begin];[CATransaction setDisableActions:YES];
-    self.playbackLamp.frame=CGRectMake(status.origin.x-14,status.origin.y+3,6,4);
+    CGFloat scale=self.window.screen.scale ?: UIScreen.mainScreen.scale;
+    self.playbackLamp.frame=CGRectMake(round((status.origin.x-17)*scale)/scale,round((status.origin.y+2)*scale)/scale,10,6);
+    self.playbackGlow.frame=self.playbackLamp.bounds;
     self.playbackLamp.hidden=self.separateControls;
     [CATransaction commit];
 }
