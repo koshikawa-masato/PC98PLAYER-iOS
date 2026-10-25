@@ -199,10 +199,11 @@ static UIImage* frameImage(Player* p) {
             for(uint32_t pixel:s->player->fb) colors.insert(pixel);
             int peak=0;for(int16_t sample:s->player->audio) peak=std::max(peak,std::abs((int)sample));
             size_t buffered=0;{ std::lock_guard<std::mutex> lock(s->audio.mutex);buffered=s->audio.samples.size(); }
+            AudioQueueParameterValue ramp=0;if(s->audio.queue) AudioQueueGetParameter(s->audio.queue,kAudioQueueParam_VolumeRampTime,&ramp);
             NSDictionary* report=@{@"game":s.currentID ?: @"",@"running":@(!s->paused),@"guestQuit":@(m->quit),
                 @"videoColors":@(m->cfg.video_colors),@"pegcActive":@(m->pegc.enabled),@"screenColorCount":@(colors.size()),
                 @"soundBoard":@(m->cfg.sound_board),@"audioPeak":@(peak),@"frame":@(m->frame_count),
-                @"audioQueueGeneration":@(s->audio.generation),@"audioStarted":@(s->audio.started),@"audioPaused":@(s->audio.paused),@"audioQueuedSamples":@(buffered)};
+                @"audioVolumeRampSeconds":@(ramp),@"audioQueueGeneration":@(s->audio.generation),@"audioStarted":@(s->audio.started),@"audioPaused":@(s->audio.paused),@"audioQueuedSamples":@(buffered)};
             [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]
                 writeToURL:area(NSDocumentDirectory,@"hardware-report.json") atomically:YES];
         }];

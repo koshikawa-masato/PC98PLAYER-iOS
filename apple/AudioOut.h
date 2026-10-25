@@ -62,10 +62,19 @@ struct AudioOut {
         paused = true;
         if (started) AudioQueuePause(queue);
     }
+    bool startOutput() {
+        // Apply gain after the queued PCM, including a partially played buffer.
+        // A PCM-side fade would miss the buffers already owned by AudioQueue.
+        if (AudioQueueSetParameter(queue, kAudioQueueParam_VolumeRampTime, 0) != noErr ||
+            AudioQueueSetParameter(queue, kAudioQueueParam_Volume, 0) != noErr ||
+            AudioQueueSetParameter(queue, kAudioQueueParam_VolumeRampTime, .005f) != noErr ||
+            AudioQueueStart(queue, nullptr) != noErr) return false;
+        return AudioQueueSetParameter(queue, kAudioQueueParam_Volume, 1) == noErr;
+    }
     bool resume() {
         if (!paused) return true;
         paused = false;
-        if (started && AudioQueueStart(queue, nullptr) != noErr) { paused = true; return false; }
+        if (started && !startOutput()) { AudioQueuePause(queue);paused = true;return false; }
         return true;
     }
     void push(const std::vector<int16_t>& pcm) {
@@ -83,7 +92,7 @@ struct AudioOut {
                 if (!failed) { started = true; start = true; }
             }
         }
-        if (failed || (start && AudioQueueStart(queue, nullptr) != noErr)) clear();
+        if (failed || (start && !startOutput())) clear();
     }
     // Clear both the producer FIFO and AudioQueue's scheduled buffers. Used at
     // discontinuities (state load/game change), never for an ordinary pause.

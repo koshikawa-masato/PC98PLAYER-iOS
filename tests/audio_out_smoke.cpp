@@ -3,6 +3,10 @@
 #include <cstdio>
 #include <cstdlib>
 static void check(bool ok,const char* message) { if(!ok) { std::fprintf(stderr,"FAIL: %s\n",message);std::exit(1); } }
+static void fadeConfigured(AudioQueueRef q) {
+    check(q->gainAtStart==0 && q->volume==1,"start silent then restore unity gain");
+    check(q->rampAtStart==.005f && q->rampTime==.005f,"five millisecond output fade includes already queued audio");
+}
 static std::vector<int16_t> pcm(size_t frames,int16_t value) { return std::vector<int16_t>(frames*2,value); }
 static void allSamples(AudioQueueRef q,int16_t expected) {
     check(q->scheduled.size()==AudioOut::bufferCount,"all output buffers primed");
@@ -15,7 +19,7 @@ int main() {
     AudioOut out;check(out.open(44100),"open");auto q=out.queue;
     check(!q->running && q->scheduled.empty(),"no empty queue startup");
     out.push(pcm(512,111));check(!q->running,"wait for enough real PCM");
-    out.push(pcm(1024,111));check(q->running,"start after priming");allSamples(q,111);
+    out.push(pcm(1024,111));check(q->running,"start after priming");allSamples(q,111);fadeConfigured(q);
     out.push(pcm(200,222));auto scheduled=q->scheduled;
     for(int i=0;i<100;++i) {
         out.pause();check(!q->running,"pause hardware output");
@@ -23,11 +27,12 @@ int main() {
         out.push(pcm(50,999));check(out.samples.size()==400,"paused output ignores new PCM");
         check(out.open(44100),"resume via existing open call");
         check(out.queue==q && q->running && creations==1 && disposals==0,"resume reuses audio queue");
-        allSamples(q,111);
+        allSamples(q,111);fadeConfigured(q);
     }
     auto buffer=q->scheduled.front();q->scheduled.erase(q->scheduled.begin());
     q->callback(q->context,q,buffer);
     auto* data=static_cast<int16_t*>(buffer->mAudioData);check(data[0]==222 && data[399]==222 && data[400]==0,"resume consumes remaining FIFO once");
+    check(q->volumeChanges==202,"each initial/resumed start resets gain and starts a fresh fade");
     out.clear();check(out.samples.empty() && q->scheduled.empty() && !q->running,"clear flushes hardware and producer queues");
     check(stopEnqueues==0,"late teardown callback cannot enqueue or deadlock");
     out.push(pcm(1536,333));allSamples(q,333);
