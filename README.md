@@ -110,3 +110,7 @@ Debugビルドは `--smoke-test` を付けて起動すると、キーのアク�
 一部のQNAPなどでは、iOSのフォルダー列挙が空を返すことがあります。その場合はMacで `python3 tools/index_game_folder.py /Volumes/Public/PC98PLAYER/AliceSoft/Games/RanceIV` を実行してから開いてください。ライブラリー全体には `--recursive` を指定できます。ゲームを更新した場合は一覧を作り直してください。アプリは一覧のサイズ・SHA256を照合して端末キャッシュを作成し、セーブを別領域に保持します。今回のNASのGames内26フォルダーには一覧を作成済みです。
 
 [Apple Developer Forumsの同症状報告](https://developer.apple.com/forums/thread/831359)
+
+### 音源・16色／256色
+
+縦画面のCAPS／かな／GRPHランプの右にある「オプション」で、OPN／OPNAと16色／256色を選べます。「適用」はゲームを再起動します。設定は次回も保持します。外部BIOSは不要です。現在の256色対応は640×400のRance IVを主な確認対象としています。[対応範囲と検証](docs/256-color.md)を参照してください。

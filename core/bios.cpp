@@ -847,6 +847,7 @@ void bios_init(Machine* m) {
     r[0x594] = 0;
     r[0x481] = 0x00;
     r[0x458] = 0x00;
+    r[0x45C] = m->cfg.video_colors==256 ? 0x40 : 0; // Extended graphics capability, supplied by our HLE.
     r[0x55D] = 0x01;               // ハードディスク（SASI/IDE）がユニット 0 に付いている（ゲームのフォルダ）
     r[0x55C] = 0x03;               // 1MB の FDD がユニット 0・1 に付いている（仮想フロッピーはユニット 0）
     r[0x712] = 24;                 // MS-DOS: テキストの行数-1（master.lib などが参照）

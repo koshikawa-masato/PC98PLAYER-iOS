@@ -14,6 +14,7 @@
 #include <vector>
 #include <string>
 #include "cpu.h"
+#include "pegc.h"
 #include "memio.h"
 
 // ---- 時間軸 ------------------------------------------------------------------
@@ -140,6 +141,7 @@ struct Config {
     char     drive = 'A';
     int      cpu_mhz = 16;
     int      gdc_5mhz = 0;          // DIP SW 2-8: グラフィック GDC を 5MHz で使える（0 = 2.5MHz の機械）
+    int      video_colors = 16;    // 16, or BIOS-free PC-9821 256-color hardware
     int      sound_irq = 12;     // 既定は PC-9801-86 の INT5
     int      sound_board = 86;   // 86 / 26 / 0
     bool     sound_bios = false; // CC00h にサウンド BIOS（INT D2h）を置く（SoundBIOS=1）
@@ -229,6 +231,7 @@ struct Machine {
     uint32_t ram_size;
     uint8_t  tvram[0x4000];
     uint8_t  gvram[2][4][0x8000];
+    Pegc     pegc;
 
     Pic      pic[2];
     Pit      pit[3];

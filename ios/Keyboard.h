@@ -3,6 +3,7 @@
 @interface PC98Keyboard : UIView
 @property(nonatomic) BOOL hardwareLayout;
 @property(copy) void (^keyChanged)(int scan, BOOL down);
+@property(copy) void (^optionsRequested)(void);
 - (void)releaseAll;
 - (void)repeatHeldKeys;
 #ifdef PC98PLAYER_TESTING

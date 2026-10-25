@@ -541,6 +541,8 @@ static uint8_t mpu_read_data(Machine* m) {
 }
 
 uint8_t mem_rb_slow(Machine* m, uint32_t a) {
+    if(m->cfg.video_colors==256 && m->pegc.enabled && a>=0xE0000 && a<0xE0200) return m->pegc.registers[a-0xE0000];
+    if(pegc_window(m,a)) return (uint8_t)pegc_read(m,a,1);
     g_side_fx++;
     if (a < 0xA4000) {
         if (a >= 0xA2000 && (a & 1)) return 0xFF;
@@ -565,6 +567,8 @@ uint8_t mem_rb_slow(Machine* m, uint32_t a) {
 uint32_t g_watch_lo = 0, g_watch_hi = 0;
 void watch_hit(Machine* m, uint32_t a, uint32_t v, int w) { if (a < 0xA0000) fprintf(stderr, "[wf f%llu] %05X <- %0*X @%04X:%04X\n", (unsigned long long)m->frame_count, a, w * 2, v, m->cpu.op_cs, m->cpu.op_ip); }
 void mem_wb_slow(Machine* m, uint32_t a, uint8_t v) {
+    if(m->cfg.video_colors==256 && m->pegc.enabled && a>=0xE0000 && a<0xE0200) { m->pegc.registers[a-0xE0000]=v;return; }
+    if(pegc_window(m,a)) { pegc_write(m,a,v,1);return; }
     if (a >= g_watch_lo && a < g_watch_hi) plog("[w] %05X <- %02X grcg=%02X tile=%02X,%02X,%02X,%02X @%04X:%04X\n", a, v, m->grcg_mode, m->grcg_tile[0], m->grcg_tile[1], m->grcg_tile[2], m->grcg_tile[3], m->cpu.op_cs, m->cpu.op_ip);
     if (a < 0xA4000) {
         if (a >= 0xA2000 && (a & 1)) return;
@@ -587,6 +591,7 @@ void mem_wb_slow(Machine* m, uint32_t a, uint8_t v) {
     if (a < g_ram_top) m->ram[a] = v;
 }
 uint16_t mem_rw_slow(Machine* m, uint32_t a) {
+    if(pegc_window(m,a & g_addr_mask) && pegc_window(m,(a+1)&g_addr_mask)) return pegc_read(m,a & g_addr_mask,2);
     g_side_fx++;
     uint32_t b = a & g_addr_mask;
     if (egc_on(m)) {
@@ -597,6 +602,7 @@ uint16_t mem_rw_slow(Machine* m, uint32_t a) {
     return (uint16_t)(mem_rb(m, a) | (mem_rb(m, a + 1) << 8));
 }
 void mem_ww_slow(Machine* m, uint32_t a, uint16_t v) {
+    if(pegc_window(m,a & g_addr_mask) && pegc_window(m,(a+1)&g_addr_mask)) { pegc_write(m,a & g_addr_mask,v,2);return; }
     uint32_t b = a & g_addr_mask;
     if (b + 1 >= g_watch_lo && b < g_watch_hi) plog("[w] %05X <- %04X (w) @%04X:%04X\n", b, v, m->cpu.op_cs, m->cpu.op_ip);
     if (egc_on(m)) {
@@ -682,10 +688,10 @@ uint8_t io_in8_(Machine* m, uint16_t port) {
     case 0xA2: { if (m->gdcs.fifo.empty()) return 0; uint8_t v = m->gdcs.fifo.front(); m->gdcs.fifo.erase(m->gdcs.fifo.begin()); return v; }
     case 0xA4: return m->disp_bank;
     case 0xA6: return m->draw_bank;
-    case 0xA8: return m->analog ? m->palidx : m->degpal[0];
-    case 0xAA: return m->analog ? m->pal[m->palidx & 15][0] : m->degpal[1];
-    case 0xAC: return m->analog ? m->pal[m->palidx & 15][1] : m->degpal[2];
-    case 0xAE: return m->analog ? m->pal[m->palidx & 15][2] : m->degpal[3];
+    case 0xA8: if(m->pegc.enabled) return m->palidx; return m->analog ? m->palidx : m->degpal[0];
+    case 0xAA: if(m->pegc.enabled) return m->pegc.palette[m->palidx][0]; return m->analog ? m->pal[m->palidx & 15][0] : m->degpal[1];
+    case 0xAC: if(m->pegc.enabled) return m->pegc.palette[m->palidx][1]; return m->analog ? m->pal[m->palidx & 15][1] : m->degpal[2];
+    case 0xAE: if(m->pegc.enabled) return m->pegc.palette[m->palidx][2]; return m->analog ? m->pal[m->palidx & 15][2] : m->degpal[3];
     case 0xA9: { uint8_t v = cg_pattern(m); if (m->cfg.trace > 1) plog("[cg] code=%04X line=%02X left=%d -> %02X\n", m->cg_code, m->cg_line, m->cg_left, v); return v; }
     case 0x71: case 0x3FD9: return pit_read(m, 0);
     case 0x73: case 0x3FDB: return pit_read(m, 1);
@@ -696,7 +702,7 @@ uint8_t io_in8_(Machine* m, uint16_t port) {
     case 0xF2: return m->a20 ? 0x00 : 0x01;
     case 0xF6: return m->a20 ? 0x00 : 0x01;
     case 0x5F: return 0xFF;
-    case 0x9A0: return (uint8_t)(m->gdc_clk5 ? 0x02 : 0x00);   // 表示モード（24kHz）。bit1 = グラフィック GDC 5MHz
+    case 0x9A0: if(m->cfg.video_colors==256 && m->pegc.selector==0x10) return (uint8_t)(m->pegc.enabled?1:0); return (uint8_t)(m->gdc_clk5 ? 0x02 : 0x00);   // 表示モード（24kHz）。bit1 = グラフィック GDC 5MHz
     case 0x9A8: return 0x00;                // 31kHz 非対応
     case 0x0E8E: case 0x0E8F: return 0xFF;
     }
@@ -753,7 +759,12 @@ void io_out8(Machine* m, uint16_t port, uint8_t v) {
     case 0xA2: gdc_command(m, &m->gdcs, v); return;
     case 0x64: m->vsync_armed = 1; return;
     case 0x68: m->modeff[(v >> 1) & 7] = v & 1; return;
+    case 0x9A0: m->pegc.selector=v;return;
     case 0x6A: {
+        if(m->cfg.video_colors==256) {
+            if(v==0x20 || v==0x21) { m->pegc.enabled=v&1;return; }
+            if(v==0x68 || v==0x69) { m->pegc.single_page=v&1;return; }
+        }
         int bit = (v >> 1) & 0x7F;
         if (v == 0x84 || v == 0x85) { m->gdc_clk5 = (uint8_t)(v & 1); return; }   // グラフィック GDC のクロック 2.5MHz / 5MHz
         if (bit < 8) {
@@ -776,10 +787,10 @@ void io_out8(Machine* m, uint16_t port, uint8_t v) {
         return; }
     case 0xA4: m->disp_bank = v & 1; return;
     case 0xA6: m->draw_bank = v & 1; return;
-    case 0xA8: if (m->analog) m->palidx = v & 15; else m->degpal[0] = v; return;
-    case 0xAA: if (m->analog) m->pal[m->palidx & 15][0] = v & 15; else m->degpal[1] = v; return;
-    case 0xAC: if (m->analog) m->pal[m->palidx & 15][1] = v & 15; else m->degpal[2] = v; return;
-    case 0xAE: if (m->analog) m->pal[m->palidx & 15][2] = v & 15; else m->degpal[3] = v; return;
+    case 0xA8: if(m->pegc.enabled) {m->palidx=v;return;} if (m->analog) m->palidx = v & 15; else m->degpal[0] = v; return;
+    case 0xAA: if(m->pegc.enabled) {m->pegc.palette[m->palidx][0]=v;return;} if (m->analog) m->pal[m->palidx & 15][0] = v & 15; else m->degpal[1] = v; return;
+    case 0xAC: if(m->pegc.enabled) {m->pegc.palette[m->palidx][1]=v;return;} if (m->analog) m->pal[m->palidx & 15][1] = v & 15; else m->degpal[2] = v; return;
+    case 0xAE: if(m->pegc.enabled) {m->pegc.palette[m->palidx][2]=v;return;} if (m->analog) m->pal[m->palidx & 15][2] = v & 15; else m->degpal[3] = v; return;
     case 0x71: case 0x3FD9: pit_write(m, 0, v); return;
     case 0x73: case 0x3FDB: pit_write(m, 1, v); return;
     case 0x75: case 0x3FDD: pit_write(m, 2, v); return;
@@ -998,6 +1009,7 @@ Machine* machine_create(const Config& cfg) {
     g_addr_mask = 0xFFFFF;
     memset(m->tvram, 0, sizeof(m->tvram));
     memset(m->gvram, 0, sizeof(m->gvram));
+    m->pegc.registers[0x10c]=m->pegc.registers[0x10d]=0xff;
     { extern int g_idle_skip; g_idle_skip = (cfg.idle_skip && !getenv("PC98PLAYER_NOIDLE")) ? 1 : 0; }
     m->cpu_hz = (uint32_t)cfg.cpu_mhz * 1000000u;
     if (m->cpu_hz < 1000000u) m->cpu_hz = 8000000u;
@@ -1107,6 +1119,7 @@ void machine_state_save(Machine* m, StateW& w) {
     w.tag("MDRV"); w.pod(m->mdrv);
     w.tag("GCLK"); w.pod(m->gdc_clk5);
     w.tag("AVSD"); w.pod(m->avs);
+    w.tag("PEGC"); w.pod(m->pegc);
 }
 
 void machine_state_load(Machine* m, StateR& r) {
@@ -1172,6 +1185,7 @@ void machine_state_load(Machine* m, StateR& r) {
     if (r.peek_tag("MDRV")) { r.tag("MDRV"); uint16_t so = m->mdrv.stub_off, po = m->mdrv.ptr_off; r.pod(m->mdrv); m->mdrv.stub_off = so; m->mdrv.ptr_off = po; }
     if (r.peek_tag("GCLK")) { r.tag("GCLK"); r.pod(m->gdc_clk5); } else m->gdc_clk5 = 0;
     if (r.peek_tag("AVSD")) { r.tag("AVSD"); r.pod(m->avs); } else { uint8_t on = m->avs.on; avsdrv_reset(m); m->avs.on = on; }
+    if(r.peek_tag("PEGC")) { r.tag("PEGC"); r.pod(m->pegc); } else m->pegc=Pegc();
     // 派生状態の作り直し
     g_addr_mask = m->a20 ? A20_ON_MASK : 0xFFFFF;
     m->regw.clear(); m->beepw.clear();

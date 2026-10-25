@@ -61,6 +61,43 @@ static UIImage* frameImage(Player* p) {
 }
 @end
 
+@interface GameOptionsController : UITableViewController
+@property NSInteger soundBoard;
+@property NSInteger videoColors;
+@property(copy) void (^applied)(NSInteger,NSInteger);
+@property(copy) void (^cancelled)(void);
+@end
+@implementation GameOptionsController
+- (void)viewDidLoad {
+    [super viewDidLoad];self.title=@"オプション";
+    self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"キャンセル" style:UIBarButtonItemStylePlain target:self action:@selector(cancel)];
+    self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
+}
+- (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 2; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return 2; }
+- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return section==0?@"音源":@"画面"; }
+- (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section { return section==1?@"適用するとゲームを再起動します。必要な場合は、先にゲーム内で保存してください。":nil; }
+- (UITableViewCell*)tableView:(UITableView*)tableView cellForRowAtIndexPath:(NSIndexPath*)index {
+    UITableViewCell* cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+    if(index.section==0) {
+        cell.textLabel.text=index.row==0?@"OPN":@"OPNA";
+        cell.detailTextLabel.text=index.row==0?@"PC-9801-26 / YM2203":@"PC-9801-86 / YM2608";
+        cell.accessoryType=(self.soundBoard==(index.row==0?26:86))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
+    } else {
+        cell.textLabel.text=index.row==0?@"16色":@"256色";
+        cell.detailTextLabel.text=index.row==0?@"標準グラフィック":@"PC-9821拡張グラフィック";
+        cell.accessoryType=(self.videoColors==(index.row==0?16:256))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
+    }
+    return cell;
+}
+- (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)index {
+    if(index.section==0) self.soundBoard=index.row==0?26:86;else self.videoColors=index.row==0?16:256;
+    [tableView reloadData];
+}
+- (void)cancel { [self dismissViewControllerAnimated:YES completion:^{if(self.cancelled) self.cancelled();}]; }
+- (void)apply { [self dismissViewControllerAnimated:YES completion:^{if(self.applied) self.applied(self.soundBoard,self.videoColors);}]; }
+@end
+
 @interface PlayerController : UIViewController <UIDocumentPickerDelegate,UIAdaptivePresentationControllerDelegate> {
     std::unique_ptr<Player> player;
     AudioOut audio;
@@ -106,6 +143,7 @@ static UIImage* frameImage(Player* p) {
     for(NSUInteger i=0;i<titles.count;++i) { UIButton* b=[UIButton buttonWithType:UIButtonTypeSystem]; [b setTitle:titles[i] forState:UIControlStateNormal]; b.titleLabel.font=[UIFont systemFontOfSize:10 weight:UIFontWeightMedium]; [b setTitleColor:[UIColor colorWithWhite:.18 alpha:1] forState:UIControlStateNormal]; [b setTitleColor:UIColor.grayColor forState:UIControlStateHighlighted]; b.backgroundColor=PC98Plastic(.87); b.layer.cornerRadius=2; b.layer.borderWidth=1; b.layer.borderColor=PC98Plastic(.55).CGColor; b.layer.shadowColor=UIColor.blackColor.CGColor; b.layer.shadowOffset=CGSizeMake(0,1); b.layer.shadowOpacity=.25; b.layer.shadowRadius=0; b.titleLabel.adjustsFontSizeToFitWidth=YES; [b addTarget:self action:actions[i] forControlEvents:UIControlEventTouchUpInside]; [self.toolbar addArrangedSubview:b]; }
     [self.view addSubview:self.toolbar];
     self.keyboard=[PC98Keyboard new]; __weak PlayerController* weak=self;
+    self.keyboard.optionsRequested=^{ [weak showOptions]; };
     self.keyboard.keyChanged=^(int scan,BOOL down) {
         PlayerController* s=weak; if(!s) return;
         if(down) s->touchKeys.insert(scan); else s->touchKeys.erase(scan);
@@ -140,6 +178,19 @@ static UIImage* frameImage(Player* p) {
                 [self openCache:cache identifier:identifier];
             else [self message:@"指定されたゲームのキャッシュがありません。"];
         }
+    }
+    if([arguments containsObject:@"--hardware-report"]) {
+        [NSTimer scheduledTimerWithTimeInterval:5 repeats:YES block:^(NSTimer* timer) {
+            PlayerController* s=weak;if(!s || !s->player) return;
+            Machine* m=s->player->m;std::set<uint32_t> colors;
+            for(uint32_t pixel:s->player->fb) colors.insert(pixel);
+            int peak=0;for(int16_t sample:s->player->audio) peak=std::max(peak,std::abs((int)sample));
+            NSDictionary* report=@{@"game":s.currentID ?: @"",@"running":@(!s->paused),@"guestQuit":@(m->quit),
+                @"videoColors":@(m->cfg.video_colors),@"pegcActive":@(m->pegc.enabled),@"screenColorCount":@(colors.size()),
+                @"soundBoard":@(m->cfg.sound_board),@"audioPeak":@(peak),@"frame":@(m->frame_count)};
+            [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]
+                writeToURL:area(NSDocumentDirectory,@"hardware-report.json") atomically:YES];
+        }];
     }
     if([arguments containsObject:@"--launch-report"]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,5*NSEC_PER_SEC),dispatch_get_main_queue(),^{
@@ -380,6 +431,10 @@ static UIImage* frameImage(Player* p) {
         }
     }
     PlayerSettings ps; player_settings_from_ini(ini,root.fileSystemRepresentation,&ps);
+    NSNumber* sound=[NSUserDefaults.standardUserDefaults objectForKey:@"PC98SoundBoard"];
+    NSNumber* colors=[NSUserDefaults.standardUserDefaults objectForKey:@"PC98VideoColors"];
+    if(sound) ps.cfg.sound_board=sound.integerValue==26?26:86;
+    if(colors) ps.cfg.video_colors=colors.integerValue==256?256:16;
     ps.cfg.midi=0; ps.cfg.trace=0; ps.sample_rate=std::clamp(ps.sample_rate,8000,192000);
     if(ps.cfg.start.empty() && !ps.cfg.boot_fd) { [self chooseProgram:root settings:ps]; return; }
     [self launchSettings:ps];
@@ -427,6 +482,25 @@ static UIImage* frameImage(Player* p) {
 }
 - (void)saveSlot { [self slots:NO]; }
 - (void)loadSlot { [self slots:YES]; }
+- (void)showOptions {
+    if(fetching || self.presentedViewController) return;
+    BOOL previousPause=paused;[self suspend];
+    GameOptionsController* options=[[GameOptionsController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+    options.soundBoard=player?player->m->cfg.sound_board:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98SoundBoard"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98SoundBoard"]:86);
+    options.videoColors=player?player->m->cfg.video_colors:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98VideoColors"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98VideoColors"]:16);
+    __weak PlayerController* weak=self;
+    options.cancelled=^{ PlayerController* s=weak;if(!s) return;s->paused=previousPause;if(s->player && !s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime(); };
+    options.applied=^(NSInteger sound,NSInteger colors) {
+        PlayerController* s=weak;if(!s) return;
+        [NSUserDefaults.standardUserDefaults setInteger:sound forKey:@"PC98SoundBoard"];
+        [NSUserDefaults.standardUserDefaults setInteger:colors forKey:@"PC98VideoColors"];
+        if(s.currentCache && s.currentID) [s openCache:s.currentCache identifier:s.currentID];
+        else s.status.text=@"オプションを保存しました。ゲームフォルダーを選択してください。";
+    };
+    UINavigationController* nav=[[UINavigationController alloc] initWithRootViewController:options];nav.modalInPresentation=YES;
+    if(nav.sheetPresentationController) nav.sheetPresentationController.detents=@[UISheetPresentationControllerDetent.mediumDetent,UISheetPresentationControllerDetent.largeDetent];
+    [self presentViewController:nav animated:YES completion:nil];
+}
 - (void)layoutMenu {
     UIAlertController* menu=[UIAlertController alertControllerWithTitle:@"表示" message:@"Duo上下：上にモニタ、下にPC-98キーボード。iOS 27.1以降では半開きに自動追従します。" preferredStyle:UIAlertControllerStyleAlert];
     __weak PlayerController* weak=self;

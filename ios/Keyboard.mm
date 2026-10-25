@@ -116,6 +116,7 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 @property(strong) NSArray<NSArray<UIButton*>*>* keys;
 @property(strong) UIImpactFeedbackGenerator* keyFeedback;
+@property(strong) UIButton* optionsButton;
 @end
 @implementation PC98Keyboard
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -143,9 +144,20 @@ static std::vector<HardwareKey> hardwareKeys() {
             [groups addObject:group];
         }
         self.keys=groups;
+        self.optionsButton=[UIButton buttonWithType:UIButtonTypeSystem];
+        [self.optionsButton setTitle:@"オプション" forState:UIControlStateNormal];
+        self.optionsButton.titleLabel.font=[UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
+        self.optionsButton.titleLabel.adjustsFontSizeToFitWidth=YES;
+        [self.optionsButton setTitleColor:PC98Plastic(.20) forState:UIControlStateNormal];
+        self.optionsButton.backgroundColor=PC98Plastic(.86);self.optionsButton.layer.cornerRadius=3;
+        self.optionsButton.layer.borderWidth=1;self.optionsButton.layer.borderColor=PC98Plastic(.55).CGColor;
+        self.optionsButton.accessibilityLabel=@"オプション";
+        [self.optionsButton addTarget:self action:@selector(openOptions) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:self.optionsButton];
     }
     return self;
 }
+- (void)openOptions { [self releaseAll];if(self.optionsRequested) self.optionsRequested(); }
 - (void)setHardwareLayout:(BOOL)value {
     if(_hardwareLayout==value) return;
     [self releaseAll]; _hardwareLayout=value; [self setNeedsLayout]; [self setNeedsDisplay];
@@ -241,7 +253,10 @@ static std::vector<HardwareKey> hardwareKeys() {
     }
     if(self.hardwareLayout) { [self layoutHardwareKeys]; return; }
     CGFloat gap=3, left=10, top=48, usable=self.bounds.size.width-20;
-    CGRect bank=[self vfBankFrame]; CGFloat vfWidth=(bank.size.width-gap*4)/5;
+    CGRect bank=[self vfBankFrame];
+    self.optionsButton.frame=CGRectMake(94,8,MAX(1,bank.origin.x-100),30);
+    [self bringSubviewToFront:self.optionsButton];
+    CGFloat vfWidth=(bank.size.width-gap*4)/5;
     for(NSUInteger i=0;i<5;++i)
         self.keys[0][i].frame=CGRectMake(bank.origin.x+i*(vfWidth+gap),bank.origin.y,vfWidth,bank.size.height);
     CGFloat h=(self.bounds.size.height-top-12-gap*(rows.size()-2))/(rows.size()-1);
@@ -277,6 +292,8 @@ static std::vector<HardwareKey> hardwareKeys() {
         if(spec.scan>=0x52 && spec.scan<=0x6B) button.modifier=YES;
         [button setNeedsDisplay];
     }
+    self.optionsButton.frame=[self hardwareRect:CGRectMake(400,14,116,28)];
+    [self bringSubviewToFront:self.optionsButton];
     [self setNeedsDisplay];
 }
 - (BOOL)isLatch:(int)scan { return scan==0x70 || scan==0x71 || scan==0x72 || scan==0x73 || scan==0x74; }
