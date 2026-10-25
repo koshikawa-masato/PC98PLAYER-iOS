@@ -13,6 +13,9 @@
 #include <memory>
 #include <set>
 #include <algorithm>
+#ifdef PC98PLAYER_TESTING
+#import "AudioCaptureProbe.h"
+#endif
 
 // Keep the largest 8:5 display area clear of an OS camera or system occlusion.
 static CGRect monitorAvoiding(CGRect panel,CGRect obstacle) {
@@ -129,6 +132,9 @@ static UIImage* frameImage(Player* p) {
 @property UIActivityIndicatorView* spinner;
 @property NSURL* currentCache;
 @property NSString* currentID;
+#ifdef PC98PLAYER_TESTING
+@property AudioCaptureProbe* audioProbe;
+#endif
 @end
 @implementation PlayerController
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
@@ -196,18 +202,23 @@ static UIImage* frameImage(Player* p) {
             else [self message:@"指定されたゲームのキャッシュがありません。"];
         }
     }
+    NSUInteger probeIndex=[arguments indexOfObject:@"--audio-probe"];
+    if(probeIndex!=NSNotFound && probeIndex+1<arguments.count) {
+        NSString* label=arguments[probeIndex+1];
+        if([@[@"before",@"after",@"rotation"] containsObject:label]) dispatch_after(dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC),dispatch_get_main_queue(),^{ [weak startAudioProbe:label]; });
+    }
     if([arguments containsObject:@"--hardware-report"]) {
         [NSTimer scheduledTimerWithTimeInterval:5 repeats:YES block:^(NSTimer* timer) {
             PlayerController* s=weak;if(!s || !s->player) return;
             Machine* m=s->player->m;std::set<uint32_t> colors;
             for(uint32_t pixel:s->player->fb) colors.insert(pixel);
             int peak=0;for(int16_t sample:s->player->audio) peak=std::max(peak,std::abs((int)sample));
-            size_t buffered=0;{ std::lock_guard<std::mutex> lock(s->audio.mutex);buffered=s->audio.samples.size(); }
+            size_t buffered=0;uint64_t underrun=0;{ std::lock_guard<std::mutex> lock(s->audio.mutex);buffered=s->audio.samples.size();underrun=s->audio.underrunFrames; }
             AudioQueueParameterValue ramp=0;if(s->audio.queue) AudioQueueGetParameter(s->audio.queue,kAudioQueueParam_VolumeRampTime,&ramp);
             NSDictionary* report=@{@"game":s.currentID ?: @"",@"running":@(!s->paused),@"guestQuit":@(m->quit),
                 @"videoColors":@(m->cfg.video_colors),@"pegcActive":@(m->pegc.enabled),@"screenColorCount":@(colors.size()),
                 @"soundBoard":@(m->cfg.sound_board),@"audioPeak":@(peak),@"frame":@(m->frame_count),
-                @"audioVolumeRampSeconds":@(ramp),@"audioQueueGeneration":@(s->audio.generation),@"audioStarted":@(s->audio.started),@"audioPaused":@(s->audio.paused),@"audioQueuedSamples":@(buffered)};
+                @"audioUnderrunFrames":@(underrun),@"audioVolumeRampSeconds":@(ramp),@"audioQueueGeneration":@(s->audio.generation),@"audioStarted":@(s->audio.started),@"audioPaused":@(s->audio.paused),@"audioQueuedSamples":@(buffered)};
             [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]
                 writeToURL:area(NSDocumentDirectory,@"hardware-report.json") atomically:YES];
         }];
@@ -233,6 +244,9 @@ static UIImage* frameImage(Player* p) {
 - (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; [self becomeFirstResponder]; }
 - (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
     [self releaseKeys];
+#ifdef PC98PLAYER_TESTING
+    [self.audioProbe event:@"rotation"];
+#endif
     [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
 }
 - (void)viewDidLayoutSubviews {
@@ -324,6 +338,9 @@ static UIImage* frameImage(Player* p) {
 - (void)toggleFullScreen {
     if(fetching || self.presentedViewController) return;
     [self releaseKeys];fullScreen=!fullScreen;
+#ifdef PC98PLAYER_TESTING
+    [self.audioProbe event:fullScreen?@"fullscreen-enter":@"fullscreen-exit"];
+#endif
     self.topPanel.hidden=fullScreen;self.keyboard.hidden=fullScreen;
     self.toolbar.hidden=fullScreen;self.status.hidden=fullScreen;
     self.view.backgroundColor=fullScreen?UIColor.blackColor:PC98Plastic(.84);
@@ -376,11 +393,16 @@ static UIImage* frameImage(Player* p) {
     constexpr double seconds=(double)FRAME_TICKS/MASTER_CLOCK;
     double now=CACurrentMediaTime(); if(now-nextFrame>seconds*3) nextFrame=now;
     [self.keyboard repeatHeldKeys];
-    int frames=0;
-    while(now>=nextFrame && frames++<3) {
-        player->run_frame(); audio.push(player->audio); nextFrame+=seconds;
+    int frames=0;BOOL audioClock=audio.queue!=nullptr;
+    while((audioClock?audio.needsFrames():now>=nextFrame) && frames++<(audioClock?8:3)) {
+        player->run_frame();
+#ifdef PC98PLAYER_TESTING
+        [self.audioProbe appendReference:player->audio rate:player->ps.sample_rate];
+#endif
+        audio.push(player->audio); nextFrame+=seconds;
         if(player->m->quit) { paused=YES; [self releaseKeys]; audio.close(); self.status.text=player->m->quit==2 ? text(player->m->status) : @"実行が終了しました"; break; }
     }
+    if(audioClock) nextFrame=now;
     self.monitor.image=frameImage(player.get());
 }
 - (void)stopGame {
@@ -391,6 +413,9 @@ static UIImage* frameImage(Player* p) {
 - (void)togglePause {
     if(!player || fetching || player->m->quit) return;
     [self releaseKeys]; paused=!paused;
+#ifdef PC98PLAYER_TESTING
+    [self.audioProbe event:paused?@"pause":@"resume"];
+#endif
     if(paused) { audio.pause(); self.status.text=@"一時停止"; }
     else { [self startAudio]; nextFrame=CACurrentMediaTime(); self.status.text=@"実行中"; }
 }
@@ -622,6 +647,46 @@ static UIImage* frameImage(Player* p) {
     [self openCache:root identifier:@"demo"];
 }
 #ifdef PC98PLAYER_TESTING
+- (void)startAudioProbe:(NSString*)label {
+    self.audioProbe=[[AudioCaptureProbe alloc] initWithDirectory:area(NSDocumentDirectory,[@"audio-probe-" stringByAppendingString:label])];
+    __weak PlayerController* weak=self;
+    [self.audioProbe start:^(NSError* error) {
+        PlayerController* s=weak;if(!s) return;
+        if(error) { [s message:error.localizedDescription];return; }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
+            PlayerController* s=weak;if(!s) return;
+            if(s->paused && s->player) [s togglePause];
+            [s.audioProbe event:@"measurement-start"];
+            if([label isEqualToString:@"rotation"]) {
+                s.status.text=@"録音中：縦・横へ回転してください";
+                NSURL* stopFlag=area(NSDocumentDirectory,@"audio-probe-rotation/stop.flag");
+                [NSFileManager.defaultManager removeItemAtURL:stopFlag error:nil];
+                double deadline=CACurrentMediaTime()+180;
+                [NSTimer scheduledTimerWithTimeInterval:.25 repeats:YES block:^(NSTimer* timer) {
+                    PlayerController* s=weak;
+                    if(!s) { [timer invalidate];return; }
+                    if(CACurrentMediaTime()>=deadline || [NSFileManager.defaultManager fileExistsAtPath:stopFlag.path]) {
+                        [timer invalidate];[s.audioProbe stop:^{ s.status.text=@"回転時の音声録音完了"; }];
+                    }
+                }];
+                return;
+            }
+            const double times[]={2.317,3.117,5.231,6.031,8.113,8.913};
+            for(int i=0;i<6;++i) {
+                BOOL targetPause=(i%2)==0;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(times[i]*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+                    PlayerController* s=weak;if(s && s->paused!=targetPause) [s togglePause];
+                });
+            }
+            for(double time:{10.1,11.2}) dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(time*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+                PlayerController* s=weak;if(!s) return;if(s->paused) [s togglePause];[s toggleFullScreen];
+            });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,14*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+                PlayerController* s=weak;if(s) [s.audioProbe stop:^{ s.status.text=@"音声波形の測定完了"; }];
+            });
+        });
+    }];
+}
 - (void)smokeTest {
     NSMutableDictionary* result=[NSMutableDictionary new];
     [self suspend]; paused=NO;

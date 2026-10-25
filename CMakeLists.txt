@@ -57,11 +57,11 @@ elseif(APPLE)
     endif()
     set(IOS_RESOURCES LICENSE THIRD-PARTY-ymfm-LICENSE.txt ios/Assets.xcassets)
     set_source_files_properties(${IOS_RESOURCES} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
-    add_executable(PC98PLAYERiOS MACOSX_BUNDLE ios/main.mm ios/Keyboard.mm ios/RetroHardware.mm apple/font.mm apple/GameLibrary.mm ${IOS_RESOURCES})
+    add_executable(PC98PLAYERiOS MACOSX_BUNDLE ios/main.mm ios/Keyboard.mm ios/RetroHardware.mm ios/AudioCaptureProbe.mm apple/font.mm apple/GameLibrary.mm ${IOS_RESOURCES})
     target_include_directories(PC98PLAYERiOS PRIVATE apple ios)
     target_compile_options(PC98PLAYERiOS PRIVATE -fobjc-arc)
     target_compile_definitions(PC98PLAYERiOS PRIVATE $<$<CONFIG:Debug>:PC98PLAYER_TESTING>)
-    target_link_libraries(PC98PLAYERiOS PRIVATE pc98core "-framework Foundation" "-framework CoreGraphics" "-framework QuartzCore" "-framework UIKit" "-framework CoreText" "-framework AudioToolbox" "-framework AVFoundation" "-framework UniformTypeIdentifiers")
+    target_link_libraries(PC98PLAYERiOS PRIVATE "$<$<CONFIG:Debug>:-framework ReplayKit>" "$<$<CONFIG:Debug>:-framework CoreMedia>" pc98core "-framework Foundation" "-framework CoreGraphics" "-framework QuartzCore" "-framework UIKit" "-framework CoreText" "-framework AudioToolbox" "-framework AVFoundation" "-framework UniformTypeIdentifiers")
     set_target_properties(PC98PLAYERiOS PROPERTIES
       MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist.in"
       MACOSX_BUNDLE_GUI_IDENTIFIER "${PC98PLAYER_IOS_BUNDLE_ID}"
