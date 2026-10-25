@@ -114,11 +114,11 @@ static UIImage* frameImage(Player* p) {
 - (void)apply { [self dismissViewControllerAnimated:YES completion:^{if(self.applied) self.applied(self.soundBoard,self.videoColors,self.manualDuo);}]; }
 @end
 
-@interface PlayerController : UIViewController <UIDocumentPickerDelegate,UIAdaptivePresentationControllerDelegate> {
+@interface PlayerController : UIViewController <UIDocumentPickerDelegate,UIAdaptivePresentationControllerDelegate,UIGestureRecognizerDelegate> {
     std::unique_ptr<Player> player;
     AudioOut audio;
     double nextFrame;
-    BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen;
+    BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
     int mouseButtons;
     std::set<NSInteger> physicalKeys;
     std::set<int> touchKeys;
@@ -154,12 +154,15 @@ static UIImage* frameImage(Player* p) {
     [self.topPanel addSubview:self.monitor];
     UIPanGestureRecognizer* pan=[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(moveMouse:)];
     pan.maximumNumberOfTouches=1;[self.monitor addGestureRecognizer:pan];
+    UILongPressGestureRecognizer* hold=[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(fullscreenLongPress:)];
+    hold.minimumPressDuration=.5;hold.numberOfTouchesRequired=1;hold.delegate=self;
+    [self.monitor addGestureRecognizer:hold];
     UITapGestureRecognizer* twoFingerTap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(rightClick)];
     twoFingerTap.numberOfTouchesRequired=2;[self.monitor addGestureRecognizer:twoFingerTap];
     UITapGestureRecognizer* doubleTap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(toggleFullScreen)];
     doubleTap.numberOfTapsRequired=2;[doubleTap requireGestureRecognizerToFail:twoFingerTap];[self.monitor addGestureRecognizer:doubleTap];
     UITapGestureRecognizer* tap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(leftClick:)];
-    [tap requireGestureRecognizerToFail:doubleTap];[tap requireGestureRecognizerToFail:twoFingerTap];[self.monitor addGestureRecognizer:tap];
+    [tap requireGestureRecognizerToFail:hold];[tap requireGestureRecognizerToFail:doubleTap];[tap requireGestureRecognizerToFail:twoFingerTap];[self.monitor addGestureRecognizer:tap];
     self.status=[UILabel new]; self.status.text=@"ゲームフォルダを選択してください";
     self.status.textColor=[UIColor colorWithWhite:.24 alpha:1]; self.status.font=[UIFont monospacedSystemFontOfSize:8 weight:UIFontWeightRegular]; self.status.numberOfLines=1; self.status.adjustsFontSizeToFitWidth=YES;
     [self.view addSubview:self.status];
@@ -341,6 +344,7 @@ static UIImage* frameImage(Player* p) {
 - (void)toggleFullScreen {
     if(fetching || self.presentedViewController) return;
     [self releaseKeys];fullScreen=!fullScreen;
+    if(!fullScreen) fullscreenMenuPaused=NO;
 #ifdef PC98PLAYER_TESTING
     [self.audioProbe event:fullScreen?@"fullscreen-enter":@"fullscreen-exit"];
 #endif
@@ -388,7 +392,45 @@ static UIImage* frameImage(Player* p) {
     __weak PlayerController* weak=self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,60*NSEC_PER_MSEC),dispatch_get_main_queue(),^{ PlayerController* s=weak; if(s && s->player) machine_mouse(s->player->m,0,0,0); });
 }
-- (void)leftClick:(id)sender { [self click:1]; }
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer*)gesture {
+    if([gesture isKindOfClass:UILongPressGestureRecognizer.class])
+        return fullScreen && player && !fetching && !player->m->quit && !self.presentedViewController;
+    return YES;
+}
+- (void)pauseFromFullscreenMenu {
+    if(!fullScreen || !player || fetching || player->m->quit) return;
+    if(!paused) [self togglePause];
+    fullscreenMenuPaused=YES;
+    self.status.text=@"一時停止 — 画面をタップして再開";
+}
+- (UIAlertController*)fullscreenMenu {
+    UIAlertController* menu=[UIAlertController alertControllerWithTitle:@"操作" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    __weak PlayerController* weak=self;
+    [menu addAction:[UIAlertAction actionWithTitle:@"一時停止" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+        [weak pauseFromFullscreenMenu];
+    }]];
+    [menu addAction:[UIAlertAction actionWithTitle:@"リセット" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
+        PlayerController* s=weak;if(!s) return;
+        [s dismissViewControllerAnimated:YES completion:^{ [weak resetGame]; }];
+    }]];
+    [menu addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+    return menu;
+}
+- (void)fullscreenLongPress:(UILongPressGestureRecognizer*)gesture {
+    if(gesture.state!=UIGestureRecognizerStateBegan || ![self gestureRecognizerShouldBegin:gesture]) return;
+    [self releaseKeys];
+    UIAlertController* menu=[self fullscreenMenu];
+    if(menu.popoverPresentationController) {
+        CGPoint point=[gesture locationInView:self.monitor];
+        menu.popoverPresentationController.sourceView=self.monitor;
+        menu.popoverPresentationController.sourceRect=CGRectMake(point.x,point.y,1,1);
+    }
+    [self presentViewController:menu animated:YES completion:nil];
+}
+- (void)leftClick:(id)sender {
+    if(fullScreen && fullscreenMenuPaused && paused) { [self togglePause];return; }
+    [self click:1];
+}
 - (void)rightClick { [self click:2]; }
 - (void)tick:(CADisplayLink*)link {
     self.topPanel.playbackState=(!player || player->m->quit)?PC98PlaybackStateInactive:paused?PC98PlaybackStatePaused:PC98PlaybackStateRunning;
@@ -409,13 +451,14 @@ static UIImage* frameImage(Player* p) {
     self.monitor.image=frameImage(player.get());
 }
 - (void)stopGame {
-    paused=YES; [self releaseKeys]; audio.close();
+    fullscreenMenuPaused=NO; paused=YES; [self releaseKeys]; audio.close();
     if(player) { player->shutdown(); player.reset(); }
     hostfs::set_overlay("","");
 }
 - (void)togglePause {
     if(!player || fetching || player->m->quit) return;
     [self releaseKeys]; paused=!paused;
+    if(!paused) fullscreenMenuPaused=NO;
 #ifdef PC98PLAYER_TESTING
     [self.audioProbe event:paused?@"pause":@"resume"];
 #endif
@@ -785,6 +828,10 @@ static UIImage* frameImage(Player* p) {
     }
     result[@"monitorTwoFingerGesture"]=@(self.monitor.multipleTouchEnabled && hasTwoFingerTap && hasSingleFingerDoubleTap);
     [self rightClick];result[@"monitorRightClick"]=@(player->m->mouse.buttons==2);[self releaseKeys];
+    UILongPressGestureRecognizer* hold=nil;
+    for(UIGestureRecognizer* gesture in self.monitor.gestureRecognizers)
+        if([gesture isKindOfClass:UILongPressGestureRecognizer.class]) hold=(UILongPressGestureRecognizer*)gesture;
+    result[@"normalViewRejectsLongPress"]=@(hold && ![self gestureRecognizerShouldBegin:hold]);
     CGRect previousMonitor=self.monitor.frame;
     [self.keyboard pressScansForTesting:@[@0x70,@29]];
     [self toggleFullScreen];
@@ -793,7 +840,22 @@ static UIImage* frameImage(Player* p) {
     result[@"fullscreenAspectFit"]=@(CGRectContainsRect(fullscreenSafe,self.monitor.frame) && fabs(self.monitor.frame.size.width/self.monitor.frame.size.height-1.6)<.001);
     result[@"fullscreenReleasesKeys"]=@(!player->m->kb_down[0x70] && !player->m->kb_down[29]);
     [self rightClick];result[@"fullscreenRightClick"]=@(player->m->mouse.buttons==2);[self releaseKeys];
+    result[@"fullscreenAcceptsLongPress"]=@(hold && [self gestureRecognizerShouldBegin:hold]);
+    UIAlertController* menu=[self fullscreenMenu];
+    result[@"fullscreenMenuActions"]=@(menu.actions.count==3 && [menu.actions[0].title isEqualToString:@"一時停止"] && [menu.actions[1].title isEqualToString:@"リセット"]);
+    [self pauseFromFullscreenMenu];
+    result[@"fullscreenMenuPauses"]=@(paused && fullscreenMenuPaused && audio.paused);
+    [self rightClick];
+    result[@"rightClickDoesNotResume"]=@(paused && player->m->mouse.buttons==0);
+    [self leftClick:nil];
+    result[@"fullscreenTapResumesWithoutGuestClick"]=@(!paused && !fullscreenMenuPaused && player->m->mouse.buttons==0);
+    [self leftClick:nil];
+    result[@"fullscreenNextTapClicks"]=@(player->m->mouse.buttons==1);[self releaseKeys];
+    [self pauseFromFullscreenMenu];
     [self toggleFullScreen];
+    [self leftClick:nil];
+    result[@"normalViewDoesNotTapResume"]=@(paused && !fullscreenMenuPaused);
+    [self togglePause];
     result[@"fullscreenRestoresLayout"]=@(!fullScreen && !self.topPanel.hidden && !self.keyboard.hidden && !self.toolbar.hidden && !self.status.hidden && self.monitor.superview==self.topPanel && CGRectEqualToRect(previousMonitor,self.monitor.frame));
     manualDuo=YES; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     CGRect camera=CGRectMake(540,0,129,82), panel=CGRectMake(0,0,669,448);
