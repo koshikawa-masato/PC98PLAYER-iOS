@@ -47,7 +47,8 @@ Debug版を `--demo --layout-report` で起動すると、表示中の画面・�
 iOS 27.1以降は公開の `UIHingeInteraction` で半開きを検出し、Duo表示に自動追従します。OSが返すdivision予約領域を避けて配置します。横方向の折り目なら上下、縦方向の折り目なら左右に分けるため、ノートPC型に使うときは横方向の折り目になる向きで使ってください。予約領域を取得できないときと手動指定時は画面中央を分割位置とします。外側画面を含め、画面の移行そのものをアプリから強制しません。
 
 - 通常キーは押している間だけON。複数キーを同時に押せます。長押しはリピートします。
-- SHIFT / CTRL / GRPH / CAPS / かなはタップで保持し、再タップで解除。小さい端末でも修飾キーを併用できます。
+- 複数の指で同時押しできます。Shift＋文字、矢印＋スペースなどを個別に保持し、指を離したキーだけ解除します。押したまま隣のキーへ滑らせる入力にも追従します。
+- SHIFT / CTRL / GRPHは、押しながら別キーを使うと、指を離したときに解除します。単独タップでは従来どおり保持し、再タップで解除します。CAPS / かなは切り替え式です。
 - F1〜F10、VF1〜VF5、STOP、COPY、XFER/NFER、HELP、ROLL、INS/DEL、矢印、テンキーを搭載。VF1〜VF5はスキャンコード52h〜56hを送信し、BIOS入力とSHIFT／CTRL併用にも対応します。
 VFキーのコードは [TMKの実機キーボード資料](https://github.com/tmk/tmk_keyboard/wiki/PC-9801-Keyboard)、修飾時のBIOSコードは [DOSBox-Xの対照表](https://dosbox-x.com/doxygen/html/bios__keyboard_8cpp_source.html) を参照しています。
 

@@ -9,6 +9,8 @@
 - (BOOL)tapReturnSectionsForTesting;
 - (BOOL)hardwareLayoutForTesting;
 - (BOOL)tapScanForTesting:(int)scan;
+- (BOOL)pressScansForTesting:(NSArray<NSNumber*>*)scans;
+- (BOOL)releaseScanForTesting:(int)scan cancelled:(BOOL)cancelled;
 #endif
 @end
 // USB HID usages from hardware keyboards share the guest scan codes with touch keys.

@@ -89,7 +89,7 @@ static UIImage* frameImage(Player* p) {
 - (BOOL)prefersStatusBarHidden { return manualDuo || hingeDuo || duoHardware; }
 - (BOOL)canBecomeFirstResponder { return YES; }
 - (void)viewDidLoad {
-    [super viewDidLoad]; self.view.backgroundColor=PC98Plastic(.84); paused=YES;
+    [super viewDidLoad]; self.view.multipleTouchEnabled=YES; self.view.backgroundColor=PC98Plastic(.84); paused=YES;
     manualDuo=[NSUserDefaults.standardUserDefaults boolForKey:@"PC98ManualDuo"];
     self.topPanel=[PC98MonitorCabinet new]; [self.view addSubview:self.topPanel];
     self.monitor=[UIImageView new]; self.monitor.contentMode=UIViewContentModeScaleAspectFit;
@@ -517,6 +517,39 @@ static UIImage* frameImage(Player* p) {
     result[@"ctrlAndGrphLatched"]=@(player->m->kb_down[0x74] && player->m->kb_down[0x73]);
     [self releaseKeys];
     result[@"modifiersReleased"]=@(!player->m->kb_down[0x70] && !player->m->kb_down[0x74] && !player->m->kb_down[0x73]);
+    bool controls=[self.keyboard pressScansForTesting:@[@31,@0x74,@0x73]];
+    controls &= player->m->kb_down[31] && player->m->kb_down[0x74] && player->m->kb_down[0x73];
+    [self.keyboard releaseScanForTesting:0x74 cancelled:NO];
+    controls &= !player->m->kb_down[0x74] && player->m->kb_down[0x73] && player->m->kb_down[31];
+    [self.keyboard releaseScanForTesting:31 cancelled:NO];
+    [self.keyboard releaseScanForTesting:0x73 cancelled:NO];
+    result[@"heldCtrlGrphChord"]=@(controls && !player->m->kb_down[31] && !player->m->kb_down[0x73]);
+    size_t beforeChord=player->m->kb_queue.size();
+    bool chord=[self.keyboard pressScansForTesting:@[@29,@0x70]];
+    chord &= player->m->kb_down[29] && player->m->kb_down[0x70];
+    chord &= player->m->kb_queue.size()==beforeChord+2;
+    if(player->m->kb_queue.size()==beforeChord+2)
+        chord &= player->m->kb_queue[beforeChord]==0x70 && player->m->kb_queue[beforeChord+1]==29;
+    [self.keyboard releaseScanForTesting:29 cancelled:NO];
+    chord &= !player->m->kb_down[29] && player->m->kb_down[0x70];
+    [self.keyboard releaseScanForTesting:0x70 cancelled:NO];
+    result[@"heldShiftChord"]=@(chord && !player->m->kb_down[0x70]);
+    bool overlap=[self.keyboard pressScansForTesting:@[@0x3A,@0x3B,@0x34]];
+    overlap &= player->m->kb_down[0x3A] && player->m->kb_down[0x3B] && player->m->kb_down[0x34];
+    [self.keyboard releaseScanForTesting:0x3B cancelled:NO];
+    overlap &= player->m->kb_down[0x3A] && !player->m->kb_down[0x3B] && player->m->kb_down[0x34];
+    [self.keyboard releaseScanForTesting:0x3A cancelled:NO];
+    [self.keyboard releaseScanForTesting:0x34 cancelled:NO];
+    result[@"threeKeyOverlap"]=@(overlap && !player->m->kb_down[0x3A] && !player->m->kb_down[0x34]);
+    [self.keyboard pressScansForTesting:@[@29,@29]];
+    [self.keyboard releaseScanForTesting:29 cancelled:NO];
+    bool shared=player->m->kb_down[29];
+    [self.keyboard releaseScanForTesting:29 cancelled:NO];
+    result[@"sharedKeyTouches"]=@(shared && !player->m->kb_down[29]);
+    [self.keyboard pressScansForTesting:@[@0x70]];
+    [self.keyboard releaseScanForTesting:0x70 cancelled:YES];
+    result[@"cancelledModifierReleased"]=@(!player->m->kb_down[0x70]);
+    [self releaseKeys];
     std::string error; bool saved=player->save_state(7,&error);
     uint8_t previous=player->m->ram[0x90000]; player->m->ram[0x90000]=previous^0xFF;
     bool loaded=player->load_state(7,&error);

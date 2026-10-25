@@ -111,6 +111,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     std::map<UITouch*,UIButton*> touches;
     std::map<int,int> counts;
     std::set<int> latched;
+    std::set<int> modifierChords;
     std::map<int,double> repeatAt;
 }
 @property(strong) NSArray<NSArray<UIButton*>*>* keys;
@@ -279,28 +280,54 @@ static std::vector<HardwareKey> hardwareKeys() {
     [self setNeedsDisplay];
 }
 - (BOOL)isLatch:(int)scan { return scan==0x70 || scan==0x71 || scan==0x72 || scan==0x73 || scan==0x74; }
-- (void)updateKey:(UIButton*)key down:(BOOL)down {
-    // Only a new touch/accessibility press produces feedback. Key-up, cancellation
-    // and repeatHeldKeys never enter this branch.
+- (BOOL)isHoldModifier:(int)scan { return scan==0x70 || scan==0x73 || scan==0x74; }
+- (void)updateKey:(UIButton*)key down:(BOOL)down { [self updateKey:key down:down cancelled:NO]; }
+- (void)updateKey:(UIButton*)key down:(BOOL)down cancelled:(BOOL)cancelled {
     if(down) {
         if(!self.keyFeedback) self.keyFeedback=[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-        [self.keyFeedback impactOccurred];
-        [self.keyFeedback prepare];
+        [self.keyFeedback impactOccurred]; [self.keyFeedback prepare];
     }
     int scan=(int)key.tag;
-    if([self isLatch:scan]) {
+    BOOL hold=[self isHoldModifier:scan];
+    if(down) {
+        if(hold && !counts[scan]) modifierChords.erase(scan);
+        for(const auto& state:counts) if(state.second>0 && state.first!=scan) {
+            if([self isHoldModifier:state.first]) modifierChords.insert(state.first);
+            if(hold) modifierChords.insert(scan);
+        }
+    }
+    if([self isLatch:scan] && !hold) {
+        // CAPS and kana remain toggle keys, even during a chord.
         if(!down) return;
         if(latched.count(scan)) latched.erase(scan); else latched.insert(scan);
         if(self.keyChanged) self.keyChanged(scan,latched.count(scan)>0);
     } else {
-        int previous=counts[scan]; counts[scan]=std::max(0,previous+(down?1:-1));
-        if(!previous && down) repeatAt[scan]=CACurrentMediaTime()+0.45;
+        int previous=counts[scan]; BOOL wasDown=previous>0 || latched.count(scan);
+        counts[scan]=std::max(0,previous+(down?1:-1));
+        if(hold && previous>0 && !counts[scan] && !down) {
+            // A tap latches; using the held modifier with another key does not.
+            if(!cancelled && !modifierChords.count(scan)) {
+                if(latched.count(scan)) latched.erase(scan); else latched.insert(scan);
+            }
+            modifierChords.erase(scan);
+        }
+        if(!hold && !previous && down) repeatAt[scan]=CACurrentMediaTime()+0.45;
         if(!counts[scan]) repeatAt.erase(scan);
-        if(self.keyChanged && ((previous==0)!=(counts[scan]==0))) self.keyChanged(scan,counts[scan]>0);
+        BOOL isDown=counts[scan]>0 || latched.count(scan);
+        if(self.keyChanged && wasDown!=isDown) self.keyChanged(scan,isDown);
     }
     for(NSArray* row in self.keys) for(PC98KeyButton* b in row) if(b.tag==scan)
         b.retroPressed=counts[scan]>0 || latched.count(scan);
     [self setNeedsDisplay];
+}
+- (void)pressKeys:(NSArray<UIButton*>*)keys {
+    // NSSet touch order is unspecified: Shift/Ctrl/GRPH must precede letters.
+    NSArray* ordered=[keys sortedArrayUsingComparator:^NSComparisonResult(UIButton* a,UIButton* b) {
+        int left=([self isLatch:(int)a.tag]?0:128)+(int)a.tag;
+        int right=([self isLatch:(int)b.tag]?0:128)+(int)b.tag;
+        return left<right ? NSOrderedAscending : left>right ? NSOrderedDescending : NSOrderedSame;
+    }];
+    for(UIButton* key in ordered) [self updateKey:key down:YES];
 }
 - (UIButton*)keyAtPoint:(CGPoint)point {
     for(NSArray* row in self.keys) for(PC98KeyButton* key in row)
@@ -321,20 +348,57 @@ static std::vector<HardwareKey> hardwareKeys() {
     return nearest;
 }
 - (void)touchesBegan:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
+    NSMutableArray* pressed=[NSMutableArray new];
     for(UITouch* t in set) {
         UIButton* key=[self keyAtPoint:[t locationInView:self]];
-        if(key) { touches[t]=key; [self updateKey:key down:YES]; }
+        touches[t]=key;
+        if(key) [pressed addObject:key];
+    }
+    [self pressKeys:pressed];
+}
+- (void)touchesMoved:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
+    NSMutableArray* pressed=[NSMutableArray new];
+    for(UITouch* t in set) {
+        auto it=touches.find(t); if(it==touches.end()) continue;
+        UIButton* next=[self keyAtPoint:[t locationInView:self]];
+        if(next==it->second) continue;
+        if(it->second) [self updateKey:it->second down:NO cancelled:YES];
+        it->second=next;
+        if(next) [pressed addObject:next];
+    }
+    [self pressKeys:pressed];
+}
+- (void)endTouches:(NSSet<UITouch*>*)set cancelled:(BOOL)cancelled {
+    for(UITouch* t in set) {
+        auto it=touches.find(t); if(it==touches.end()) continue;
+        if(it->second) [self updateKey:it->second down:NO cancelled:cancelled];
+        touches.erase(it);
     }
 }
-- (void)touchesEnded:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
-    for(UITouch* t in set) { auto it=touches.find(t); if(it!=touches.end()) { [self updateKey:it->second down:NO]; touches.erase(it); } }
-}
-- (void)touchesCancelled:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event { [self touchesEnded:set withEvent:event]; }
+- (void)touchesEnded:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event { [self endTouches:set cancelled:NO]; }
+- (void)touchesCancelled:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event { [self endTouches:set cancelled:YES]; }
 - (void)repeatHeldKeys {
     double now=CACurrentMediaTime();
     for(auto& pair:repeatAt) if(now>=pair.second) { if(self.keyChanged) self.keyChanged(pair.first,YES); pair.second=now+0.05; }
 }
 #ifdef PC98PLAYER_TESTING
+- (BOOL)pressScansForTesting:(NSArray<NSNumber*>*)scans {
+    NSMutableArray* buttons=[NSMutableArray new];
+    for(NSNumber* scan in scans) {
+        UIButton* found=nil;
+        for(NSArray* row in self.keys) for(UIButton* key in row)
+            if(!key.hidden && key.tag==scan.intValue && !found) found=key;
+        if(!found) return NO;
+        [buttons addObject:found];
+    }
+    [self pressKeys:buttons]; return YES;
+}
+- (BOOL)releaseScanForTesting:(int)scan cancelled:(BOOL)cancelled {
+    for(NSArray* row in self.keys) for(UIButton* key in row) if(!key.hidden && key.tag==scan) {
+        [self updateKey:key down:NO cancelled:cancelled]; return YES;
+    }
+    return NO;
+}
 - (BOOL)tapReturnSectionsForTesting {
     [self layoutIfNeeded];
     UIButton* key=self.keys[3].lastObject;
@@ -380,7 +444,7 @@ static std::vector<HardwareKey> hardwareKeys() {
 - (void)releaseAll {
     std::set<int> down=latched; for(auto pair:counts) if(pair.second) down.insert(pair.first);
     for(int scan:down) if(self.keyChanged) self.keyChanged(scan,NO);
-    touches.clear(); counts.clear(); latched.clear(); repeatAt.clear();
+    touches.clear(); counts.clear(); latched.clear(); modifierChords.clear(); repeatAt.clear();
     for(NSArray* row in self.keys) for(PC98KeyButton* b in row) b.retroPressed=NO;
     [self setNeedsDisplay];
 }
