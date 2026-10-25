@@ -67,7 +67,7 @@ struct AudioOut {
         // A PCM-side fade would miss the buffers already owned by AudioQueue.
         if (AudioQueueSetParameter(queue, kAudioQueueParam_VolumeRampTime, 0) != noErr ||
             AudioQueueSetParameter(queue, kAudioQueueParam_Volume, 0) != noErr ||
-            AudioQueueSetParameter(queue, kAudioQueueParam_VolumeRampTime, .005f) != noErr ||
+            AudioQueueSetParameter(queue, kAudioQueueParam_VolumeRampTime, .016f) != noErr ||
             AudioQueueStart(queue, nullptr) != noErr) return false;
         return AudioQueueSetParameter(queue, kAudioQueueParam_Volume, 1) == noErr;
     }

@@ -5,7 +5,7 @@
 static void check(bool ok,const char* message) { if(!ok) { std::fprintf(stderr,"FAIL: %s\n",message);std::exit(1); } }
 static void fadeConfigured(AudioQueueRef q) {
     check(q->gainAtStart==0 && q->volume==1,"start silent then restore unity gain");
-    check(q->rampAtStart==.005f && q->rampTime==.005f,"five millisecond output fade includes already queued audio");
+    check(q->rampAtStart==.016f && q->rampTime==.016f,"sixteen millisecond output fade includes already queued audio");
 }
 static std::vector<int16_t> pcm(size_t frames,int16_t value) { return std::vector<int16_t>(frames*2,value); }
 static void allSamples(AudioQueueRef q,int16_t expected) {
