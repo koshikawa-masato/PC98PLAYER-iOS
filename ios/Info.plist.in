@@ -6,8 +6,9 @@
 <key>CFBundleName</key><string>PC98PLAYER</string>
 <key>CFBundleDisplayName</key><string>PC98PLAYER iOS</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.2.0</string>
-<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleShortVersionString</key><string>@PC98PLAYER_IOS_VERSION@</string>
+<key>CFBundleVersion</key><string>@PC98PLAYER_IOS_BUILD@</string>
+<key>ITSAppUsesNonExemptEncryption</key><false/>
 <key>LSRequiresIPhoneOS</key><true/>
 <key>UILaunchScreen</key><dict/>
 <key>UIFileSharingEnabled</key><true/>
