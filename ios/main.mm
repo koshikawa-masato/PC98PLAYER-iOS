@@ -30,6 +30,12 @@ static CGRect monitorAvoiding(CGRect panel,CGRect obstacle) {
     }
     return best;
 }
+// Keep extra width for the full keyboard while retaining the CRT cabinet.
+static std::array<CGRect,2> phoneLandscapePanels(CGRect safe) {
+    CGFloat gap=12, monitorWidth=(safe.size.width-gap)*.44;
+    return {CGRectMake(safe.origin.x,safe.origin.y,monitorWidth,safe.size.height),
+        CGRectMake(safe.origin.x+monitorWidth+gap,safe.origin.y+6,safe.size.width-monitorWidth-gap,MAX(1,safe.size.height-12))};
+}
 static NSString* text(const std::string& s) { return [NSString stringWithUTF8String:s.c_str()] ?: @""; }
 static NSURL* area(NSSearchPathDirectory directory,NSString* component) {
     return [[NSFileManager.defaultManager URLsForDirectory:directory inDomains:NSUserDomainMask].firstObject URLByAppendingPathComponent:component isDirectory:YES];
@@ -127,7 +133,7 @@ static UIImage* frameImage(Player* p) {
 @implementation PlayerController
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
     if(self.traitCollection.userInterfaceIdiom==UIUserInterfaceIdiomPhone && !manualDuo && !hingeDuo && !duoHardware)
-        return UIInterfaceOrientationMaskPortrait;
+        return UIInterfaceOrientationMaskAllButUpsideDown;
     return UIInterfaceOrientationMaskAll;
 }
 - (BOOL)prefersStatusBarHidden { return manualDuo || hingeDuo || duoHardware; }
@@ -220,12 +226,17 @@ static UIImage* frameImage(Player* p) {
 #endif
 }
 - (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; [self becomeFirstResponder]; }
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [self releaseKeys];
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+}
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect safe=UIEdgeInsetsInsetRect(self.view.bounds,self.view.safeAreaInsets);
     BOOL duo=manualDuo || hingeDuo;
     self.keyboard.hardwareLayout=duo || duoHardware;
     self.topPanel.expandedDisplay=duo || duoHardware;
+    BOOL phoneLandscape=self.traitCollection.userInterfaceIdiom==UIUserInterfaceIdiomPhone && !duo && !duoHardware && self.view.bounds.size.width>self.view.bounds.size.height;
     CGRect division=CGRectNull;
 #if __has_include(<UIKit/UIViewReservedRegion.h>)
     if(@available(iOS 27.1,*)) {
@@ -250,6 +261,10 @@ static UIImage* frameImage(Player* p) {
             self.topPanel.frame=CGRectMake(safe.origin.x,safe.origin.y,safe.size.width,MAX(1,CGRectGetMinY(division)-safe.origin.y-8));
             self.keyboard.frame=CGRectMake(safe.origin.x,CGRectGetMaxY(division)+8,safe.size.width,MAX(1,CGRectGetMaxY(safe)-CGRectGetMaxY(division)-8));
         }
+    }
+    if(phoneLandscape) {
+        auto panels=phoneLandscapePanels(safe);
+        self.topPanel.frame=panels[0];self.keyboard.frame=panels[1];
     }
     NSMutableArray* occlusions=[NSMutableArray new];
 #if __has_include(<UIKit/UIViewReservedRegion.h>)
@@ -286,7 +301,7 @@ static UIImage* frameImage(Player* p) {
             @"screenBounds":rect(screen.bounds),@"screenNativeBounds":rect(screen.nativeBounds),
             @"displayScale":@(self.traitCollection.displayScale),@"nativeScale":@(screen.nativeScale),
             @"divisionRegion":rect(division),@"monitorPanel":rect(self.topPanel.frame),
-            @"keyboardPanel":rect(self.keyboard.frame),@"hardwareKeyboard":@(self.keyboard.hardwareLayout),
+            @"keyboardPanel":rect(self.keyboard.frame),@"hardwareKeyboard":@(self.keyboard.hardwareLayout),@"phoneLandscape":@(phoneLandscape),
             @"hingeAvailable":@(duoHardware),@"hingePartial":@(hingeDuo),@"manualDuo":@(manualDuo),@"statusBarHidden":@(self.prefersStatusBarHidden),
             @"occlusions":occlusions,
             @"monitorScreen":rect([self.topPanel convertRect:self.monitor.frame toView:self.view])};
@@ -655,7 +670,16 @@ static UIImage* frameImage(Player* p) {
     bool loaded=player->load_state(7,&error);
     result[@"stateRoundtrip"]=@(saved && loaded && player->m->ram[0x90000]==previous);
     manualDuo=NO; hingeDuo=NO; duoHardware=NO; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
-    result[@"phonePortraitOrientation"]=@(self.traitCollection.userInterfaceIdiom!=UIUserInterfaceIdiomPhone || self.supportedInterfaceOrientations==UIInterfaceOrientationMaskPortrait);
+    result[@"phoneRotationSupported"]=@((self.supportedInterfaceOrientations & UIInterfaceOrientationMaskPortrait) && (self.supportedInterfaceOrientations & UIInterfaceOrientationMaskLandscapeLeft) && (self.supportedInterfaceOrientations & UIInterfaceOrientationMaskLandscapeRight));
+    bool landscape=true;
+    for(CGRect safe : {CGRectMake(59,0,814,409),CGRectMake(59,0,734,369),CGRectMake(0,0,608,354)}) {
+        auto panels=phoneLandscapePanels(safe);
+        PC98MonitorCabinet* probe=[[PC98MonitorCabinet alloc] initWithFrame:panels[0]];
+        CGRect screen=[probe screenFrame];
+        landscape &= CGRectContainsRect(safe,panels[0]) && CGRectContainsRect(safe,panels[1]) && CGRectGetMaxX(panels[0])<CGRectGetMinX(panels[1]);
+        landscape &= CGRectContainsRect(probe.bounds,screen) && fabs(screen.size.width/screen.size.height-1.6)<.001 && panels[1].size.width>panels[0].size.width;
+    }
+    result[@"phoneLandscapePanels"]=@(landscape);
     result[@"phoneKeyboardBelowMonitor"]=@(CGRectGetMinY(self.keyboard.frame)>CGRectGetMaxY(self.topPanel.frame));
     UIGraphicsImageRenderer* portraitRenderer=[[UIGraphicsImageRenderer alloc] initWithBounds:self.view.bounds];
     self.monitor.image=frameImage(player.get());
