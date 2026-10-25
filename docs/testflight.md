@@ -4,7 +4,8 @@ App Store Connect: https://appstoreconnect.apple.com/apps/6826817332/testflight
 
 - Bundle ID: `jp.pc98player.ios`
 - Apple Team: `8JN36X5T3B`
-- 初回アップロード: 0.2.0 (3)
+- 初回アップロード: 0.2.0 (3)、2026-10-25
+- 内部テストグループ: 内部テスト（本人1名、ビルドは手動追加）
 - 署名: Apple Distribution、`PC98PLAYER iOS App Store`プロファイル
 
 ## 次のビルドを作る
