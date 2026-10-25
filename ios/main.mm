@@ -192,9 +192,11 @@ static UIImage* frameImage(Player* p) {
             Machine* m=s->player->m;std::set<uint32_t> colors;
             for(uint32_t pixel:s->player->fb) colors.insert(pixel);
             int peak=0;for(int16_t sample:s->player->audio) peak=std::max(peak,std::abs((int)sample));
+            size_t buffered=0;{ std::lock_guard<std::mutex> lock(s->audio.mutex);buffered=s->audio.samples.size(); }
             NSDictionary* report=@{@"game":s.currentID ?: @"",@"running":@(!s->paused),@"guestQuit":@(m->quit),
                 @"videoColors":@(m->cfg.video_colors),@"pegcActive":@(m->pegc.enabled),@"screenColorCount":@(colors.size()),
-                @"soundBoard":@(m->cfg.sound_board),@"audioPeak":@(peak),@"frame":@(m->frame_count)};
+                @"soundBoard":@(m->cfg.sound_board),@"audioPeak":@(peak),@"frame":@(m->frame_count),
+                @"audioQueueGeneration":@(s->audio.generation),@"audioStarted":@(s->audio.started),@"audioPaused":@(s->audio.paused),@"audioQueuedSamples":@(buffered)};
             [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]
                 writeToURL:area(NSDocumentDirectory,@"hardware-report.json") atomically:YES];
         }];
@@ -350,7 +352,7 @@ static UIImage* frameImage(Player* p) {
 - (void)togglePause {
     if(!player || fetching || player->m->quit) return;
     [self releaseKeys]; paused=!paused;
-    if(paused) { audio.close(); self.status.text=@"一時停止"; }
+    if(paused) { audio.pause(); self.status.text=@"一時停止"; }
     else { [self startAudio]; nextFrame=CACurrentMediaTime(); self.status.text=@"実行中"; }
 }
 - (void)startAudio {
@@ -359,7 +361,7 @@ static UIImage* frameImage(Player* p) {
     if(error || !audio.open(player->ps.sample_rate)) self.status.text=@"音声を開始できませんでした（映像のみ）";
 }
 - (void)suspend {
-    [self releaseKeys]; paused=YES; audio.close();
+    [self releaseKeys]; paused=YES; audio.pause();
     self.status.text=@"一時停止 — ▶︎で再開";
 }
 - (void)openFolder {
