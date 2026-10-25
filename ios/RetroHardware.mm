@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MIT
 #import "RetroHardware.h"
+#import <QuartzCore/QuartzCore.h>
+
+@interface PC98MonitorCabinet ()
+@property CALayer* playbackLamp;
+@end
 
 UIColor* PC98Plastic(CGFloat b) { return [UIColor colorWithRed:b green:b*0.985 blue:b*0.91 alpha:1]; }
 void PC98Gradient(CGRect r,UIColor* top,UIColor* bottom,CGFloat radius) {
@@ -13,12 +18,42 @@ void PC98Gradient(CGRect r,UIColor* top,UIColor* bottom,CGFloat radius) {
 }
 @implementation PC98MonitorCabinet
 - (instancetype)initWithFrame:(CGRect)frame {
-    if((self=[super initWithFrame:frame])) { self.backgroundColor=UIColor.clearColor; self.opaque=NO; self.contentMode=UIViewContentModeRedraw; }
+    if((self=[super initWithFrame:frame])) { self.backgroundColor=UIColor.clearColor; self.opaque=NO; self.contentMode=UIViewContentModeRedraw;
+        self.playbackLamp=[CALayer layer];self.playbackLamp.cornerRadius=1;
+        self.playbackLamp.backgroundColor=[UIColor colorWithWhite:.28 alpha:1].CGColor;
+        [self.layer addSublayer:self.playbackLamp];
+    }
     return self;
+}
+- (void)setPlaybackState:(PC98PlaybackState)value {
+    if(_playbackState==value) return;
+    _playbackState=value;
+    [CATransaction begin];[CATransaction setDisableActions:YES];
+    [self.playbackLamp removeAnimationForKey:@"pausedBlink"];
+    self.playbackLamp.opacity=1;
+    self.playbackLamp.backgroundColor=(value==PC98PlaybackStatePaused?[UIColor colorWithRed:.9 green:.12 blue:.08 alpha:1]:value==PC98PlaybackStateRunning?[UIColor colorWithRed:.4 green:.7 blue:.2 alpha:1]:[UIColor colorWithWhite:.28 alpha:1]).CGColor;
+    [CATransaction commit];
+    if(value==PC98PlaybackStatePaused) {
+        CABasicAnimation* blink=[CABasicAnimation animationWithKeyPath:@"opacity"];
+        blink.fromValue=@1;blink.toValue=@.15;blink.duration=.6;blink.autoreverses=YES;blink.repeatCount=HUGE_VALF;
+        [self.playbackLamp addAnimation:blink forKey:@"pausedBlink"];
+    }
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGRect status=[self statusFrame];
+    [CATransaction begin];[CATransaction setDisableActions:YES];
+    self.playbackLamp.frame=CGRectMake(status.origin.x-14,status.origin.y+3,6,4);
+    self.playbackLamp.hidden=self.separateControls;
+    [CATransaction commit];
 }
 - (void)setExpandedDisplay:(BOOL)value {
     if(_expandedDisplay==value) return;
-    _expandedDisplay=value; [self setNeedsDisplay];
+    _expandedDisplay=value; [self setNeedsDisplay];[self setNeedsLayout];
+}
+- (void)setSeparateControls:(BOOL)value {
+    if(_separateControls==value) return;
+    _separateControls=value;[self setNeedsDisplay];[self setNeedsLayout];
 }
 - (CGRect)cabinetFrame {
     if(self.expandedDisplay) {
@@ -61,9 +96,6 @@ void PC98Gradient(CGRect r,UIColor* top,UIColor* bottom,CGFloat radius) {
     // Small unbranded power lamp and inset control strip.
     if(!self.separateControls) {
     PC98Gradient(CGRectInset([self controlsFrame],-3,-3),PC98Plastic(.63),PC98Plastic(.87),4);
-    CGRect status=[self statusFrame];
-    [[UIColor colorWithRed:.23 green:.36 blue:.18 alpha:1] setFill]; [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(status.origin.x-14,status.origin.y+3,6,4) cornerRadius:1] fill];
-    [[UIColor colorWithRed:.66 green:.82 blue:.38 alpha:1] setFill]; UIRectFill(CGRectMake(status.origin.x-13,status.origin.y+3,4,1));
     }
 }
 @end

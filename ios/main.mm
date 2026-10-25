@@ -330,6 +330,7 @@ static UIImage* frameImage(Player* p) {
 - (void)leftClick:(id)sender { [self click:1]; }
 - (void)rightClick { [self click:2]; }
 - (void)tick:(CADisplayLink*)link {
+    self.topPanel.playbackState=(!player || player->m->quit)?PC98PlaybackStateInactive:paused?PC98PlaybackStatePaused:PC98PlaybackStateRunning;
     if(!player || paused || fetching) return;
     constexpr double seconds=(double)FRAME_TICKS/MASTER_CLOCK;
     double now=CACurrentMediaTime(); if(now-nextFrame>seconds*3) nextFrame=now;
