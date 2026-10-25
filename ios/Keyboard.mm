@@ -114,6 +114,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     std::map<int,double> repeatAt;
 }
 @property(strong) NSArray<NSArray<UIButton*>*>* keys;
+@property(strong) UIImpactFeedbackGenerator* keyFeedback;
 @end
 @implementation PC98Keyboard
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -279,6 +280,13 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (BOOL)isLatch:(int)scan { return scan==0x70 || scan==0x71 || scan==0x72 || scan==0x73 || scan==0x74; }
 - (void)updateKey:(UIButton*)key down:(BOOL)down {
+    // Only a new touch/accessibility press produces feedback. Key-up, cancellation
+    // and repeatHeldKeys never enter this branch.
+    if(down) {
+        if(!self.keyFeedback) self.keyFeedback=[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+        [self.keyFeedback impactOccurred];
+        [self.keyFeedback prepare];
+    }
     int scan=(int)key.tag;
     if([self isLatch:scan]) {
         if(!down) return;
