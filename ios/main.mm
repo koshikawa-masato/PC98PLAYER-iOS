@@ -115,7 +115,7 @@ static UIImage* frameImage(Player* p) {
     std::unique_ptr<Player> player;
     AudioOut audio;
     double nextFrame;
-    BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware;
+    BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen;
     int mouseButtons;
     std::set<NSInteger> physicalKeys;
     std::set<int> touchKeys;
@@ -136,7 +136,8 @@ static UIImage* frameImage(Player* p) {
         return UIInterfaceOrientationMaskAllButUpsideDown;
     return UIInterfaceOrientationMaskAll;
 }
-- (BOOL)prefersStatusBarHidden { return manualDuo || hingeDuo || duoHardware; }
+- (BOOL)prefersStatusBarHidden { return fullScreen || manualDuo || hingeDuo || duoHardware; }
+- (BOOL)prefersHomeIndicatorAutoHidden { return fullScreen; }
 - (BOOL)canBecomeFirstResponder { return YES; }
 - (void)viewDidLoad {
     [super viewDidLoad]; self.view.multipleTouchEnabled=YES; self.view.backgroundColor=PC98Plastic(.84); paused=YES;
@@ -146,7 +147,10 @@ static UIImage* frameImage(Player* p) {
     self.monitor.layer.cornerRadius=4; self.monitor.clipsToBounds=YES; self.monitor.backgroundColor=[UIColor colorWithRed:.035 green:.055 blue:.052 alpha:1]; self.monitor.layer.magnificationFilter=kCAFilterNearest; self.monitor.userInteractionEnabled=YES;
     [self.topPanel addSubview:self.monitor];
     UIPanGestureRecognizer* pan=[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(moveMouse:)]; [self.monitor addGestureRecognizer:pan];
-    UITapGestureRecognizer* tap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(leftClick:)]; [self.monitor addGestureRecognizer:tap];
+    UITapGestureRecognizer* doubleTap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(toggleFullScreen)];
+    doubleTap.numberOfTapsRequired=2;[self.monitor addGestureRecognizer:doubleTap];
+    UITapGestureRecognizer* tap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(leftClick:)];
+    [tap requireGestureRecognizerToFail:doubleTap];[self.monitor addGestureRecognizer:tap];
     self.status=[UILabel new]; self.status.text=@"ゲームフォルダを選択してください";
     self.status.textColor=[UIColor colorWithWhite:.24 alpha:1]; self.status.font=[UIFont monospacedSystemFontOfSize:8 weight:UIFontWeightRegular]; self.status.numberOfLines=1; self.status.adjustsFontSizeToFitWidth=YES;
     [self.view addSubview:self.status];
@@ -267,6 +271,7 @@ static UIImage* frameImage(Player* p) {
         auto panels=phoneLandscapePanels(safe);
         self.topPanel.frame=panels[0];self.keyboard.frame=panels[1];
     }
+    CGRect fullscreenAvailable=safe;
     NSMutableArray* occlusions=[NSMutableArray new];
 #if __has_include(<UIKit/UIViewReservedRegion.h>)
     if(@available(iOS 27.1,*)) {
@@ -274,6 +279,7 @@ static UIImage* frameImage(Player* p) {
             [occlusions addObject:@{@"frame":@[@(region.frame.origin.x),@(region.frame.origin.y),@(region.frame.size.width),@(region.frame.size.height)],@"active":@(region.isActive)}];
             if(!region.isActive) continue;
             self.topPanel.frame=monitorAvoiding(self.topPanel.frame,region.frame);
+            fullscreenAvailable=monitorAvoiding(fullscreenAvailable,region.frame);
         }
     }
 #endif
@@ -292,7 +298,11 @@ static UIImage* frameImage(Player* p) {
     }
     [self.view bringSubviewToFront:self.toolbar];
     [self.view bringSubviewToFront:self.status];
-    self.monitor.frame=[self.topPanel screenFrame]; self.spinner.center=CGPointMake(w/2,h/2);
+    if(fullScreen) {
+        CGFloat width=MAX(1,MIN(fullscreenAvailable.size.width,fullscreenAvailable.size.height*1.6));
+        self.monitor.frame=CGRectMake(CGRectGetMidX(fullscreenAvailable)-width/2,CGRectGetMidY(fullscreenAvailable)-width/3.2,width,width/1.6);
+    } else self.monitor.frame=[self.topPanel screenFrame];
+    self.spinner.center=CGPointMake(w/2,h/2);
     [self.topPanel setNeedsDisplay];
 #ifdef PC98PLAYER_TESTING
     if([NSProcessInfo.processInfo.arguments containsObject:@"--layout-report"]) {
@@ -304,12 +314,24 @@ static UIImage* frameImage(Player* p) {
             @"divisionRegion":rect(division),@"monitorPanel":rect(self.topPanel.frame),
             @"keyboardPanel":rect(self.keyboard.frame),@"hardwareKeyboard":@(self.keyboard.hardwareLayout),@"phoneLandscape":@(phoneLandscape),
             @"hingeAvailable":@(duoHardware),@"hingePartial":@(hingeDuo),@"manualDuo":@(manualDuo),@"statusBarHidden":@(self.prefersStatusBarHidden),
-            @"occlusions":occlusions,
-            @"monitorScreen":rect([self.topPanel convertRect:self.monitor.frame toView:self.view])};
+            @"occlusions":occlusions,@"fullScreen":@(fullScreen),
+            @"monitorScreen":rect([self.monitor.superview convertRect:self.monitor.frame toView:self.view])};
         [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]
             writeToURL:area(NSDocumentDirectory,@"layout-report.json") atomically:YES];
     }
 #endif
+}
+- (void)toggleFullScreen {
+    if(fetching || self.presentedViewController) return;
+    [self releaseKeys];fullScreen=!fullScreen;
+    self.topPanel.hidden=fullScreen;self.keyboard.hidden=fullScreen;
+    self.toolbar.hidden=fullScreen;self.status.hidden=fullScreen;
+    self.view.backgroundColor=fullScreen?UIColor.blackColor:PC98Plastic(.84);
+    self.monitor.layer.cornerRadius=fullScreen?0:4;
+    [self.monitor removeFromSuperview];
+    if(fullScreen) [self.view addSubview:self.monitor];else [self.topPanel addSubview:self.monitor];
+    [self setNeedsStatusBarAppearanceUpdate];[self setNeedsUpdateOfHomeIndicatorAutoHidden];
+    [self.view setNeedsLayout];[self.view layoutIfNeeded];
 }
 - (void)message:(NSString*)message {
     UIAlertController* a=[UIAlertController alertControllerWithTitle:@"PC98PLAYER" message:message preferredStyle:UIAlertControllerStyleAlert];
@@ -326,6 +348,7 @@ static UIImage* frameImage(Player* p) {
     if(player) { for(int i=0;i<128;++i) if(player->m->kb_down[i]) machine_key(player->m,i,false); machine_mouse(player->m,0,0,0); }
 }
 - (void)pressesBegan:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event {
+    if(fullScreen) return;
     NSMutableSet* unhandled=[presses mutableCopy];
     for(UIPress* p in presses) if(p.key) { int sc=pc98_scan_from_hid(p.key.keyCode); if(sc>=0) { physicalKeys.insert(p.key.keyCode); [self updateScan:sc]; [unhandled removeObject:p]; } }
     if(unhandled.count) [super pressesBegan:unhandled withEvent:event];
@@ -686,6 +709,15 @@ static UIImage* frameImage(Player* p) {
     self.monitor.image=frameImage(player.get());
     UIImage* portrait=[portraitRenderer imageWithActions:^(UIGraphicsImageRendererContext* context) { [self.view.layer renderInContext:context.CGContext]; }];
     [UIImagePNGRepresentation(portrait) writeToURL:area(NSDocumentDirectory,@"portrait-smoke.png") atomically:YES];
+    CGRect previousMonitor=self.monitor.frame;
+    [self.keyboard pressScansForTesting:@[@0x70,@29]];
+    [self toggleFullScreen];
+    result[@"fullscreenHidesControls"]=@(fullScreen && self.topPanel.hidden && self.keyboard.hidden && self.toolbar.hidden && self.status.hidden && self.monitor.superview==self.view && self.prefersStatusBarHidden);
+    CGRect fullscreenSafe=UIEdgeInsetsInsetRect(self.view.bounds,self.view.safeAreaInsets);
+    result[@"fullscreenAspectFit"]=@(CGRectContainsRect(fullscreenSafe,self.monitor.frame) && fabs(self.monitor.frame.size.width/self.monitor.frame.size.height-1.6)<.001);
+    result[@"fullscreenReleasesKeys"]=@(!player->m->kb_down[0x70] && !player->m->kb_down[29]);
+    [self toggleFullScreen];
+    result[@"fullscreenRestoresLayout"]=@(!fullScreen && !self.topPanel.hidden && !self.keyboard.hidden && !self.toolbar.hidden && !self.status.hidden && self.monitor.superview==self.topPanel && CGRectEqualToRect(previousMonitor,self.monitor.frame));
     manualDuo=YES; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     CGRect camera=CGRectMake(540,0,129,82), panel=CGRectMake(0,0,669,448);
     CGRect clear=monitorAvoiding(panel,camera);
