@@ -330,26 +330,33 @@ static UIImage* frameImage(Player* p) {
         @autoreleasepool {
             NSError* error=nil;
             NSFileManager* manager=NSFileManager.defaultManager;
-            if(![manager fileExistsAtPath:destination.path]) {
-                NSURL* temporary=[destination.URLByDeletingLastPathComponent URLByAppendingPathComponent:NSUUID.UUID.UUIDString isDirectory:YES];
-                [manager createDirectoryAtURL:temporary.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:&error];
-                if(!error) {
-                    NSFileCoordinator* coordinator=[[NSFileCoordinator alloc] initWithFilePresenter:nil];
-                    __block NSError* copyError=nil;
-                    [coordinator coordinateReadingItemAtURL:source options:NSFileCoordinatorReadingWithoutChanges error:&error byAccessor:^(NSURL* readable) {
-                        [manager copyItemAtURL:readable toURL:temporary error:&copyError];
-                    }];
-                    if(copyError) error=copyError;
-                    // A complete copy is published atomically; interrupted staging folders are disposable.
-                    if(!error) [manager moveItemAtURL:temporary toURL:destination error:&error];
-                    if(error) [manager removeItemAtURL:temporary error:nil];
+            if(![GameLibrary isUsableCacheAtURL:destination]) {
+                // Keep invalid legacy caches recoverable; game saves live in a separate directory.
+                if([manager fileExistsAtPath:destination.path]) {
+                    NSURL* rejected=area(NSCachesDirectory,@"PC98Rejected");
+                    [manager createDirectoryAtURL:rejected withIntermediateDirectories:YES attributes:nil error:&error];
+                    if(!error) [manager moveItemAtURL:destination toURL:[rejected URLByAppendingPathComponent:NSUUID.UUID.UUIDString] error:&error];
                 }
+                NSURL* temporary=[destination.URLByDeletingLastPathComponent URLByAppendingPathComponent:NSUUID.UUID.UUIDString isDirectory:YES];
+                if(!error) [manager createDirectoryAtURL:temporary.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:&error];
+                BOOL copied=NO;
+                if(!error) copied=[GameLibrary copyFolderFromURL:source toURL:temporary error:&error];
+                if(!copied && !error) error=[NSError errorWithDomain:@"PC98GameCache" code:6 userInfo:@{NSLocalizedDescriptionKey:@"NASからゲームを取得できませんでした。"}];
+                if(copied) {
+                    if(![GameLibrary isUsableCacheAtURL:temporary]) error=[NSError errorWithDomain:@"PC98GameCache" code:1 userInfo:@{NSLocalizedDescriptionKey:@"ゲームの中身を取得できませんでした。Games内の作品フォルダーを選び直してください。NASのファイル一覧が表示されるまで待ってから「開く」を押してください。"}];
+                    if(!error) [manager moveItemAtURL:temporary toURL:destination error:&error];
+                }
+                if(error) [manager removeItemAtURL:temporary error:nil];
             }
             if(scoped) [source stopAccessingSecurityScopedResource];
             dispatch_async(dispatch_get_main_queue(),^{
                 PlayerController* s=weak; if(!s) return;
                 s->fetching=NO; [s.spinner stopAnimating];
-                if(error) { s.status.text=@"取得できませんでした。接続と空き容量を確認してください。"; [s message:error.localizedDescription]; }
+#if defined(PC98PLAYER_TESTING)
+                NSDictionary* report=@{@"sourceName":source.lastPathComponent ?: @"", @"scoped":@(scoped), @"identifier":identifier, @"error":error.localizedDescription ?: @"", @"domain":error.domain ?: @"", @"code":@(error.code), @"usableCache":@([GameLibrary isUsableCacheAtURL:destination])};
+                [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil] writeToURL:area(NSDocumentDirectory,@"cache-import-report.json") atomically:YES];
+#endif
+                if(error) { s.status.text=error.localizedDescription; [s message:error.localizedDescription]; }
                 else [s openCache:destination identifier:identifier];
             });
         }
@@ -438,7 +445,7 @@ static UIImage* frameImage(Player* p) {
         NSURL* original=[NSURL fileURLWithPath:entry[@"path"] isDirectory:YES];
         NSString* identifier=gameID(original);
         NSURL* cached=area(NSCachesDirectory,[@"PC98Games/" stringByAppendingString:identifier]);
-        if([NSFileManager.defaultManager fileExistsAtPath:cached.path]) { [weak openCache:cached identifier:identifier]; return; }
+        if([GameLibrary isUsableCacheAtURL:cached]) { [weak openCache:cached identifier:identifier]; return; }
         NSError* error=nil; NSURL* source=[GameLibrary resolveEntry:entry error:&error];
         if(source) [weak cacheSource:source]; else [weak message:@"場所へのアクセスを復元できません。「開く」で再選択してください。"];
     }]];

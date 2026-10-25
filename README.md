@@ -102,3 +102,11 @@ Debugビルドは `--smoke-test` を付けて起動すると、キーのアク�
 ## 派生元と開発
 
 `origin` は本リポジトリ、`mac-source` はMac派生元、`upstream` は原作です。MacとWindowsのソースも共通コアの互換性維持のため残しています。従来の説明は [Mac／Windows版README](README-MAC-WINDOWS.md) を参照してください。iOS用のCIではコアのテスト、シミュレータの入力・ステート・上下表示のテスト、実機向け未署名ビルドを実行します。CIのZIPは開発用で、TestFlight配布物ではありません。
+
+### iPhoneからNASを開く場合
+
+「ファイル」でNASへ接続し、PC98PLAYERの「開く」からゲームのPC98PLAYER.INIがあるフォルダーを選択します。一度取得したゲームは「場所」から開けます。
+
+一部のQNAPなどでは、iOSのフォルダー列挙が空を返すことがあります。その場合はMacで `python3 tools/index_game_folder.py /Volumes/Public/PC98PLAYER/AliceSoft/Games/RanceIV` を実行してから開いてください。ライブラリー全体には `--recursive` を指定できます。ゲームを更新した場合は一覧を作り直してください。アプリは一覧のサイズ・SHA256を照合して端末キャッシュを作成し、セーブを別領域に保持します。今回のNASのGames内26フォルダーには一覧を作成済みです。
+
+[Apple Developer Forumsの同症状報告](https://developer.apple.com/forums/thread/831359)
