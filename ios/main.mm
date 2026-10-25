@@ -129,6 +129,30 @@ static UIImage* frameImage(Player* p) {
 #endif
     if([NSProcessInfo.processInfo.arguments containsObject:@"--demo"]) [self demo];
 #ifdef PC98PLAYER_TESTING
+    NSArray<NSString*>* arguments=NSProcessInfo.processInfo.arguments;
+    NSUInteger cachedIndex=[arguments indexOfObject:@"--cached-game"];
+    if(cachedIndex!=NSNotFound && cachedIndex+1<arguments.count) {
+        NSString* identifier=arguments[cachedIndex+1];
+        NSCharacterSet* invalid=[[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"] invertedSet];
+        if(identifier.length && [identifier rangeOfCharacterFromSet:invalid].location==NSNotFound) {
+            NSURL* cache=area(NSCachesDirectory,[@"PC98Games/" stringByAppendingString:identifier]);
+            if([NSFileManager.defaultManager fileExistsAtPath:[cache URLByAppendingPathComponent:@"PC98PLAYER.INI"].path])
+                [self openCache:cache identifier:identifier];
+            else [self message:@"指定されたゲームのキャッシュがありません。"];
+        }
+    }
+    if([arguments containsObject:@"--launch-report"]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,5*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+            PlayerController* s=weak; if(!s) return;
+            NSDictionary* report=@{@"game":s.currentID ?: @"",@"running":@(s->player && !s->paused),
+                @"guestQuit":@(s->player ? s->player->m->quit : -1),@"status":s->player ? text(s->player->m->status) : @"No player"};
+            [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]
+                writeToURL:area(NSDocumentDirectory,@"game-launch.json") atomically:YES];
+            UIGraphicsImageRenderer* renderer=[[UIGraphicsImageRenderer alloc] initWithBounds:s.view.bounds];
+            UIImage* shot=[renderer imageWithActions:^(UIGraphicsImageRendererContext* context) { [s.view.layer renderInContext:context.CGContext]; }];
+            [UIImagePNGRepresentation(shot) writeToURL:area(NSDocumentDirectory,@"game-launch.png") atomically:YES];
+        });
+    }
     if([NSProcessInfo.processInfo.arguments containsObject:@"--smoke-test"]) {
         [self demo];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{ [weak smokeTest]; });
@@ -418,6 +442,24 @@ static UIImage* frameImage(Player* p) {
         NSError* error=nil; NSURL* source=[GameLibrary resolveEntry:entry error:&error];
         if(source) [weak cacheSource:source]; else [weak message:@"場所へのアクセスを復元できません。「開く」で再選択してください。"];
     }]];
+    // Also expose complete caches staged for device testing; the originals stay on Mac/NAS.
+    NSMutableSet<NSString*>* registered=[NSMutableSet new];
+    for(NSDictionary* entry in GameLibrary.entries)
+        [registered addObject:gameID([NSURL fileURLWithPath:entry[@"path"] isDirectory:YES])];
+    NSArray<NSURL*>* caches=[NSFileManager.defaultManager contentsOfDirectoryAtURL:area(NSCachesDirectory,@"PC98Games")
+        includingPropertiesForKeys:@[NSURLIsDirectoryKey] options:NSDirectoryEnumerationSkipsHiddenFiles error:nil];
+    for(NSURL* cache in [caches sortedArrayUsingComparator:^NSComparisonResult(NSURL* a,NSURL* b) { return [a.lastPathComponent localizedStandardCompare:b.lastPathComponent]; }]) {
+        NSString* identifier=cache.lastPathComponent; NSNumber* directory=nil;
+        [cache getResourceValue:&directory forKey:NSURLIsDirectoryKey error:nil];
+        if(!directory.boolValue || [identifier isEqualToString:@"demo"] || [registered containsObject:identifier]) continue;
+        NSURL* iniURL=[cache URLByAppendingPathComponent:@"PC98PLAYER.INI"];
+        if(![NSFileManager.defaultManager fileExistsAtPath:iniURL.path]) continue;
+        Ini ini; ini.load(iniURL.fileSystemRepresentation);
+        NSString* title=text(ini.get("PC98PLAYER.TITLE"));
+        if(!title.length) title=identifier;
+        [menu addAction:[UIAlertAction actionWithTitle:[title stringByAppendingString:@"（キャッシュ）"] style:UIAlertActionStyleDefault
+            handler:^(UIAlertAction* a) { [weak openCache:cache identifier:identifier]; }]];
+    }
     [menu addAction:[UIAlertAction actionWithTitle:@"オリジナルDOSデモ" style:UIAlertActionStyleDefault handler:^(UIAlertAction* a) { [weak demo]; }]];
     [menu addAction:[UIAlertAction actionWithTitle:@"ゲーム本体のキャッシュを消去" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* a) { [weak clearCache]; }]];
     [menu addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
