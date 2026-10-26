@@ -82,7 +82,7 @@ xcrun devicectl list devices
 IOS_DEVELOPMENT_TEAM=YOUR_TEAM_ID ./tools/install_ios_device.sh DEVICE_UDID
 ```
 
-`IOS_BUNDLE_ID` で自分用のBundle IDに変更できます。生成された実機用プロジェクトをXcodeで開き、接続したiPhoneを選んで実行します。署名なしの `.app` はそのまま実機にインストールできません。App Store / TestFlightへの配信は行っていません。
+`IOS_BUNDLE_ID` で自分用のBundle IDに変更できます。生成された実機用プロジェクトをXcodeで開き、接続したiPhoneを選んで実行します。署名なしの `.app` はそのまま実機にインストールできません。TestFlightで内部配信中です。App Store版の申請準備を進めています。
 
 ## 検証
 

@@ -14,7 +14,7 @@ Xcode 27.1と配布証明書の秘密鍵、上記のApp Store配布プロファ�
 ビルド番号はアップロードのたびに増やします。
 
 ```sh
-IOS_VERSION=0.2.0 IOS_BUILD_NUMBER=4 tools/archive_ios_testflight.sh
+IOS_VERSION=0.2.0 IOS_BUILD_NUMBER=6 tools/archive_ios_testflight.sh
 ```
 
 アーカイブ、UUID照合済みdSYM、IPAを`out/TestFlight/`へ作成します。
@@ -36,3 +36,17 @@ App Storeへの本公開はこの手順では行いません。
 
 縦画面と横画面の切り替え時に起きる音声の短い途切れは調査中です。
 Appleへのアップロード成功と、外部テストの審査承認は別の状態です。
+
+## App Store申請用ビルド
+
+ビルド5は正式版Xcode 27.1（27A9275）とSDK 24A94232で作成しています。
+27A9269で作成したビルド4はTestFlightでは利用できても、App Store提出前チェックでベータ版Xcodeとして拒否されました。正式版を指定し、新しいビルド領域を使ってください。
+
+```sh
+DEVELOPER_DIR=/path/to/GM-Xcode.app/Contents/Developer \
+IOS_BUILD_ROOT=build/appstore-gm IOS_VERSION=0.2.0 IOS_BUILD_NUMBER=6 \
+  tools/archive_ios_testflight.sh
+```
+
+`DEVELOPER_DIR`はコマンド単位で指定し、システムのXcode選択を変更する必要はありません。
+Appleへ送るIPAのInfo.plistにあるDTXcodeBuild／DTSDKBuildも確認します。値を手で書き換えるのではなく、正式なツールチェーンでビルドします。
