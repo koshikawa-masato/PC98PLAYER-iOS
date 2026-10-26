@@ -94,7 +94,8 @@ static UIImage* frameImage(Player* p) {
 @property NSInteger soundBoard;
 @property NSInteger videoColors;
 @property BOOL manualDuo;
-@property(copy) void (^applied)(NSInteger,NSInteger,BOOL);
+@property BOOL bossMode;
+@property(copy) void (^applied)(NSInteger,NSInteger,BOOL,BOOL);
 @property(copy) void (^cancelled)(void);
 @end
 @implementation GameOptionsController
@@ -104,9 +105,9 @@ static UIImage* frameImage(Player* p) {
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 4; }
-- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return 2; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?3:2; }
 - (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return section==0?@"音源":section==1?@"色数":section==2?@"表示":@"このアプリについて"; }
-- (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section { return section==1?@"音源・色数の変更はゲームを再起動します。必要な場合は、先にゲーム内で保存してください。":section==2?@"通常は自動判別を使います。Duo上下表示を固定すると、上にモニタ、下にキーボードを配置します。表示だけの変更では再起動しません。":nil; }
+- (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section { return section==1?@"音源・色数の変更はゲームを再起動します。必要な場合は、先にゲーム内で保存してください。":section==2?@"通常は自動判別を使います。Duo上下表示を固定すると、上にモニタ、下にキーボードを配置します。表示だけの変更では再起動しません。「ボスがきた」モードはDuoを閉じると一時停止し、アウターのアプリ画面を黒くします。開き直しても自動再生せず、▶︎で再開します。端末の画面電源やシステム表示は変更しません。":nil; }
 - (UITableViewCell*)tableView:(UITableView*)tableView cellForRowAtIndexPath:(NSIndexPath*)index {
     UITableViewCell* cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
     if(index.section==0) {
@@ -118,9 +119,12 @@ static UIImage* frameImage(Player* p) {
         cell.detailTextLabel.text=index.row==0?@"標準グラフィック":@"PC-9821拡張グラフィック";
         cell.accessoryType=(self.videoColors==(index.row==0?16:256))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
     } else if(index.section==2) {
-        cell.textLabel.text=index.row==0?@"自動判別":@"Duo上下表示を固定";
-        cell.detailTextLabel.text=index.row==0?@"端末とヒンジの状態に合わせる":@"上にモニタ、下にキーボード";
-        cell.accessoryType=(self.manualDuo==(index.row==1))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
+        cell.textLabel.text=index.row==0?@"自動判別":index.row==1?@"Duo上下表示を固定":@"ボスがきた";
+        cell.detailTextLabel.text=index.row==0?@"端末とヒンジの状態に合わせる":index.row==1?@"上にモニタ、下にキーボード":@"Duoを閉じると一時停止・アウターを非表示";
+        if(index.row==2) {
+            UISwitch* toggle=[UISwitch new];toggle.on=self.bossMode;toggle.accessibilityLabel=@"ボスがきた";
+            [toggle addTarget:self action:@selector(changeBossMode:) forControlEvents:UIControlEventValueChanged];cell.accessoryView=toggle;cell.selectionStyle=UITableViewCellSelectionStyleNone;
+        } else cell.accessoryType=(self.manualDuo==(index.row==1))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
     }
     if(index.section==3) {
         cell.textLabel.text=index.row==0?@"プライバシーポリシー":@"ライセンス";
@@ -137,22 +141,26 @@ static UIImage* frameImage(Player* p) {
     }
     if(index.section==0) self.soundBoard=index.row==0?26:86;
     else if(index.section==1) self.videoColors=index.row==0?16:256;
-    else self.manualDuo=index.row==1;
+    else if(index.row<2) self.manualDuo=index.row==1;
     [tableView reloadData];
 }
+- (void)changeBossMode:(UISwitch*)sender { self.bossMode=sender.on; }
 - (void)cancel { [self dismissViewControllerAnimated:YES completion:^{if(self.cancelled) self.cancelled();}]; }
-- (void)apply { [self dismissViewControllerAnimated:YES completion:^{if(self.applied) self.applied(self.soundBoard,self.videoColors,self.manualDuo);}]; }
+- (void)apply { [self dismissViewControllerAnimated:YES completion:^{if(self.applied) self.applied(self.soundBoard,self.videoColors,self.manualDuo,self.bossMode);}]; }
 @end
 
 @interface PlayerController : UIViewController <UIDocumentPickerDelegate,UIAdaptivePresentationControllerDelegate,UIGestureRecognizerDelegate> {
     std::unique_ptr<Player> player;
     AudioOut audio;
     double nextFrame;
+    BOOL bossMode, hingeClosed;
     BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
     int mouseButtons;
     std::set<NSInteger> physicalKeys;
     std::set<int> touchKeys;
 }
+@property UIView* bossShield;
+@property id<UIInteraction> hingeInteraction;
 @property UIImageView* monitor;
 @property PC98MonitorCabinet* topPanel;
 @property PC98Keyboard* keyboard;
@@ -178,6 +186,7 @@ static UIImage* frameImage(Player* p) {
 - (void)viewDidLoad {
     [super viewDidLoad]; self.view.multipleTouchEnabled=YES; self.view.backgroundColor=PC98Plastic(.84); paused=YES;
     manualDuo=[NSUserDefaults.standardUserDefaults boolForKey:@"PC98ManualDuo"];
+    bossMode=[NSUserDefaults.standardUserDefaults boolForKey:@"PC98BossMode"];
     self.topPanel=[PC98MonitorCabinet new]; [self.view addSubview:self.topPanel];
     self.monitor=[UIImageView new]; self.monitor.contentMode=UIViewContentModeScaleAspectFit;
     self.monitor.layer.cornerRadius=4; self.monitor.clipsToBounds=YES; self.monitor.backgroundColor=[UIColor colorWithRed:.035 green:.055 blue:.052 alpha:1]; self.monitor.layer.magnificationFilter=kCAFilterNearest; self.monitor.userInteractionEnabled=YES; self.monitor.multipleTouchEnabled=YES;
@@ -231,10 +240,13 @@ static UIImage* frameImage(Player* p) {
         UIHingeInteraction* interaction=[[UIHingeInteraction alloc] initWithUpdateHandler:^(UIHingeInteraction* interaction,UIHingeInteractionUpdate* update) {
             PlayerController* s=weak; if(!s) return;
             BOOL hardware=update.hinge!=nil;
+            if(hardware) s->hingeClosed=update.hinge.status==UIHingeStatusClosed;
+            else if(s->duoHardware && s->bossMode) s->hingeClosed=YES;
+            [s updateBossShield];
             BOOL duo=hardware && update.hinge.status==UIHingeStatusPartiallyOpen;
             if(s->hingeDuo!=duo || s->duoHardware!=hardware) { [s releaseKeys]; s->duoHardware=hardware; s->hingeDuo=duo; [s setNeedsUpdateOfSupportedInterfaceOrientations]; [s setNeedsStatusBarAppearanceUpdate]; [s.view setNeedsLayout]; }
         }];
-        [self.view addInteraction:interaction];
+        self.hingeInteraction=interaction;[self.view addInteraction:interaction];
     }
 #endif
     if([NSProcessInfo.processInfo.arguments containsObject:@"--demo"]) [self demo];
@@ -290,7 +302,36 @@ static UIImage* frameImage(Player* p) {
     }
 #endif
 }
-- (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; [self becomeFirstResponder]; }
+- (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; [self becomeFirstResponder]; [self updateBossShield]; }
+- (void)updateBossShield {
+    BOOL concealed=bossMode && hingeClosed;
+    if(concealed) {
+        [self suspend];
+        if(!self.bossShield) {
+            self.bossShield=[UIView new];self.bossShield.backgroundColor=UIColor.blackColor;
+            self.bossShield.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+            self.bossShield.isAccessibilityElement=YES;self.bossShield.accessibilityLabel=@"ボスがきた — 一時停止中";
+            self.bossShield.accessibilityViewIsModal=YES;
+        }
+        // Cover the window, including any presented options or file picker.
+        UIWindow* window=self.view.window;
+        if(window) { self.bossShield.frame=window.bounds;[window addSubview:self.bossShield]; }
+    } else [self.bossShield removeFromSuperview];
+}
+- (void)prepareForInactive {
+    // Hide before the system takes its snapshot or switches to the outer display.
+    if(bossMode && duoHardware) { hingeClosed=YES;[self updateBossShield]; }
+    [self suspend];
+}
+- (void)refreshHingeAfterActivation {
+#if __has_include(<UIKit/UIHingeInteraction.h>)
+    if(@available(iOS 27.1,*)) {
+        UIHingeInteraction* interaction=(UIHingeInteraction*)self.hingeInteraction;
+        interaction.enabled=NO;interaction.enabled=YES;
+    }
+#endif
+    [self updateBossShield];
+}
 - (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
     [self releaseKeys];
 #ifdef PC98PLAYER_TESTING
@@ -477,7 +518,7 @@ static UIImage* frameImage(Player* p) {
 - (void)rightClick { [self click:2]; }
 - (void)tick:(CADisplayLink*)link {
     self.topPanel.playbackState=(!player || player->m->quit)?PC98PlaybackStateInactive:paused?PC98PlaybackStatePaused:PC98PlaybackStateRunning;
-    if(!player || paused || fetching) return;
+    if(!player || paused || fetching || (bossMode && hingeClosed)) return;
     constexpr double seconds=(double)FRAME_TICKS/MASTER_CLOCK;
     double now=CACurrentMediaTime(); if(now-nextFrame>seconds*3) nextFrame=now;
     [self.keyboard repeatHeldKeys];
@@ -499,6 +540,7 @@ static UIImage* frameImage(Player* p) {
     hostfs::set_overlay("","");
 }
 - (void)togglePause {
+    if(bossMode && hingeClosed) return;
     if(!player || fetching || player->m->quit) return;
     [self releaseKeys]; paused=!paused;
     if(!paused) fullscreenMenuPaused=NO;
@@ -509,6 +551,7 @@ static UIImage* frameImage(Player* p) {
     else { [self startAudio]; nextFrame=CACurrentMediaTime(); self.status.text=@"実行中"; }
 }
 - (void)startAudio {
+    if(bossMode && hingeClosed) { [self suspend];return; }
     NSError* error=nil; AVAudioSession* session=AVAudioSession.sharedInstance;
     [session setCategory:AVAudioSessionCategoryPlayback error:&error]; [session setActive:YES error:&error];
     if(error || !audio.open(player->ps.sample_rate)) self.status.text=@"音声を開始できませんでした（映像のみ）";
@@ -658,12 +701,13 @@ static UIImage* frameImage(Player* p) {
     options.soundBoard=player?player->m->cfg.sound_board:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98SoundBoard"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98SoundBoard"]:86);
     options.videoColors=player?player->m->cfg.video_colors:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98VideoColors"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98VideoColors"]:16);
     __weak PlayerController* weak=self;
-    options.manualDuo=manualDuo;
+    options.manualDuo=manualDuo;options.bossMode=bossMode;
     options.cancelled=^{ PlayerController* s=weak;if(!s) return;s->paused=previousPause;if(s->player && !s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime(); };
-    options.applied=^(NSInteger sound,NSInteger colors,BOOL duo) {
+    options.applied=^(NSInteger sound,NSInteger colors,BOOL duo,BOOL boss) {
         PlayerController* s=weak;if(!s) return;
         BOOL restart=s->player && (s->player->m->cfg.sound_board!=sound || s->player->m->cfg.video_colors!=colors);
-        [s releaseKeys];s->manualDuo=duo;
+        [s releaseKeys];s->manualDuo=duo;s->bossMode=boss;
+        [NSUserDefaults.standardUserDefaults setBool:boss forKey:@"PC98BossMode"];
         [NSUserDefaults.standardUserDefaults setBool:duo forKey:@"PC98ManualDuo"];
         [s setNeedsUpdateOfSupportedInterfaceOrientations];[s setNeedsStatusBarAppearanceUpdate];[s.view setNeedsLayout];
         [NSUserDefaults.standardUserDefaults setInteger:sound forKey:@"PC98SoundBoard"];
@@ -671,6 +715,7 @@ static UIImage* frameImage(Player* p) {
         if(restart && s.currentCache && s.currentID) [s openCache:s.currentCache identifier:s.currentID];
         else if(s->player) { s->paused=previousPause;if(!s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime(); }
         else s.status.text=@"オプションを保存しました。ゲームフォルダーを選択してください。";
+        [s updateBossShield];
     };
     UINavigationController* nav=[[UINavigationController alloc] initWithRootViewController:options];nav.modalInPresentation=YES;
     if(nav.sheetPresentationController) nav.sheetPresentationController.detents=@[UISheetPresentationControllerDetent.largeDetent];
@@ -970,7 +1015,8 @@ static UIImage* frameImage(Player* p) {
     self.window=[[UIWindow alloc] initWithWindowScene:(UIWindowScene*)scene];
     self.controller=[PlayerController new]; self.window.rootViewController=self.controller; [self.window makeKeyAndVisible];
 }
-- (void)sceneWillResignActive:(UIScene*)scene { [self.controller suspend]; }
+- (void)sceneWillResignActive:(UIScene*)scene { [self.controller prepareForInactive]; }
+- (void)sceneDidBecomeActive:(UIScene*)scene { [self.controller refreshHingeAfterActivation]; }
 @end
 @interface PlayerAppDelegate : UIResponder <UIApplicationDelegate>
 @end
