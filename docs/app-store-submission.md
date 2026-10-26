@@ -1,0 +1,33 @@
+# App Store審査提出記録
+
+2026年10月26日、PC98PLAYER iOS 0.2.0 (5)をApp Store審査へ提出し、App Store Connectで「審査待ち」を確認しました。承認・公開はまだです。
+
+- Apple ID: 6826817332
+- Bundle ID: jp.pc98player.ios
+- 提出ID: 17125492-424d-4baf-9162-c758e187d9a6
+- 審査詳細: https://appstoreconnect.apple.com/apps/6826817332/distribution/reviewsubmissions/details/17125492-424d-4baf-9162-c758e187d9a6
+- 価格: 無料
+- 配信地域: 175か所（リリース時に配信可能）
+- 対象: iPhone／iPad。iOS互換アプリのMac／Vision Pro配信は無効
+- リリース方法: 承認後、手動リリース
+- カテゴリ: ユーティリティ／エンターテインメント
+- 年齢区分: 質問票の計算結果4+（地域ごとの例外あり）
+- プライバシー: データの収集なし。回答公開済み
+- ポリシー: https://github.com/koshikawa-masato/PC98PLAYER-iOS/blob/codex/ios-256-options/docs/privacy-policy.txt
+
+## ビルドと確認
+
+正式版Xcode 27.1 (27A9275)、iPhoneOS SDK 27.1 (24A94232)で新規のビルド領域を使い、Releaseアーカイブと配布署名付きIPAを作成しました。Info.plistのDTXcodeBuild／DTSDKBuild、配布権限、署名、同梱ポリシー、ReplayKit除外を検証しました。メタデータの手動書き換えは行っていません。
+
+ベータ版Xcode 27A9269で作成したビルド4は、提出前チェックで拒否されたため申請対象から外しました。正式版のビルド5でチェックを通過しています。
+
+- コア・音声・キャッシュ関連: CTest 6件成功
+- iOS入力・全画面・ステート等: スモークテスト40項目成功
+- アプリ内プライバシーポリシーの表示: iPhoneシミュレータで確認
+- iPhone／iPadのスクリーンショット: オリジナルDOSデモを使用
+- ゲーム本体・BIOS・ROM: 同梱なし
+- 審査メモ: 「場所 → オリジナルDOSデモ」で第三者のゲームデータなしに入力と表示を検証する手順を登録
+
+審査連絡先は本人がApp Store Connectへ入力・保存しました。このリポジトリには電話番号・メールを保存しません。コンテンツ配信権の申告、対象端末の制限、プライバシー回答公開の同意は本人の確認後に実施しました。
+
+既知の縦横回転時の短い音声の途切れは未解決です。審査通過や全ソフトの互換性を保証するものではありません。

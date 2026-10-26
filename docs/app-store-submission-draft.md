@@ -1,7 +1,7 @@
 # App Store申請用下書き
 
 対象: PC98PLAYER iOS 0.2.0 (5)
-状態: TestFlight内部配信済み。App Store審査には未提出。
+状態: 2026年10月26日にApp Store審査へ提出済み。実際の提出記録は app-store-submission.md を参照。以下は作成時の下書きです。
 
 ## 日本語メタデータ
 
