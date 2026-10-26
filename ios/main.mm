@@ -197,12 +197,11 @@ static UIImage* frameImage(Player* p) {
     self.status.textColor=[UIColor colorWithWhite:.24 alpha:1]; self.status.font=[UIFont monospacedSystemFontOfSize:8 weight:UIFontWeightRegular]; self.status.numberOfLines=1; self.status.adjustsFontSizeToFitWidth=YES;
     [self.view addSubview:self.status];
     self.toolbar=[UIStackView new]; self.toolbar.axis=UILayoutConstraintAxisHorizontal; self.toolbar.distribution=UIStackViewDistributionFillEqually; self.toolbar.spacing=3;
-    NSArray* titles=@[@"開く",@"場所",@"▶︎ / Ⅱ",@"保存",@"読込",@"リセット",@"右クリック"];
-    SEL actions[]={@selector(openFolder),@selector(showLibrary),@selector(togglePause),@selector(saveSlot),@selector(loadSlot),@selector(resetGame),@selector(rightClick)};
+    NSArray* titles=@[@"オプション",@"開く",@"場所",@"▶︎ / Ⅱ",@"保存",@"読込",@"リセット",@"右クリック"];
+    SEL actions[]={@selector(showOptions),@selector(openFolder),@selector(showLibrary),@selector(togglePause),@selector(saveSlot),@selector(loadSlot),@selector(resetGame),@selector(rightClick)};
     for(NSUInteger i=0;i<titles.count;++i) { UIButton* b=[UIButton buttonWithType:UIButtonTypeSystem]; [b setTitle:titles[i] forState:UIControlStateNormal]; b.titleLabel.font=[UIFont systemFontOfSize:10 weight:UIFontWeightMedium]; [b setTitleColor:[UIColor colorWithWhite:.18 alpha:1] forState:UIControlStateNormal]; [b setTitleColor:UIColor.grayColor forState:UIControlStateHighlighted]; b.backgroundColor=PC98Plastic(.87); b.layer.cornerRadius=2; b.layer.borderWidth=1; b.layer.borderColor=PC98Plastic(.55).CGColor; b.layer.shadowColor=UIColor.blackColor.CGColor; b.layer.shadowOffset=CGSizeMake(0,1); b.layer.shadowOpacity=.25; b.layer.shadowRadius=0; b.titleLabel.adjustsFontSizeToFitWidth=YES; [b addTarget:self action:actions[i] forControlEvents:UIControlEventTouchUpInside]; [self.toolbar addArrangedSubview:b]; }
     [self.view addSubview:self.toolbar];
     self.keyboard=[PC98Keyboard new]; __weak PlayerController* weak=self;
-    self.keyboard.optionsRequested=^{ [weak showOptions]; };
     self.keyboard.keyChanged=^(int scan,BOOL down) {
         PlayerController* s=weak; if(!s) return;
         if(down) s->touchKeys.insert(scan); else s->touchKeys.erase(scan);
