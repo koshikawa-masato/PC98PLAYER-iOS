@@ -4,6 +4,13 @@ cd "$(dirname "$0")/.."
 export IOS_SDK=iphoneos IOS_CONFIGURATION=Release
 : "${IOS_DEVELOPMENT_TEAM:=8JN36X5T3B}"
 export IOS_DEVELOPMENT_TEAM
+# Xcode's previous archive may leave a dangling product symlink.
+python3 - <<'PYTHON'
+from pathlib import Path
+product=Path('build/ios-iphoneos/Release-iphoneos/PC98PLAYERiOS.app')
+if product.is_symlink():
+    product.unlink()
+PYTHON
 ./build_ios.sh
 archive="$PWD/out/TestFlight/PC98PLAYER-${IOS_VERSION:-0.2.0}-${IOS_BUILD_NUMBER:-3}.xcarchive"
 xcodebuild -project build/ios-iphoneos/PC98PLAYER.xcodeproj -scheme PC98PLAYERiOS \

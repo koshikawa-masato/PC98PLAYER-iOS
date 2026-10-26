@@ -70,6 +70,26 @@ static UIImage* frameImage(Player* p) {
 }
 @end
 
+@interface LegalTextController : UIViewController
+@property(copy) NSString* resource;
+@end
+@implementation LegalTextController
+- (void)loadView {
+    UITextView* textView=[UITextView new];textView.editable=NO;textView.alwaysBounceVertical=YES;
+    textView.backgroundColor=UIColor.systemBackgroundColor;textView.textColor=UIColor.labelColor;
+    textView.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];textView.adjustsFontForContentSizeCategory=YES;
+    textView.textContainerInset=UIEdgeInsetsMake(20,16,20,16);
+    NSError* error=nil;
+    NSString* content=[NSString stringWithContentsOfFile:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:self.resource] encoding:NSUTF8StringEncoding error:&error];
+    if([self.resource isEqualToString:@"LICENSE"]) {
+        NSString* third=[NSString stringWithContentsOfFile:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"THIRD-PARTY-ymfm-LICENSE.txt"] encoding:NSUTF8StringEncoding error:nil];
+        if(third) content=[content stringByAppendingFormat:@"\n\nymfm\n%@",third];
+    }
+    textView.text=content ?: @"文書を読み込めませんでした。";textView.dataDetectorTypes=UIDataDetectorTypeLink;
+    self.view=textView;
+}
+@end
+
 @interface GameOptionsController : UITableViewController
 @property NSInteger soundBoard;
 @property NSInteger videoColors;
@@ -83,9 +103,9 @@ static UIImage* frameImage(Player* p) {
     self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"キャンセル" style:UIBarButtonItemStylePlain target:self action:@selector(cancel)];
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
-- (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 3; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 4; }
 - (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return 2; }
-- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return section==0?@"音源":section==1?@"色数":@"表示"; }
+- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return section==0?@"音源":section==1?@"色数":section==2?@"表示":@"このアプリについて"; }
 - (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section { return section==1?@"音源・色数の変更はゲームを再起動します。必要な場合は、先にゲーム内で保存してください。":section==2?@"通常は自動判別を使います。Duo上下表示を固定すると、上にモニタ、下にキーボードを配置します。表示だけの変更では再起動しません。":nil; }
 - (UITableViewCell*)tableView:(UITableView*)tableView cellForRowAtIndexPath:(NSIndexPath*)index {
     UITableViewCell* cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
@@ -97,14 +117,24 @@ static UIImage* frameImage(Player* p) {
         cell.textLabel.text=index.row==0?@"16色":@"256色";
         cell.detailTextLabel.text=index.row==0?@"標準グラフィック":@"PC-9821拡張グラフィック";
         cell.accessoryType=(self.videoColors==(index.row==0?16:256))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
-    } else {
+    } else if(index.section==2) {
         cell.textLabel.text=index.row==0?@"自動判別":@"Duo上下表示を固定";
         cell.detailTextLabel.text=index.row==0?@"端末とヒンジの状態に合わせる":@"上にモニタ、下にキーボード";
         cell.accessoryType=(self.manualDuo==(index.row==1))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
     }
+    if(index.section==3) {
+        cell.textLabel.text=index.row==0?@"プライバシーポリシー":@"ライセンス";
+        cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
+    }
     return cell;
 }
 - (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)index {
+    if(index.section==3) {
+        LegalTextController* document=[LegalTextController new];
+        document.title=index.row==0?@"プライバシーポリシー":@"ライセンス";
+        document.resource=index.row==0?@"privacy-policy.txt":@"LICENSE";
+        [self.navigationController pushViewController:document animated:YES];return;
+    }
     if(index.section==0) self.soundBoard=index.row==0?26:86;
     else if(index.section==1) self.videoColors=index.row==0?16:256;
     else self.manualDuo=index.row==1;
