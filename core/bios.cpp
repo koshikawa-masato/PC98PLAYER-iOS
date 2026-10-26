@@ -490,6 +490,10 @@ static void int18(Machine* m) {
         for (int i = 0; i < 4; i++) m->degpal[i] = mem_rb(m, a + i);
         return; }
     case 0x44: m->border = (uint8_t)(CX(m) >> 8); return;
+    case 0x4D: { // Extended graphics switch: CH=0 legacy, CH=1 256 colors.
+        uint8_t mode=(uint8_t)(CX(m)>>8);
+        if(m->cfg.video_colors==256 && mode<=1) m->pegc.enabled=mode;
+        return; }
     default:
         if (m->cfg.trace) plog("[bios] INT 18h AH=%02Xh 未対応\n", ah);
         return;
