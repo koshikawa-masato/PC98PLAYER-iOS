@@ -5,6 +5,7 @@
 #import <CommonCrypto/CommonDigest.h>
 #import "GameLibrary.h"
 #import "Keyboard.h"
+#include "DuoPresentation.h"
 #import "RetroHardware.h"
 #include "AudioOut.h"
 #include "font.h"
@@ -185,6 +186,7 @@ static UIImage* frameImage(Player* p) {
     std::unique_ptr<Player> player;
     AudioOut audio;
     double nextFrame;
+    DuoFullscreenPresentation fullscreenPresentation;
     BOOL bossMode, hingeClosed;
     BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
     int mouseButtons;
@@ -389,6 +391,10 @@ static UIImage* frameImage(Player* p) {
 #endif
     // Use OS geometry, not device names or a guessed pixel resolution.
     BOOL verticalDivision=duo && !CGRectIsNull(division) && division.size.height>division.size.width;
+    // Book-style left/right opening and the wide, fully-open inner screen use
+    // the whole display; portrait/top-bottom and the outer screen keep controls.
+    BOOL wideDuo=duoUsesWideFullscreen(duoHardware,verticalDivision,hingeClosed,safe.size.width,safe.size.height);
+    [self setFullScreenPresentation:fullscreenPresentation.update(wideDuo)];
     CGFloat split=duo ? CGRectGetMidY(self.view.bounds) : safe.origin.y+safe.size.height*0.53;
     if(duo && !CGRectIsNull(division) && !verticalDivision) split=CGRectGetMidY(division);
     split=std::clamp(split,safe.origin.y+100,CGRectGetMaxY(safe)-100);
@@ -407,7 +413,7 @@ static UIImage* frameImage(Player* p) {
         auto panels=phoneLandscapePanels(safe);
         self.topPanel.frame=panels[0];self.keyboard.frame=panels[1];
     }
-    CGRect fullscreenAvailable=safe;
+    CGRect fullscreenAvailable=wideDuo ? CGRectInset(safe,8,8) : safe;
     NSMutableArray* occlusions=[NSMutableArray new];
 #if __has_include(<UIKit/UIViewReservedRegion.h>)
     if(@available(iOS 27.1,*)) {
@@ -459,7 +465,12 @@ static UIImage* frameImage(Player* p) {
 }
 - (void)toggleFullScreen {
     if(fetching || self.presentedViewController) return;
-    [self releaseKeys];fullScreen=!fullScreen;
+    [self setFullScreenPresentation:fullscreenPresentation.toggle()];
+    [self.view setNeedsLayout];[self.view layoutIfNeeded];
+}
+- (void)setFullScreenPresentation:(BOOL)value {
+    if(fullScreen==value) return;
+    [self releaseKeys];fullScreen=value;
     if(!fullScreen) fullscreenMenuPaused=NO;
 #ifdef PC98PLAYER_TESTING
     [self.audioProbe event:fullScreen?@"fullscreen-enter":@"fullscreen-exit"];
@@ -471,7 +482,6 @@ static UIImage* frameImage(Player* p) {
     [self.monitor removeFromSuperview];
     if(fullScreen) [self.view addSubview:self.monitor];else [self.topPanel addSubview:self.monitor];
     [self setNeedsStatusBarAppearanceUpdate];[self setNeedsUpdateOfHomeIndicatorAutoHidden];
-    [self.view setNeedsLayout];[self.view layoutIfNeeded];
 }
 - (void)message:(NSString*)message {
     UIAlertController* a=[UIAlertController alertControllerWithTitle:@"PC98PLAYER" message:message preferredStyle:UIAlertControllerStyleAlert];
