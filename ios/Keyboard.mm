@@ -292,7 +292,8 @@ static std::vector<HardwareKey> hardwareKeys() {
         if(spec.scan>=0x52 && spec.scan<=0x6B) button.modifier=YES;
         [button setNeedsDisplay];
     }
-    self.optionsButton.frame=[self hardwareRect:CGRectMake(400,14,116,28)];
+    // Use the full-height blank beside XFER; the top case margin is compressed.
+    self.optionsButton.frame=[self hardwareRect:CGRectMake(475,237,57,30)];
     [self bringSubviewToFront:self.optionsButton];
     [self setNeedsDisplay];
 }
