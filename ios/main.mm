@@ -90,6 +90,38 @@ static UIImage* frameImage(Player* p) {
 }
 @end
 
+// A full-window list avoids the fold-aware alert's short, upper-panel viewport.
+@interface GameLocationsController : UITableViewController
+@property(copy) NSString* message;
+@property(strong) NSMutableArray<NSDictionary*>* choices;
+- (void)addTitle:(NSString*)title destructive:(BOOL)destructive action:(void (^)(void))action;
+@end
+@implementation GameLocationsController
+- (instancetype)init { if((self=[super initWithStyle:UITableViewStyleInsetGrouped])) self.choices=[NSMutableArray new];return self; }
+- (void)viewDidLoad {
+    [super viewDidLoad];self.title=@"ゲームデータの場所";
+    self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"閉じる" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
+    self.tableView.rowHeight=UITableViewAutomaticDimension;self.tableView.estimatedRowHeight=60;
+}
+- (void)addTitle:(NSString*)title destructive:(BOOL)destructive action:(void (^)(void))action {
+    [self.choices addObject:@{@"title":title,@"destructive":@(destructive),@"action":[action copy]}];
+}
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return self.choices.count; }
+- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return self.message; }
+- (UITableViewCell*)tableView:(UITableView*)tableView cellForRowAtIndexPath:(NSIndexPath*)index {
+    UITableViewCell* cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
+    NSDictionary* choice=self.choices[index.row];cell.textLabel.text=choice[@"title"];cell.textLabel.numberOfLines=0;
+    cell.textLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];cell.textLabel.adjustsFontForContentSizeCategory=YES;
+    cell.textLabel.textColor=[choice[@"destructive"] boolValue]?UIColor.systemRedColor:UIColor.labelColor;
+    cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;return cell;
+}
+- (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)index {
+    void (^action)(void)=self.choices[index.row][@"action"];
+    [self dismissViewControllerAnimated:YES completion:action];
+}
+- (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
+@end
+
 @interface GameOptionsController : UITableViewController
 @property NSInteger soundBoard;
 @property NSInteger videoColors;
@@ -735,8 +767,9 @@ static UIImage* frameImage(Player* p) {
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)showLibrary {
-    if(fetching) return;
-    UIAlertController* menu=[UIAlertController alertControllerWithTitle:@"ゲームデータの場所" message:@"「開く」から、このiPhone内／ファイルで接続したNASのフォルダを選べます。元データは書き換えません。" preferredStyle:UIAlertControllerStyleAlert];
+    if(fetching || self.presentedViewController) return;
+    GameLocationsController* menu=[GameLocationsController new];
+    menu.message=@"「開く」から、このiPhone内／ファイルで接続したNASのフォルダを選べます。元データは書き換えません。";
     __weak PlayerController* weak=self;
 #if TARGET_OS_SIMULATOR
     NSString* nasPath=[NSUserDefaults.standardUserDefaults stringForKey:@"PC98SimulatorNASRoot"];
@@ -753,21 +786,21 @@ static UIImage* frameImage(Player* p) {
             if(!directory.boolValue || symlink.boolValue || ![NSFileManager.defaultManager fileExistsAtPath:iniURL.path]) continue;
             Ini ini;ini.load(iniURL.fileSystemRepresentation);
             NSString* title=text(ini.get("PC98PLAYER.TITLE"));if(!title.length) title=source.lastPathComponent;
-            [menu addAction:[UIAlertAction actionWithTitle:[title stringByAppendingString:@"（NAS直接）"] style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+            [menu addTitle:[title stringByAppendingString:@"（NAS直接）"] destructive:NO action:^ {
                 // openCache installs the same copy-on-write save overlay before launching.
                 [weak openCache:source identifier:gameID(source)];
-            }]];
+            }];
         }
     }
 #endif
-    for(NSDictionary* entry in GameLibrary.entries) [menu addAction:[UIAlertAction actionWithTitle:entry[@"name"] style:UIAlertActionStyleDefault handler:^(UIAlertAction* a) {
+    for(NSDictionary* entry in GameLibrary.entries) [menu addTitle:entry[@"name"] destructive:NO action:^ {
         NSURL* original=[NSURL fileURLWithPath:entry[@"path"] isDirectory:YES];
         NSString* identifier=gameID(original);
         NSURL* cached=area(NSCachesDirectory,[@"PC98Games/" stringByAppendingString:identifier]);
         if([GameLibrary isUsableCacheAtURL:cached]) { [weak openCache:cached identifier:identifier]; return; }
         NSError* error=nil; NSURL* source=[GameLibrary resolveEntry:entry error:&error];
         if(source) [weak cacheSource:source]; else [weak message:@"場所へのアクセスを復元できません。「開く」で再選択してください。"];
-    }]];
+    }];
     // Also expose complete caches staged for device testing; the originals stay on Mac/NAS.
     NSMutableSet<NSString*>* registered=[NSMutableSet new];
     for(NSDictionary* entry in GameLibrary.entries)
@@ -783,13 +816,15 @@ static UIImage* frameImage(Player* p) {
         Ini ini; ini.load(iniURL.fileSystemRepresentation);
         NSString* title=text(ini.get("PC98PLAYER.TITLE"));
         if(!title.length) title=identifier;
-        [menu addAction:[UIAlertAction actionWithTitle:[title stringByAppendingString:@"（キャッシュ）"] style:UIAlertActionStyleDefault
-            handler:^(UIAlertAction* a) { [weak openCache:cache identifier:identifier]; }]];
+        [menu addTitle:[title stringByAppendingString:@"（キャッシュ）"] destructive:NO
+            action:^ { [weak openCache:cache identifier:identifier]; }];
     }
-    [menu addAction:[UIAlertAction actionWithTitle:@"オリジナルDOSデモ" style:UIAlertActionStyleDefault handler:^(UIAlertAction* a) { [weak demo]; }]];
-    [menu addAction:[UIAlertAction actionWithTitle:@"ゲーム本体のキャッシュを消去" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* a) { [weak clearCache]; }]];
-    [menu addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
-    [self presentViewController:menu animated:YES completion:nil];
+    [menu addTitle:@"オリジナルDOSデモ" destructive:NO action:^ { [weak demo]; }];
+    [menu addTitle:@"ゲーム本体のキャッシュを消去" destructive:YES action:^ { [weak clearCache]; }];
+    UINavigationController* nav=[[UINavigationController alloc] initWithRootViewController:menu];
+    // Keep the player hierarchy attached so Duo hinge notifications continue.
+    nav.modalPresentationStyle=UIModalPresentationOverFullScreen;
+    [self presentViewController:nav animated:YES completion:nil];
 }
 - (void)clearCache {
     [self stopGame]; self.monitor.image=nil;
