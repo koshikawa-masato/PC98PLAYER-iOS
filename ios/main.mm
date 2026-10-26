@@ -213,6 +213,20 @@ static UIImage* frameImage(Player* p) {
     self.displayLink=[CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
     [self.displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
     [NSFileManager.defaultManager createDirectoryAtURL:area(NSDocumentDirectory,@"Games") withIntermediateDirectories:YES attributes:nil error:nil];
+#if TARGET_OS_SIMULATOR
+    // The simulator can read the Mac's mounted NAS without an iOS SMB provider.
+    // Persist only its root path; credentials remain managed by macOS.
+    NSArray<NSString*>* simulatorArguments=NSProcessInfo.processInfo.arguments;
+    NSUInteger nasIndex=[simulatorArguments indexOfObject:@"--simulator-nas-root"];
+    if(nasIndex!=NSNotFound && nasIndex+1<simulatorArguments.count) {
+        NSString* root=simulatorArguments[nasIndex+1].stringByStandardizingPath;BOOL directory=NO;
+        if(root.isAbsolutePath && [NSFileManager.defaultManager fileExistsAtPath:root isDirectory:&directory] && directory) {
+            [NSUserDefaults.standardUserDefaults setObject:root forKey:@"PC98SimulatorNASRoot"];
+            self.status.text=@"NASを登録しました。「場所」からゲームを選べます。";
+        } else self.status.text=@"NASのフォルダーが見つかりません。Macの共有接続を確認してください。";
+    }
+#endif
+
 #if __has_include(<UIKit/UIHingeInteraction.h>)
     if(@available(iOS 27.1,*)) {
         UIHingeInteraction* interaction=[[UIHingeInteraction alloc] initWithUpdateHandler:^(UIHingeInteraction* interaction,UIHingeInteractionUpdate* update) {
@@ -610,6 +624,12 @@ static UIImage* frameImage(Player* p) {
     player=std::make_unique<Player>(); mac_install_font(settings.font_name,settings.font_shift); std::string error;
     if(!player->init(settings,&error)) { [self stopGame]; [self message:text(error)]; return; }
     paused=NO; nextFrame=CACurrentMediaTime(); self.status.text=@"実行中 — ゲーム本体はキャッシュ、保存データは別領域";
+#if TARGET_OS_SIMULATOR
+    NSString* nasPath=[NSUserDefaults.standardUserDefaults stringForKey:@"PC98SimulatorNASRoot"];
+    if(nasPath.length && [self.currentCache.path hasPrefix:[nasPath stringByAppendingString:@"/"]])
+        self.status.text=@"実行中 — NASを直接読込、保存データは別領域";
+#endif
+
     [self startAudio]; [self becomeFirstResponder];
     NSString* warnings=@"";
     for(auto* e:{&player->floppy_error,&player->cd_error,&player->rhythm_error}) if(!e->empty()) warnings=[warnings stringByAppendingFormat:@"%@\n",text(*e)];
@@ -674,6 +694,28 @@ static UIImage* frameImage(Player* p) {
     if(fetching) return;
     UIAlertController* menu=[UIAlertController alertControllerWithTitle:@"ゲームデータの場所" message:@"「開く」から、このiPhone内／ファイルで接続したNASのフォルダを選べます。元データは書き換えません。" preferredStyle:UIAlertControllerStyleAlert];
     __weak PlayerController* weak=self;
+#if TARGET_OS_SIMULATOR
+    NSString* nasPath=[NSUserDefaults.standardUserDefaults stringForKey:@"PC98SimulatorNASRoot"];
+    if(nasPath.length) {
+        NSError* nasError=nil;
+        NSArray<NSURL*>* folders=[NSFileManager.defaultManager contentsOfDirectoryAtURL:[NSURL fileURLWithPath:nasPath isDirectory:YES]
+            includingPropertiesForKeys:@[NSURLIsDirectoryKey,NSURLIsSymbolicLinkKey] options:NSDirectoryEnumerationSkipsHiddenFiles error:&nasError];
+        menu.message=nasError?@"NASに接続できません。Macで共有をマウントし直してください。":@"NASのゲームを直接読み込みます。保存データはシミュレータ内の別領域に保持し、元データは変更しません。";
+        for(NSURL* source in [folders sortedArrayUsingComparator:^NSComparisonResult(NSURL* a,NSURL* b) { return [a.lastPathComponent localizedStandardCompare:b.lastPathComponent]; }]) {
+            NSNumber* directory=nil;NSNumber* symlink=nil;
+            [source getResourceValue:&directory forKey:NSURLIsDirectoryKey error:nil];
+            [source getResourceValue:&symlink forKey:NSURLIsSymbolicLinkKey error:nil];
+            NSURL* iniURL=[source URLByAppendingPathComponent:@"PC98PLAYER.INI"];
+            if(!directory.boolValue || symlink.boolValue || ![NSFileManager.defaultManager fileExistsAtPath:iniURL.path]) continue;
+            Ini ini;ini.load(iniURL.fileSystemRepresentation);
+            NSString* title=text(ini.get("PC98PLAYER.TITLE"));if(!title.length) title=source.lastPathComponent;
+            [menu addAction:[UIAlertAction actionWithTitle:[title stringByAppendingString:@"（NAS直接）"] style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+                // openCache installs the same copy-on-write save overlay before launching.
+                [weak openCache:source identifier:gameID(source)];
+            }]];
+        }
+    }
+#endif
     for(NSDictionary* entry in GameLibrary.entries) [menu addAction:[UIAlertAction actionWithTitle:entry[@"name"] style:UIAlertActionStyleDefault handler:^(UIAlertAction* a) {
         NSURL* original=[NSURL fileURLWithPath:entry[@"path"] isDirectory:YES];
         NSString* identifier=gameID(original);
