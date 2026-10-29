@@ -18,7 +18,7 @@ IOS_VERSION=0.2.0 IOS_BUILD_NUMBER=6 tools/archive_ios_testflight.sh
 ```
 
 アーカイブ、UUID照合済みdSYM、IPAを`out/TestFlight/`へ作成します。
-Transporterで`out/TestFlight/export/PC98PLAYER.ipa`を追加し、デリバリします。
+Transporterで`out/TestFlight/export/RetroDOS Player.ipa`を追加し、デリバリします。
 証明書・秘密鍵・プロファイルはリポジトリへコミットしません。
 
 ## Appleでの処理後
@@ -50,3 +50,7 @@ IOS_BUILD_ROOT=build/appstore-gm IOS_VERSION=0.2.0 IOS_BUILD_NUMBER=6 \
 
 `DEVELOPER_DIR`はコマンド単位で指定し、システムのXcode選択を変更する必要はありません。
 Appleへ送るIPAのInfo.plistにあるDTXcodeBuild／DTSDKBuildも確認します。値を手で書き換えるのではなく、正式なツールチェーンでビルドします。
+
+## 2026年10月29日 名称変更対応
+
+ビルド6の表示名はRetroDOS Playerです。正式版Xcode 27.1 (27A9275)、SDK 24A94232でアーカイブ・配布署名・エクスポートを確認しました。Bundle IDと設定ファイル形式は維持しています。エクスポート後のIPA名も表示名に合わせて `RetroDOS Player.ipa` になります。旧名のIPAは以前のビルドなので選択しないでください。

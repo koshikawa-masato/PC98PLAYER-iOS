@@ -3,8 +3,8 @@
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>PC98PLAYERiOS</string>
 <key>CFBundleIdentifier</key><string>@PC98PLAYER_IOS_BUNDLE_ID@</string>
-<key>CFBundleName</key><string>PC98PLAYER</string>
-<key>CFBundleDisplayName</key><string>PC98PLAYER iOS</string>
+<key>CFBundleName</key><string>RetroDOS Player</string>
+<key>CFBundleDisplayName</key><string>RetroDOS Player</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>@PC98PLAYER_IOS_VERSION@</string>
 <key>CFBundleVersion</key><string>@PC98PLAYER_IOS_BUILD@</string>

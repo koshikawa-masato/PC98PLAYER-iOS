@@ -145,11 +145,11 @@ static UIImage* frameImage(Player* p) {
     UITableViewCell* cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
     if(index.section==0) {
         cell.textLabel.text=index.row==0?@"OPN":@"OPNA";
-        cell.detailTextLabel.text=index.row==0?@"PC-9801-26 / YM2203":@"PC-9801-86 / YM2608";
+        cell.detailTextLabel.text=index.row==0?@"YM2203":@"YM2608";
         cell.accessoryType=(self.soundBoard==(index.row==0?26:86))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
     } else if(index.section==1) {
         cell.textLabel.text=index.row==0?@"16色":@"256色";
-        cell.detailTextLabel.text=index.row==0?@"標準グラフィック":@"PC-9821拡張グラフィック";
+        cell.detailTextLabel.text=index.row==0?@"標準グラフィック":@"拡張グラフィック";
         cell.accessoryType=(self.videoColors==(index.row==0?16:256))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
     } else if(index.section==2) {
         cell.textLabel.text=index.row==0?@"自動判別":index.row==1?@"Duo上下表示を固定":@"ボスがきた";
@@ -484,7 +484,7 @@ static UIImage* frameImage(Player* p) {
     [self setNeedsStatusBarAppearanceUpdate];[self setNeedsUpdateOfHomeIndicatorAutoHidden];
 }
 - (void)message:(NSString*)message {
-    UIAlertController* a=[UIAlertController alertControllerWithTitle:@"PC98PLAYER" message:message preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController* a=[UIAlertController alertControllerWithTitle:@"RetroDOS Player" message:message preferredStyle:UIAlertControllerStyleAlert];
     [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]]; [self presentViewController:a animated:YES completion:nil];
 }
 - (void)updateScan:(int)scan {
@@ -848,7 +848,7 @@ static UIImage* frameImage(Player* p) {
     [NSFileManager.defaultManager createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:nil];
     const uint8_t code[]={0xBA,0x13,0x01,0xB4,0x09,0xCD,0x21,0xB4,0x08,0xCD,0x21,0xB4,0x02,0x88,0xC2,0xCD,0x21,0xEB,0xF4};
     NSMutableData* com=[NSMutableData dataWithBytes:code length:sizeof(code)];
-    std::string message=hostfs::to_sjis("PC98PLAYER for iOS\r\n\r\n日本語 / PC-98 キーボード\r\n\r\nTouch keys below. SHIFT / CTRL / GRPH latch.\r\n$");
+    std::string message=hostfs::to_sjis("RetroDOS Player\r\n\r\n日本語 / レトロキーボード\r\n\r\nTouch keys below. SHIFT / CTRL / GRPH latch.\r\n$");
     [com appendBytes:message.data() length:message.size()]; [com writeToURL:[root URLByAppendingPathComponent:@"DEMO.COM"] atomically:YES];
     [@"[PC98PLAYER]\nStart=DEMO.COM\nMIDI=0\nRhythmROM=0\n" writeToURL:[root URLByAppendingPathComponent:@"PC98PLAYER.INI"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
     [self openCache:root identifier:@"demo"];

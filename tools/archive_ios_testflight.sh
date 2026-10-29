@@ -33,4 +33,4 @@ shutil.copytree(symbols,archive/'dSYMs'/symbols.name,dirs_exist_ok=True)
 PYTHON
 xcodebuild -exportArchive -archivePath "$archive" -exportPath out/TestFlight/export \
   -exportOptionsPlist ios/ExportOptions-TestFlight.plist
-printf '\nIPA: %s/out/TestFlight/export/PC98PLAYER.ipa\n' "$PWD"
+printf '\nIPA: %s/out/TestFlight/export/RetroDOS Player.ipa\n' "$PWD"

@@ -1,22 +1,22 @@
 # App Store申請用下書き
 
-対象: PC98PLAYER iOS 0.2.0 (5)
-状態: 2026年10月26日にApp Store審査へ提出済み。実際の提出記録は app-store-submission.md を参照。以下は作成時の下書きです。
+対象: RetroDOS Player 0.2.0（名称変更対応案）
+状態: 2026年10月29日のリジェクト対応。以下は再提出用の原稿で、App Store Connectへの反映・再提出は未完了。
 
 ## 日本語メタデータ
 
-名前: PC98PLAYER
-サブタイトル: PC-98ソフトを手元のiPhoneで
-キーワード: PC98,PC-98,PC9801,エミュレータ,レトロ,キーボード,DOS
+名前: RetroDOS Player
+サブタイトル: レトロなDOSゲームを手元で
+キーワード: DOS,レトロ,ゲーム,エミュレータ,キーボード,マウス,NAS,16色,256色
 サポートURL候補: https://github.com/koshikawa-masato/PC98PLAYER-iOS/issues
 
 ### 概要
 
-PC98PLAYERは、PC-98用ソフトウェアをiPhoneやiPadで実行するためのプレイヤーです。
+RetroDOS Playerは、日本の16ビットパソコン向けDOSソフトウェアに対応する互換プレイヤーです。
 BIOSやROMファイルを追加せずに使える独自の互換実装を搭載しています。
 すべてのソフトウェアの動作を保証するものではありません。
 
-・PC-98をイメージした画面とソフトキーボード
+・レトロなモニター表示と日本語ソフトキーボード
 ・複数キーの同時押し、VF1〜VF5、テンキー、外付けキーボード入力
 ・16色／256色表示、OPN／OPNA音源の切り替え
 ・縦画面、横画面、ダブルタップによる全画面表示
@@ -28,16 +28,16 @@ BIOSやROMファイルを追加せずに使える独自の互換実装を搭載�
 Mac／NAS上の元データは書き換えず、端末には実行用キャッシュを作成し、保存データを別に保持します。
 ゲームデータなしでも「場所」からオリジナルDOSデモを起動し、画面表示やキーボード入力を試せます。
 
-本アプリはNECの公式製品ではありません。
+本アプリは独立した開発者による互換プレイヤーです。
 
 ## App Reviewメモ案
 
 No sign-in is required. No BIOS, ROM, or third-party game files are included or required for the built-in demo.
 
-1. Launch PC98PLAYER.
-2. Tap 場所 (Locations), the second button below the monitor.
+1. Launch RetroDOS Player.
+2. Tap 場所 (Locations) below the monitor.
 3. Select オリジナルDOSデモ (Original DOS demo).
-4. The monitor displays PC98PLAYER for iOS and keyboard instructions.
+4. The monitor displays RetroDOS Player and keyboard instructions.
 5. Tap letter keys. The DOS demo echoes the input. Shift can be held with another key or toggled by a single tap.
 6. Rotate the iPhone to landscape to display the monitor on the left and keyboard on the right.
 7. Double-tap the monitor to enter fullscreen; double-tap again to return.
@@ -47,7 +47,7 @@ For user-supplied software, tap 開く (Open) and select a folder containing PC9
 
 ## プライバシーポリシー本文案
 
-PC98PLAYER iOSは、利用者アカウントの作成を必要とせず、広告・アクセス解析・トラッキング用SDKを組み込んでいません。
+RetroDOS Playerは、利用者アカウントの作成を必要とせず、広告・アクセス解析・トラッキング用SDKを組み込んでいません。
 アプリ自体がゲームデータ、キー入力、セーブデータを開発者のサーバーへ送信することはありません。
 
 利用者がファイルアプリで選択したゲームフォルダを読み込み、実行用データを端末のキャッシュに保存します。
@@ -62,15 +62,11 @@ NAS・クラウドのファイル提供サービスを選択した場合、そ�
 お問い合わせ先候補: https://github.com/koshikawa-masato/PC98PLAYER-iOS/issues
 GitHubへ問い合わせる場合は公開されるため、個人情報やゲーム本体を投稿しないでください。
 
-## 提出前の残作業
+## リジェクト対応・審査回答案
 
-- App Store Connectへ再ログインして最新の必須項目を確認
-- 無料／有料と配信地域を決定
-- プライバシーポリシーを公開URLへ設置し、アプリ内からも参照可能にする
-- App Privacy回答、年齢区分、カテゴリ、権利情報を実装と配布内容に合わせて入力
-- 審査用連絡先を設定（電話番号等はこのファイルへ記録しない）
-- オリジナルデモを使ったiPhone／iPad等の必須スクリーンショットを取得・登録
-- App Storeのバージョンとビルド0.2.0 (5)の選択を確認
-- 縦横切り替え時の短い音声の途切れは既知。配布判断前に確認
+Thank you for your review. We have changed the app name to RetroDOS Player and revised the subtitle to remove the term “iPhone”. We have also removed the previous platform branding from the promotional description and keywords. The app is an independently developed compatibility player; no BIOS, ROM, or third-party game data is bundled. The built-in DOS demo is original and can be used without external files.
 
-Appleによる承認は未取得。この下書きの作成は審査提出や承認を意味しません。
+The internal configuration filename PC98PLAYER.INI is retained for compatibility with existing user data and the original open-source project. It is not the app's display name.
+
+注意: 上記回答は反映後に送信する。新ビルドのアップロード、スクリーンショット差し替え、公開ポリシー更新は未完了。
+元プロジェクトの著作権表示・MITライセンスは維持する。
