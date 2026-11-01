@@ -1,12 +1,12 @@
 # App Store申請用下書き
 
 対象: RetroDOS Player 0.2.0（名称変更対応案）
-状態: 2026年10月29日のリジェクト対応。以下は再提出用の原稿で、App Store Connectへの反映・再提出は未完了。
+状態: 2026年11月1日に掲載情報を反映し、0.2.0 (6)を再提出。App Store Connectで審査待ちを確認済み。実際の記録は app-store-submission.md を参照。
 
 ## 日本語メタデータ
 
 名前: RetroDOS Player
-サブタイトル: レトロなDOSゲームを手元で
+サブタイトル: レトロDOSソフトを手元で楽しむ
 キーワード: DOS,レトロ,ゲーム,エミュレータ,キーボード,マウス,NAS,16色,256色
 サポートURL候補: https://github.com/koshikawa-masato/PC98PLAYER-iOS/issues
 
@@ -68,5 +68,5 @@ Thank you for your review. We have changed the app name to RetroDOS Player and r
 
 The internal configuration filename PC98PLAYER.INI is retained for compatibility with existing user data and the original open-source project. It is not the app's display name.
 
-注意: 上記回答は反映後に送信する。新ビルドのアップロード、スクリーンショット差し替え、公開ポリシー更新は未完了。
+2026年11月1日: 掲載名・サブタイトルを確認し、概要・キーワード・審査メモを更新。ビルド6を選択し、iPhone中型・大型およびiPadの画像を差し替え。新画像のApple側処理完了後、0.2.0 (6)を再提出し審査待ちを確認。
 元プロジェクトの著作権表示・MITライセンスは維持する。
