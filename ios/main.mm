@@ -10,6 +10,7 @@
 #include "AudioOut.h"
 #include "font.h"
 #include "player.h"
+#include "GraphicsSettings.h"
 #include "hostfs.h"
 #include <memory>
 #include <set>
@@ -50,10 +51,10 @@ static NSString* gameID(NSURL* url) {
     NSMutableString* key=[NSMutableString new]; for(unsigned char c:hash) [key appendFormat:@"%02x",c]; return key;
 }
 static UIImage* frameImage(Player* p) {
-    NSData* bytes=[NSData dataWithBytes:p->fb length:sizeof(p->fb)];
+    NSData* bytes=[NSData dataWithBytes:p->fb length:640*p->fb_h*sizeof(uint32_t)];
     CGDataProviderRef provider=CGDataProviderCreateWithCFData((__bridge CFDataRef)bytes);
     CGColorSpaceRef colors=CGColorSpaceCreateDeviceRGB();
-    CGImageRef image=CGImageCreate(640,400,8,32,640*4,colors,kCGBitmapByteOrder32Little|kCGImageAlphaNoneSkipFirst,provider,nullptr,false,kCGRenderingIntentDefault);
+    CGImageRef image=CGImageCreate(640,p->fb_h,8,32,640*4,colors,kCGBitmapByteOrder32Little|kCGImageAlphaNoneSkipFirst,provider,nullptr,false,kCGRenderingIntentDefault);
     UIImage* result=[UIImage imageWithCGImage:image]; CGImageRelease(image); CGColorSpaceRelease(colors); CGDataProviderRelease(provider); return result;
 }
 @interface FileChooser : UITableViewController
@@ -297,6 +298,11 @@ static UIImage* frameImage(Player* p) {
             else [self message:@"指定されたゲームのキャッシュがありません。"];
         }
     }
+    NSUInteger verifyIndex=[arguments indexOfObject:@"--verify-game-frames"];
+    if(verifyIndex!=NSNotFound && verifyIndex+1<arguments.count && player) {
+        int count=std::clamp(arguments[verifyIndex+1].intValue,60,18000);
+        dispatch_async(dispatch_get_main_queue(),^{ [weak verifyGameFrames:count]; });
+    }
     NSUInteger probeIndex=[arguments indexOfObject:@"--audio-probe"];
     if(probeIndex!=NSNotFound && probeIndex+1<arguments.count) {
         NSString* label=arguments[probeIndex+1];
@@ -306,12 +312,12 @@ static UIImage* frameImage(Player* p) {
         [NSTimer scheduledTimerWithTimeInterval:5 repeats:YES block:^(NSTimer* timer) {
             PlayerController* s=weak;if(!s || !s->player) return;
             Machine* m=s->player->m;std::set<uint32_t> colors;
-            for(uint32_t pixel:s->player->fb) colors.insert(pixel);
+            for(int i=0;i<640*s->player->fb_h;++i) colors.insert(s->player->fb[i]);
             int peak=0;for(int16_t sample:s->player->audio) peak=std::max(peak,std::abs((int)sample));
             size_t buffered=0;uint64_t underrun=0;{ std::lock_guard<std::mutex> lock(s->audio.mutex);buffered=s->audio.samples.size();underrun=s->audio.underrunFrames; }
             AudioQueueParameterValue ramp=0;if(s->audio.queue) AudioQueueGetParameter(s->audio.queue,kAudioQueueParam_VolumeRampTime,&ramp);
             NSDictionary* report=@{@"game":s.currentID ?: @"",@"running":@(!s->paused),@"guestQuit":@(m->quit),
-                @"videoColors":@(m->cfg.video_colors),@"pegcActive":@(m->pegc.enabled),@"screenColorCount":@(colors.size()),
+                @"videoColors":@(m->cfg.video_colors),@"pegcActive":@(m->pegc.on),@"screenColorCount":@(colors.size()),@"framebufferHeight":@(s->player->fb_h),
                 @"soundBoard":@(m->cfg.sound_board),@"audioPeak":@(peak),@"frame":@(m->frame_count),
                 @"audioUnderrunFrames":@(underrun),@"audioVolumeRampSeconds":@(ramp),@"audioQueueGeneration":@(s->audio.generation),@"audioStarted":@(s->audio.started),@"audioPaused":@(s->audio.paused),@"audioQueuedSamples":@(buffered)};
             [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]
@@ -509,7 +515,7 @@ static UIImage* frameImage(Player* p) {
 - (void)pressesCancelled:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event { [self releaseKeys]; }
 - (void)moveMouse:(UIPanGestureRecognizer*)pan {
     CGPoint delta=[pan translationInView:self.monitor]; [pan setTranslation:CGPointZero inView:self.monitor];
-    CGFloat scale=MIN(self.monitor.bounds.size.width/640,self.monitor.bounds.size.height/400);
+    CGFloat scale=MIN(self.monitor.bounds.size.width/640,self.monitor.bounds.size.height/(player?player->fb_h:400));
     if(player && !paused && scale>0) machine_mouse(player->m,(int)(delta.x/scale),(int)(delta.y/scale),mouseButtons);
 }
 - (void)click:(int)button {
@@ -682,7 +688,11 @@ static UIImage* frameImage(Player* p) {
     NSNumber* sound=[NSUserDefaults.standardUserDefaults objectForKey:@"PC98SoundBoard"];
     NSNumber* colors=[NSUserDefaults.standardUserDefaults objectForKey:@"PC98VideoColors"];
     if(sound) ps.cfg.sound_board=sound.integerValue==26?26:86;
-    if(colors) ps.cfg.video_colors=colors.integerValue==256?256:16;
+    if(colors) apple_set_video_colors(ps.cfg,(int)colors.integerValue);
+    else {
+        // The existing 16/256-color option is authoritative on iOS; no blocking prompt.
+        apple_set_video_colors(ps.cfg,ps.cfg.pc9821 || ps.cfg.video_colors==256 ? 256 : 16);
+    }
     ps.cfg.midi=0; ps.cfg.trace=0; ps.sample_rate=std::clamp(ps.sample_rate,8000,192000);
     if(ps.cfg.start.empty() && !ps.cfg.boot_fd) { [self chooseProgram:root settings:ps]; return; }
     [self launchSettings:ps];
@@ -854,6 +864,43 @@ static UIImage* frameImage(Player* p) {
     [self openCache:root identifier:@"demo"];
 }
 #ifdef PC98PLAYER_TESTING
+// Debug-only, input-driven compatibility check inside the real simulator app.
+- (void)verifyGameFrames:(int)total {
+    if(!player) return;
+    [self suspend];
+    __weak PlayerController* weak=self;
+    __block int frame=0,peak=0;
+    [NSTimer scheduledTimerWithTimeInterval:0.001 repeats:YES block:^(NSTimer* timer) {
+        PlayerController* s=weak;if(!s || !s->player) { [timer invalidate];return; }
+        for(int n=0;n<60 && frame<total && !s->player->m->quit;++n,++frame) {
+            for(int keyFrame : {300,600,900,1200,1800,2400,3000,3600,5000,8000,11000,14000}) {
+                if(frame==keyFrame) machine_key(s->player->m,0x1c,true);
+                if(frame==keyFrame+3) machine_key(s->player->m,0x1c,false);
+            }
+            for(int mouseFrame : {2000,2800,3500,6000,9000,12000,15000}) {
+                if(frame==mouseFrame || frame==mouseFrame+3) {
+                    auto& mouse=s->player->m->mouse;
+                    machine_mouse(s->player->m,320-mouse.x,200-mouse.y,frame==mouseFrame?1:0);
+                }
+            }
+            s->player->run_frame();
+            for(int16_t sample:s->player->audio) peak=std::max(peak,std::abs((int)sample));
+        }
+        s.monitor.image=frameImage(s->player.get());
+        if(frame<total && !s->player->m->quit) return;
+        [timer invalidate];[s releaseKeys];
+        Machine* m=s->player->m;std::set<uint32_t> colors;
+        for(int i=0;i<640*s->player->fb_h;++i) colors.insert(s->player->fb[i]);
+        int imageHeight=s.monitor.image.CGImage? (int)CGImageGetHeight(s.monitor.image.CGImage):0;
+        NSDictionary* report=@{@"game":s.currentID ?: @"",@"frames":@(frame),@"requestedFrames":@(total),@"guestQuit":@(m->quit),
+            @"videoColors":@(m->cfg.video_colors),@"pc9821":@(m->cfg.pc9821),@"pegcActive":@(m->pegc.on),
+            @"screenColorCount":@(colors.size()),@"framebufferHeight":@(s->player->fb_h),@"imageHeight":@(imageHeight),@"audioPeak":@(peak)};
+        NSData* json=[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil];
+        [json writeToURL:[area(NSDocumentDirectory,@"") URLByAppendingPathComponent:@"compatibility-result.json"] atomically:YES];
+        [UIImagePNGRepresentation(s.monitor.image) writeToURL:[area(NSDocumentDirectory,@"") URLByAppendingPathComponent:@"compatibility-frame.png"] atomically:YES];
+        s.status.text=@"検証完了 — ▶︎で再開";
+    }];
+}
 - (void)startAudioProbe:(NSString*)label {
     self.audioProbe=[[AudioCaptureProbe alloc] initWithDirectory:area(NSDocumentDirectory,[@"audio-probe-" stringByAppendingString:label])];
     __weak PlayerController* weak=self;

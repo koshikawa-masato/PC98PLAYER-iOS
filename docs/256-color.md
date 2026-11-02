@@ -1,17 +1,54 @@
-# BIOS-free 256-color display
+# PC-9821 の 256 色グラフィック（PEGC）
 
-`VideoColors=256` exposes the PC-9821 extended-graphics capability through the existing HLE work area. Reset still starts in the ordinary display mode. Guest software selects its original 256-color driver and switches display mode through I/O. `VideoColors=16` is the default and keeps the old capability flags and rendering path.
+## 有効にする
 
-The implementation is independently written for this project. No firmware images, other emulator code, or patched game executables are included. Register behavior was checked against the public hardware description at https://www.satotomi.com/sl9821/sl9821_tec5.html .
+`PC98PLAYER.INI` の `[PC98PLAYER]` に `PC9821=1` と書くと、PC-9821（256 色のグラフィックあり）として動きます。
+`VideoColors=256`（PR #2 の書き方）も同じ意味です。
 
-The current target is 640×400 banked packed-pixel graphics: 512 KiB of VRAM, two 32 KiB CPU windows, 256 RGB palette entries, and display pages. Basic planar CPU/latch transfers, plane/bit masks and ROP operations support the game's drawing path. Text uses the existing overlay. PEGC state is saved in an optional snapshot chunk; older snapshots remain readable.
+```ini
+[PC98PLAYER]
+Start=GAME98.BAT
+PC9821=1
+```
 
-This is not a complete PC-9821 hardware model. 480-line/31 kHz output, the high-address linear framebuffer, and advanced 32-bit planar shift/transfer behavior are not covered. N88-BASIC remains outside this feature.
+- `PC9821=0`: PC-9801 として動きます。256 色には切り替わりません。
+- 書かないとき: ソフトが PC-9821 かどうかを調べた（BIOS の 045Ch を読んだ・ポート 09A0h を使った・ポート 6Ah や INT 18h AH=4Dh や AVGDRV で 256 色にしようとした）ところで「PC-9821 として動かしますか？」と尋ね、答えを INI に書きます。
 
-Validation: the regression test checks palette readback, 256 distinct output colors, both VRAM windows and their boundary, page selection, planar masks/ROP, snapshot roundtrip and legacy snapshots. Existing 16-color/core/overlay tests also pass. Rance IV selects its bundled AGS_9821 driver without modification and reaches the opening game scene with extended graphics active. Full-game compatibility requires further play testing.
+起動直後は 16 色です。ソフトが 256 色に切り替えたときだけ 256 色になります。16 色のソフトを 256 色に変えるものではありません。
 
-On iOS, the keyboard's Options button opens OPN (PC-9801-26) / OPNA (PC-9801-86) and 16 / 256 color choices. Changing the sound board or color capability restarts the game, so the sheet explains that behavior. The display section contains automatic layout and the manual Duo override; changing only the layout resumes the game without restarting. The toolbar Reset action confirms before restarting the current game and keeps the save overlay. Preferences persist across app launches; NAS data and the save overlay retain their existing roles.
+## 対応している範囲
 
-Physical-device check (2026-10-25): on S9Plus (iPhone 16 Pro Max), the Options sheet applied OPN + 16 colors and then OPNA + 256 colors. Rance IV reached an in-game dialogue with extended graphics active, 28 simultaneous framebuffer colors and nonzero OPNA audio output. This verifies startup and early play, not the entire game.
+- VRAM 512KB、2 つの 32KB の窓（E0004h・E0006h でバンク）、256 色・各 8 ビットのパレット、2 画面（表・裏）／1 画面（連結）。
+- パックドピクセル（1 バイト 1 ドット）と、プレーンモード（E0100h bit0。ROP・ビットマスク・書き込み禁止のプレーン・色の比較・ラッチ・ずらし）。
+- グラフィック GDC の SCROLL（2 つの領域）と PITCH、31kHz（09A8h）の 480 行。
+- ポート 09A0h のモードの読み出し、INT 18h AH=4Dh（CH=0 16 色／CH=1 256 色）。
+- 内蔵の AVGDRV.SYS（INT D8h）。
+- ステートセーブ（"PEGC" と、プレーンモードのラッチの "PGCX"）。
 
-Rance 4.1 / 4.2 startup check (2026-10-26): their bundled AGS_9821 driver uses INT 18h AH=4Dh with CH=0/1 to switch between legacy and extended graphics. This HLE now switches the existing PEGC framebuffer for that call, without firmware or changes to the guest driver. Before this change the driver loaded correctly but pixel writes went to legacy VRAM, producing vertical stripes. Both titles reached post-logo story/dialogue scenes at 256 colors in an isolated save overlay (4,200 emulated frames, four left-click pulses). A regression test exercises pixel/palette rendering after the BIOS call, return to legacy mode, invalid selectors, and the 16-color configuration. This does not add the separate AH=30h/31h timing/resolution services or verify a full playthrough.
+1MB より上（F00000h～）に見せる VRAM、INT 18h AH=30h/31h には対応していません。
+
+## 確認したソフト
+
+PR #2（ponzu0147 さん）で確認されたもの（2026-10-26、PR の実装で）:
+
+| タイトル | 確認範囲 |
+|---|---|
+| Rance IV | 序盤のゲーム画面・会話（4,200 フレーム） |
+| ランス4.1 | ロゴ後の縦縞を解消、工場の会話画面まで（4,200 フレーム）。INT 18h AH=4Dh が必要 |
+| ランス4.2 | ロゴ後の縦縞を解消、序盤の会話画面まで（4,200 フレーム） |
+| 闘神都市II | ソフトが 16 色の経路を選び、名前選択画面まで（4,200 フレーム） |
+| AmbivalenZ | 導入文の先のカラー CG・会話（18,000 フレーム） |
+
+本体側で確認したもの: PC-9821 のデモ CD（水族館・進化と恐竜・CD プレーヤー）、ランス４、ダイナマイトタンク、256 色モード用ツールセット（CHECK256・GMC・PAL21・RGC・RG21）。
+
+## 回帰テスト
+
+ゲームや BIOS ROM を使わない合成テストです（PR #2 より）。
+
+```sh
+cmake -S tests -B build/graphics-tests
+cmake --build build/graphics-tests --config Release
+ctest --test-dir build/graphics-tests -C Release --output-on-failure
+```
+
+INI の既定値、BIOS（INT 18h AH=4Dh）とポートでの切り替え、パレット、バンクの窓、表示ページ、SCROLL の領域、31kHz、プレーンモードの ROP・マスク、ステートセーブの往復と古い形式、16 色の機械での分離を確かめます。GitHub Actions では Windows x64 でアプリのビルドとこのテストを行います。

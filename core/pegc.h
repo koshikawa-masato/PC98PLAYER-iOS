@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
+// -----------------------------------------------------------------------------
+//  pegc.h  --  PC-9821 の 256 色（PEGC）のプレーンモードのラッチと、窓の読み書きの入口
+// -----------------------------------------------------------------------------
 #pragma once
 #include <stdint.h>
-// PC-9821 display registers and framebuffer, implemented without a firmware image.
-struct Pegc {
-    uint8_t vram[0x80000] = {};
-    uint8_t palette[256][3] = {};
-    uint8_t registers[0x200] = {};
+// プレーンモード（E0100h bit0=1）で読んだ 32 ドットぶんの色（転送元・パターン）。状態の保存では "PGCX" に入る
+struct PegcPlanar {
     uint8_t source[32] = {}, pattern[32] = {};
-    uint8_t enabled = 0, single_page = 0, selector = 0;
+    uint8_t selector = 0;      // 予備（以前の形式との互換のため）
 };
 struct Machine;
-bool pegc_window(Machine* m,uint32_t address);
-uint16_t pegc_read(Machine* m,uint32_t address,int bytes);
-void pegc_write(Machine* m,uint32_t address,uint16_t value,int bytes);
+bool     pegc_window(Machine* m, uint32_t address);                  // 256 色モードの VRAM の窓（A8000h-B7FFFh）か
+uint16_t pegc_read(Machine* m, uint32_t address, int bytes);         // 1 / 2 バイト
+void     pegc_write(Machine* m, uint32_t address, uint16_t value, int bytes);

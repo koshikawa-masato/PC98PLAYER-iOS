@@ -121,8 +121,7 @@ void bios_key_irq(Machine* m) {
     //   （0Bh・0Ah などへの置き換えは MS-DOS の CON がキーコードを見て行う。BIOS で文字コードを付けると、
     //    INT 18h AH=00h で AX=3A00h などと比べるソフトで矢印キーが効かない）
     // ・XFER・NFER・HOME/CLR・f･1〜f･10 は AH だけ（SHIFT・CTRL で AH が変わる）、AL = 0。
-    // ・vf･1〜vf･5 は通常 52h〜56h、SHIFT で C2h〜C6h、CTRL で D2h〜D6h。
-    // ・STOP・COPY は積まない
+    // ・vf･1〜vf･5 は通常52h〜56h、SHIFTでC2h〜C6h、CTRLでD2h〜D6h。STOP・COPYは積まない
     bool shift = (sh & 0x01) != 0, ctrl = (sh & 0x10) != 0;
     uint16_t code;
     if (sc == 0x35 || sc == 0x51) {                         // XFER / NFER
@@ -135,7 +134,7 @@ void bios_key_irq(Machine* m) {
         code = (uint16_t)(sc << 8);
     } else if (sc >= 0x62 && sc <= 0x6B) {                  // f･1〜f･10（SHIFT +20h、CTRL +30h）
         code = (uint16_t)((sc + (ctrl ? 0x30 : shift ? 0x20 : 0)) << 8);
-    } else if (sc >= 0x52 && sc <= 0x56) {                  // vf･1〜vf･5（SHIFT +70h、CTRL +80h）
+    } else if (sc >= 0x52 && sc <= 0x56) {                  // vf1-vf5: preserve Apple keyboard support
         code = (uint16_t)((sc + (ctrl ? 0x80 : shift ? 0x70 : 0)) << 8);
     } else if (sc < 0x52) {
         uint8_t ch = shift ? k_shift[sc] : k_norm[sc];
@@ -487,12 +486,15 @@ static void int18(Machine* m) {
         return; }
     case 0x43: {   // パレット（デジタル）
         uint32_t a = lin(m->cpu.sr[DS_], BX(m));
-        for (int i = 0; i < 4; i++) m->degpal[i] = mem_rb(m, a + i);
+        for (int i = 0; i < 4; i++) m->dig_pal[i] = mem_rb(m, a + i);
         return; }
     case 0x44: m->border = (uint8_t)(CX(m) >> 8); return;
-    case 0x4D: { // Extended graphics switch: CH=0 legacy, CH=1 256 colors.
-        uint8_t mode=(uint8_t)(CX(m)>>8);
-        if(m->cfg.video_colors==256 && mode<=1) m->pegc.enabled=mode;
+    case 0x4D: {   // PC-9821: 拡張グラフィックの切り替え（CH=0 16 色、CH=1 256 色）。9801 の BIOS には無い
+        uint8_t ch = (uint8_t)(CX(m) >> 8);
+        if (ch <= 1) pc9821_probe(m, "INT 18h AH=4Dh");
+        if (!is_pc9821(m) || ch > 1) return;
+        if (m->pegc.on != ch) plog("[pegc] %s（INT 18h AH=4Dh）\n", ch ? "256 色モードにしました" : "16 色モードに戻しました");
+        m->pegc.on = ch;
         return; }
     default:
         if (m->cfg.trace) plog("[bios] INT 18h AH=%02Xh 未対応\n", ah);
@@ -731,8 +733,11 @@ void bios_hle(Machine* m, uint8_t n) {
         return; }
     case HLE_INT1A: SETAH(m, 0x00); return;
     case HLE_AVSDRV: avsdrv_hle(m); return;
+    case HLE_AVSFM: avsfm_hle(m); return;
+    case HLE_AVGDRV: avgdrv_hle(m); return;
     case HLE_INT1B:
         if (floppy::is_fd_da(AL(m))) { floppy::bios_int1b(m); return; }
+        if (scsicd_int1b(m)) return;   // SCSI の CD-ROM ドライブ
         {
             // ハードディスク（SASI/IDE, DA 80h・00h のユニット 0 = ゲームのフォルダ）: 「付いている」ことだけ答える。
             // インストーラがハードディスクの有無を SENSE（AH=x4h）で調べるため（下級生など）。
@@ -851,7 +856,8 @@ void bios_init(Machine* m) {
     r[0x594] = 0;
     r[0x481] = 0x00;
     r[0x458] = 0x00;
-    r[0x45C] = m->cfg.video_colors==256 ? 0x40 : 0; // Extended graphics capability, supplied by our HLE.
+    if (is_pc9821(m)) r[0x45C] |= 0x40;   // PC-9821（256 色のグラフィックあり）
+    { extern uint32_t g_probe_addr; g_probe_addr = (m->cfg.pc9821_ask && !is_pc9821(m)) ? 0x45Cu : 0xFFFFFFFFu; }
     r[0x55D] = 0x01;               // ハードディスク（SASI/IDE）がユニット 0 に付いている（ゲームのフォルダ）
     r[0x55C] = 0x03;               // 1MB の FDD がユニット 0・1 に付いている（仮想フロッピーはユニット 0）
     r[0x712] = 24;                 // MS-DOS: テキストの行数-1（master.lib などが参照）
