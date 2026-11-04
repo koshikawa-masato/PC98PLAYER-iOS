@@ -1,0 +1,76 @@
+{
+  "verified_date_jst": "2026-11-04",
+  "platform": "Apple Silicon iOS Simulator, not physical iPhone",
+  "fixture": "160x100 synthetic stripes; model inputs 384/224; detection recall not assessed",
+  "simulators": [
+    {
+      "simulator": "iPhone 17",
+      "os": "iOS 27.0",
+      "checks": {
+        "bothModelsProduceFiniteScores": true,
+        "audioQueueContinuedDuringInference": true,
+        "unmaskedPixelsPreserved1": true,
+        "metalMosaic": true,
+        "maskedBlackIsOpaque": true,
+        "mosaicBlocksAreUniform": true,
+        "replacementWaitsForInference": true,
+        "deduplicatedFailureRetainsError": true,
+        "blurReducesFineDetail": true,
+        "benignFixtureScores": [
+          0.23095703125,
+          0.4794921875
+        ],
+        "metalBlur": true,
+        "enabledSubmitDoesNotRevealSynchronously": true,
+        "missingModelFailsClosed": true,
+        "unmaskedPixelsPreserved2": true,
+        "processingMilliseconds": 617.7300214767456,
+        "modelsAndMetalReady": true,
+        "metalBlack": true,
+        "unmaskedPixelsPreserved0": true,
+        "completeAsyncModelPipeline": true,
+        "emulationContinuedDuringInference": true,
+        "passed": true,
+        "staleGenerationWasDiscarded": true
+      }
+    },
+    {
+      "simulator": "iPhone Duo",
+      "os": "iOS 27.1",
+      "checks": {
+        "bothModelsProduceFiniteScores": true,
+        "audioQueueContinuedDuringInference": true,
+        "unmaskedPixelsPreserved1": true,
+        "metalMosaic": true,
+        "maskedBlackIsOpaque": true,
+        "mosaicBlocksAreUniform": true,
+        "replacementWaitsForInference": true,
+        "deduplicatedFailureRetainsError": true,
+        "blurReducesFineDetail": true,
+        "benignFixtureScores": [
+          0.23095703125,
+          0.4794921875
+        ],
+        "metalBlur": true,
+        "enabledSubmitDoesNotRevealSynchronously": true,
+        "missingModelFailsClosed": true,
+        "unmaskedPixelsPreserved2": true,
+        "processingMilliseconds": 794.8369979858398,
+        "modelsAndMetalReady": true,
+        "metalBlack": true,
+        "unmaskedPixelsPreserved0": true,
+        "completeAsyncModelPipeline": true,
+        "emulationContinuedDuringInference": true,
+        "passed": true,
+        "staleGenerationWasDiscarded": true
+      }
+    }
+  ],
+  "native_ctest": "8/8",
+  "legacy_ui_checks": "40/40",
+  "builds": [
+    "Debug iphonesimulator arm64",
+    "Release iphonesimulator arm64",
+    "Release iphoneos arm64 (unsigned)"
+  ]
+}

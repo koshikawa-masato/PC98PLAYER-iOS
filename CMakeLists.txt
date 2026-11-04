@@ -50,20 +50,32 @@ elseif(APPLE)
     set(PC98PLAYER_IOS_BUNDLE_ID "jp.pc98player.ios" CACHE STRING "iOS bundle identifier")
     set(PC98PLAYER_IOS_DEVELOPMENT_TEAM "" CACHE STRING "Apple development team for device signing")
     set(PC98PLAYER_IOS_VERSION "0.2.0" CACHE STRING "iOS marketing version")
-    set(PC98PLAYER_IOS_BUILD "5" CACHE STRING "iOS build number")
+    set(PC98PLAYER_IOS_BUILD "8" CACHE STRING "iOS build number")
     option(PC98PLAYER_IOS_SIGNING "Enable iOS code signing" OFF)
     if(PC98PLAYER_IOS_SIGNING)
       set(IOS_SIGNING_ALLOWED YES)
     else()
       set(IOS_SIGNING_ALLOWED NO)
     endif()
-    set(IOS_RESOURCES LICENSE THIRD-PARTY-ymfm-LICENSE.txt ios/Assets.xcassets ios/PrivacyInfo.xcprivacy docs/privacy-policy.txt)
+    set(IOS_RESOURCES LICENSE THIRD-PARTY-ymfm-LICENSE.txt ios/Assets.xcassets ios/PrivacyInfo.xcprivacy docs/privacy-policy.txt docs/THIRD-PARTY-content-models.txt)
     set_source_files_properties(${IOS_RESOURCES} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
-    add_executable(PC98PLAYERiOS MACOSX_BUNDLE ios/main.mm ios/Keyboard.mm ios/RetroHardware.mm ios/AudioCaptureProbe.mm apple/font.mm apple/GameLibrary.mm ${IOS_RESOURCES})
+    add_executable(PC98PLAYERiOS MACOSX_BUNDLE ios/main.mm ios/Keyboard.mm ios/RetroHardware.mm ios/AudioCaptureProbe.mm apple/ContentFilter.mm apple/font.mm apple/GameLibrary.mm ${IOS_RESOURCES})
+    file(GLOB_RECURSE CONTENT_MODEL_INPUTS CONFIGURE_DEPENDS models/*.mlpackage/*)
+    set(CONTENT_MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/ContentModels")
+    add_custom_command(OUTPUT "${CONTENT_MODEL_DIR}/models.stamp"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${CONTENT_MODEL_DIR}"
+      COMMAND xcrun coremlcompiler compile "${CMAKE_CURRENT_SOURCE_DIR}/models/AdultContent.mlpackage" "${CONTENT_MODEL_DIR}"
+      COMMAND xcrun coremlcompiler compile "${CMAKE_CURRENT_SOURCE_DIR}/models/HarmContent.mlpackage" "${CONTENT_MODEL_DIR}"
+      COMMAND ${CMAKE_COMMAND} -E touch "${CONTENT_MODEL_DIR}/models.stamp"
+      DEPENDS ${CONTENT_MODEL_INPUTS} VERBATIM)
+    add_custom_target(content_models DEPENDS "${CONTENT_MODEL_DIR}/models.stamp")
+    add_dependencies(PC98PLAYERiOS content_models)
+    add_custom_command(TARGET PC98PLAYERiOS POST_BUILD
+      COMMAND /bin/sh "${CMAKE_CURRENT_SOURCE_DIR}/tools/copy_content_models.sh" "${CONTENT_MODEL_DIR}" VERBATIM)
     target_include_directories(PC98PLAYERiOS PRIVATE apple ios)
     target_compile_options(PC98PLAYERiOS PRIVATE -fobjc-arc)
     target_compile_definitions(PC98PLAYERiOS PRIVATE $<$<CONFIG:Debug>:PC98PLAYER_TESTING>)
-    target_link_libraries(PC98PLAYERiOS PRIVATE "$<$<CONFIG:Debug>:-framework ReplayKit>" "$<$<CONFIG:Debug>:-framework CoreMedia>" pc98core "-framework Foundation" "-framework CoreGraphics" "-framework QuartzCore" "-framework UIKit" "-framework CoreText" "-framework AudioToolbox" "-framework AVFoundation" "-framework UniformTypeIdentifiers")
+    target_link_libraries(PC98PLAYERiOS PRIVATE "$<$<CONFIG:Debug>:-framework ReplayKit>" "$<$<CONFIG:Debug>:-framework CoreMedia>" pc98core "-framework Foundation" "-framework CoreGraphics" "-framework QuartzCore" "-framework UIKit" "-framework CoreText" "-framework AudioToolbox" "-framework AVFoundation" "-framework UniformTypeIdentifiers" "-framework CoreML" "-framework Vision" "-framework Metal" "-framework MetalPerformanceShaders")
     set_target_properties(PC98PLAYERiOS PROPERTIES
       MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist.in"
       MACOSX_BUNDLE_GUI_IDENTIFIER "${PC98PLAYER_IOS_BUNDLE_ID}"
@@ -97,6 +109,9 @@ else()
 endif()
 include(CTest)
 if(BUILD_TESTING AND NOT WIN32 AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  add_executable(content_filter_smoke tests/content_filter_smoke.cpp)
+  target_include_directories(content_filter_smoke PRIVATE apple)
+  add_test(NAME content_filter_smoke COMMAND content_filter_smoke)
   add_executable(duo_presentation_smoke tests/duo_presentation_smoke.cpp)
   add_test(NAME duo_presentation_smoke COMMAND duo_presentation_smoke)
   add_executable(audio_out_smoke tests/audio_out_smoke.cpp)

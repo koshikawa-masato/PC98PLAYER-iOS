@@ -11,6 +11,7 @@
 #include "font.h"
 #include "player.h"
 #include "GraphicsSettings.h"
+#import "ContentFilter.h"
 #include "hostfs.h"
 #include <memory>
 #include <set>
@@ -86,6 +87,8 @@ static UIImage* frameImage(Player* p) {
     if([self.resource isEqualToString:@"LICENSE"]) {
         NSString* third=[NSString stringWithContentsOfFile:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"THIRD-PARTY-ymfm-LICENSE.txt"] encoding:NSUTF8StringEncoding error:nil];
         if(third) content=[content stringByAppendingFormat:@"\n\nymfm\n%@",third];
+        NSString* models=[NSString stringWithContentsOfFile:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"THIRD-PARTY-content-models.txt"] encoding:NSUTF8StringEncoding error:nil];
+        if(models)content=[content stringByAppendingFormat:@"\n\n%@",models];
     }
     textView.text=content ?: @"文書を読み込めませんでした。";textView.dataDetectorTypes=UIDataDetectorTypeLink;
     self.view=textView;
@@ -129,7 +132,9 @@ static UIImage* frameImage(Player* p) {
 @property NSInteger videoColors;
 @property BOOL manualDuo;
 @property BOOL bossMode;
-@property(copy) void (^applied)(NSInteger,NSInteger,BOOL,BOOL);
+@property content_filter::Settings filterSettings;
+@property(copy) void (^willApply)(content_filter::Settings);
+@property(copy) void (^applied)(NSInteger,NSInteger,BOOL,BOOL,content_filter::Settings);
 @property(copy) void (^cancelled)(void);
 @end
 @implementation GameOptionsController
@@ -138,12 +143,18 @@ static UIImage* frameImage(Player* p) {
     self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"キャンセル" style:UIBarButtonItemStylePlain target:self action:@selector(cancel)];
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
-- (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 4; }
-- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?3:2; }
-- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return section==0?@"音源":section==1?@"色数":section==2?@"表示":@"このアプリについて"; }
-- (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section { return section==1?@"音源・色数の変更はゲームを再起動します。必要な場合は、先にゲーム内で保存してください。":section==2?@"通常は自動判別を使います。Duo上下表示を固定すると、上にモニタ、下にキーボードを配置します。表示だけの変更では再起動しません。「ボスがきた」モードはDuoを閉じると一時停止し、アウターのアプリ画面を黒くします。開き直しても自動再生せず、▶︎で再開します。端末の画面電源やシステム表示は変更しません。":nil; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 5; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?3:section==3?6:2; }
+- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数",@"表示",@"コンテンツフィルター",@"このアプリについて"][section]; }
+- (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section {
+    if(section==1)return @"音源・色数の変更はゲームを再起動します。必要な場合は、先にゲーム内で保存してください。";
+    if(section==2)return @"通常は自動判別を使います。Duo上下表示を固定すると、上にモニタ、下にキーボードを配置します。表示だけの変更では再起動しません。「ボスがきた」モードはDuoを閉じると一時停止し、アウターのアプリ画面を黒くします。開き直しても自動再生せず、▶︎で再開します。端末の画面電源やシステム表示は変更しません。";
+    if(section==3)return @"画像を端末内AIで判定し、推定した領域を隠します。画面を外部へ送信しません。判定中は直前の保護済み画像を保持するため、表示が遅れることがあります。誤検出・見逃しがあり、文章は判定しません。残酷描写は流血・損傷の特徴を推定する試験的な機能です。";
+    return nil;
+}
 - (UITableViewCell*)tableView:(UITableView*)tableView cellForRowAtIndexPath:(NSIndexPath*)index {
     UITableViewCell* cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+    cell.detailTextLabel.numberOfLines=0;
     if(index.section==0) {
         cell.textLabel.text=index.row==0?@"OPN":@"OPNA";
         cell.detailTextLabel.text=index.row==0?@"YM2203":@"YM2608";
@@ -159,28 +170,47 @@ static UIImage* frameImage(Player* p) {
             UISwitch* toggle=[UISwitch new];toggle.on=self.bossMode;toggle.accessibilityLabel=@"ボスがきた";
             [toggle addTarget:self action:@selector(changeBossMode:) forControlEvents:UIControlEventValueChanged];cell.accessoryView=toggle;cell.selectionStyle=UITableViewCellSelectionStyleNone;
         } else cell.accessoryType=(self.manualDuo==(index.row==1))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
-    }
-    if(index.section==3) {
+    } else if(index.section==3) {
+        if(index.row<2) {
+            cell.textLabel.text=index.row==0?@"成人向け表現を隠す":@"残酷描写を隠す";
+            cell.detailTextLabel.text=index.row==0?@"成人向け画像の推定":@"流血・損傷の推定（試験的）";
+            UISwitch* toggle=[UISwitch new];toggle.tag=index.row;toggle.on=index.row==0?self.filterSettings.adult:self.filterSettings.harm;
+            toggle.accessibilityLabel=cell.textLabel.text;[toggle addTarget:self action:@selector(changeFilter:) forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView=toggle;cell.selectionStyle=UITableViewCellSelectionStyleNone;
+        } else if(index.row<5) {
+            cell.textLabel.text=@[@"黒塗り",@"ぼかし",@"モザイク"][index.row-2];
+            BOOL selected=(int)self.filterSettings.effect==index.row-2;
+            cell.accessoryType=selected?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
+            cell.isAccessibilityElement=YES;cell.accessibilityLabel=cell.textLabel.text;
+            cell.accessibilityTraits=UIAccessibilityTraitButton|(selected?UIAccessibilityTraitSelected:0);
+        } else {
+            cell.textLabel.text=@"検出感度";
+            UISegmentedControl* level=[[UISegmentedControl alloc] initWithItems:@[@"低",@"標準",@"高"]];level.selectedSegmentIndex=self.filterSettings.sensitivity;
+            level.accessibilityLabel=@"検出感度";[level addTarget:self action:@selector(changeSensitivity:) forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView=level;cell.selectionStyle=UITableViewCellSelectionStyleNone;
+        }
+    } else {
         cell.textLabel.text=index.row==0?@"プライバシーポリシー":@"ライセンス";
         cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
     }
     return cell;
 }
 - (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)index {
-    if(index.section==3) {
-        LegalTextController* document=[LegalTextController new];
-        document.title=index.row==0?@"プライバシーポリシー":@"ライセンス";
-        document.resource=index.row==0?@"privacy-policy.txt":@"LICENSE";
-        [self.navigationController pushViewController:document animated:YES];return;
+    if(index.section==4) {
+        LegalTextController* document=[LegalTextController new];document.title=index.row==0?@"プライバシーポリシー":@"ライセンス";
+        document.resource=index.row==0?@"privacy-policy.txt":@"LICENSE";[self.navigationController pushViewController:document animated:YES];return;
     }
-    if(index.section==0) self.soundBoard=index.row==0?26:86;
-    else if(index.section==1) self.videoColors=index.row==0?16:256;
-    else if(index.row<2) self.manualDuo=index.row==1;
+    if(index.section==0)self.soundBoard=index.row==0?26:86;
+    else if(index.section==1)self.videoColors=index.row==0?16:256;
+    else if(index.section==2 && index.row<2)self.manualDuo=index.row==1;
+    else if(index.section==3 && index.row>=2 && index.row<5) { auto settings=self.filterSettings;settings.effect=(content_filter::Effect)(index.row-2);self.filterSettings=settings; }
     [tableView reloadData];
 }
 - (void)changeBossMode:(UISwitch*)sender { self.bossMode=sender.on; }
-- (void)cancel { [self dismissViewControllerAnimated:YES completion:^{if(self.cancelled) self.cancelled();}]; }
-- (void)apply { [self dismissViewControllerAnimated:YES completion:^{if(self.applied) self.applied(self.soundBoard,self.videoColors,self.manualDuo,self.bossMode);}]; }
+- (void)changeFilter:(UISwitch*)sender { auto settings=self.filterSettings;if(sender.tag==0)settings.adult=sender.on;else settings.harm=sender.on;self.filterSettings=settings; }
+- (void)changeSensitivity:(UISegmentedControl*)sender { auto settings=self.filterSettings;settings.sensitivity=(int)sender.selectedSegmentIndex;self.filterSettings=settings; }
+- (void)cancel { [self dismissViewControllerAnimated:YES completion:^{if(self.cancelled)self.cancelled();}]; }
+- (void)apply { if(self.willApply)self.willApply(self.filterSettings);[self dismissViewControllerAnimated:YES completion:^{if(self.applied)self.applied(self.soundBoard,self.videoColors,self.manualDuo,self.bossMode,self.filterSettings);}]; }
 @end
 
 @interface PlayerController : UIViewController <UIDocumentPickerDelegate,UIAdaptivePresentationControllerDelegate,UIGestureRecognizerDelegate> {
@@ -191,12 +221,14 @@ static UIImage* frameImage(Player* p) {
     BOOL bossMode, hingeClosed;
     BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
     int mouseButtons;
+    int filterFrameHeight;
     std::set<NSInteger> physicalKeys;
     std::set<int> touchKeys;
 }
 @property UIView* bossShield;
 @property id<UIInteraction> hingeInteraction;
 @property UIImageView* monitor;
+@property PC98ContentFilter* contentFilter;
 @property PC98MonitorCabinet* topPanel;
 @property PC98Keyboard* keyboard;
 @property UILabel* status;
@@ -222,6 +254,13 @@ static UIImage* frameImage(Player* p) {
     [super viewDidLoad]; self.view.multipleTouchEnabled=YES; self.view.backgroundColor=PC98Plastic(.84); paused=YES;
     manualDuo=[NSUserDefaults.standardUserDefaults boolForKey:@"PC98ManualDuo"];
     bossMode=[NSUserDefaults.standardUserDefaults boolForKey:@"PC98BossMode"];
+    self.contentFilter=[PC98ContentFilter new];
+    content_filter::Settings filter;
+    NSUserDefaults* defaults=NSUserDefaults.standardUserDefaults;
+    filter.adult=[defaults boolForKey:@"PC98AdultFilter"];filter.harm=[defaults boolForKey:@"PC98HarmFilter"];
+    filter.effect=(content_filter::Effect)std::clamp((int)[defaults integerForKey:@"PC98FilterEffect"],0,2);
+    filter.sensitivity=[defaults objectForKey:@"PC98FilterSensitivity"]?std::clamp((int)[defaults integerForKey:@"PC98FilterSensitivity"],0,2):1;
+    [self.contentFilter configure:filter];
     self.topPanel=[PC98MonitorCabinet new]; [self.view addSubview:self.topPanel];
     self.monitor=[UIImageView new]; self.monitor.contentMode=UIViewContentModeScaleAspectFit;
     self.monitor.layer.cornerRadius=4; self.monitor.clipsToBounds=YES; self.monitor.backgroundColor=[UIColor colorWithRed:.035 green:.055 blue:.052 alpha:1]; self.monitor.layer.magnificationFilter=kCAFilterNearest; self.monitor.userInteractionEnabled=YES; self.monitor.multipleTouchEnabled=YES;
@@ -336,6 +375,8 @@ static UIImage* frameImage(Player* p) {
             [UIImagePNGRepresentation(shot) writeToURL:area(NSDocumentDirectory,@"game-launch.png") atomically:YES];
         });
     }
+    if([NSProcessInfo.processInfo.arguments containsObject:@"--content-filter-smoke"])
+        dispatch_async(dispatch_get_main_queue(),^{ [weak contentFilterSmoke]; });
     if([NSProcessInfo.processInfo.arguments containsObject:@"--smoke-test"]) {
         [self demo];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{ [weak smokeTest]; });
@@ -580,9 +621,24 @@ static UIImage* frameImage(Player* p) {
         if(player->m->quit) { paused=YES; [self releaseKeys]; audio.close(); self.status.text=player->m->quit==2 ? text(player->m->status) : @"実行が終了しました"; break; }
     }
     if(audioClock) nextFrame=now;
-    self.monitor.image=frameImage(player.get());
+    [self refreshMonitor];
+}
+- (void)refreshMonitor {
+    if(!player)return;
+    if(filterFrameHeight!=player->fb_h) { [self.contentFilter reset];self.monitor.image=nil;filterFrameHeight=player->fb_h; }
+    UIImage* image=frameImage(player.get());
+    if(self.contentFilter.settings.enabled() && !self.monitor.image)
+        self.status.text=self.contentFilter.lastError?[@"保護フィルター: " stringByAppendingString:self.contentFilter.lastError]:@"保護フィルター: 判定中…";
+    __weak PlayerController* weak=self;
+    [self.contentFilter submitImage:image completion:^(UIImage* filtered,NSString* error) {
+        PlayerController* s=weak;if(!s || !s->player)return;
+        s.monitor.image=filtered;
+        if(error)s.status.text=[@"保護フィルター: " stringByAppendingString:error];
+        else if([s.status.text hasPrefix:@"保護フィルター:"])s.status.text=s->paused?@"一時停止":s.contentFilter.settings.enabled()?@"実行中 — 保護フィルター有効":@"実行中";
+    }];
 }
 - (void)stopGame {
+    [self.contentFilter reset];self.monitor.image=nil;filterFrameHeight=0;
     fullscreenMenuPaused=NO; paused=YES; [self releaseKeys]; audio.close();
     if(player) { player->shutdown(); player.reset(); }
     hostfs::set_overlay("","");
@@ -736,10 +792,11 @@ static UIImage* frameImage(Player* p) {
     __weak PlayerController* weak=self;
     for(int slot=0;slot<STATE_SLOTS;++slot) [menu addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"スロット %d",slot+1] style:UIAlertActionStyleDefault handler:^(UIAlertAction* a) {
         PlayerController* s=weak; if(!s || !s->player) return;
+        if(load) { [s.contentFilter reset];s.monitor.image=nil; }
         std::string error; BOOL ok=load?s->player->load_state(slot,&error):s->player->save_state(slot,&error);
         [s releaseKeys]; s->audio.clear(); s->nextFrame=CACurrentMediaTime();
         if(!ok) [s message:text(error)]; else s.status.text=load?@"ステートを読み込みました":@"ステートを保存しました";
-        if(s->player) s.monitor.image=frameImage(s->player.get());
+        if(s->player) [s refreshMonitor];
     }]];
     [menu addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:menu animated:YES completion:nil];
@@ -753,11 +810,19 @@ static UIImage* frameImage(Player* p) {
     options.soundBoard=player?player->m->cfg.sound_board:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98SoundBoard"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98SoundBoard"]:86);
     options.videoColors=player?player->m->cfg.video_colors:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98VideoColors"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98VideoColors"]:16);
     __weak PlayerController* weak=self;
-    options.manualDuo=manualDuo;options.bossMode=bossMode;
+    options.manualDuo=manualDuo;options.bossMode=bossMode;options.filterSettings=self.contentFilter.settings;
+    options.willApply=^(content_filter::Settings filter) {
+        PlayerController* s=weak;if(s && filter.enabled()) { [s.contentFilter reset];s.monitor.image=nil; }
+    };
     options.cancelled=^{ PlayerController* s=weak;if(!s) return;s->paused=previousPause;if(s->player && !s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime(); };
-    options.applied=^(NSInteger sound,NSInteger colors,BOOL duo,BOOL boss) {
+    options.applied=^(NSInteger sound,NSInteger colors,BOOL duo,BOOL boss,content_filter::Settings filter) {
         PlayerController* s=weak;if(!s) return;
         BOOL restart=s->player && (s->player->m->cfg.sound_board!=sound || s->player->m->cfg.video_colors!=colors);
+        [s.contentFilter configure:filter];s.monitor.image=nil;
+        [NSUserDefaults.standardUserDefaults setBool:filter.adult forKey:@"PC98AdultFilter"];
+        [NSUserDefaults.standardUserDefaults setBool:filter.harm forKey:@"PC98HarmFilter"];
+        [NSUserDefaults.standardUserDefaults setInteger:(int)filter.effect forKey:@"PC98FilterEffect"];
+        [NSUserDefaults.standardUserDefaults setInteger:filter.sensitivity forKey:@"PC98FilterSensitivity"];
         [s releaseKeys];s->manualDuo=duo;s->bossMode=boss;
         [NSUserDefaults.standardUserDefaults setBool:boss forKey:@"PC98BossMode"];
         [NSUserDefaults.standardUserDefaults setBool:duo forKey:@"PC98ManualDuo"];
@@ -767,7 +832,7 @@ static UIImage* frameImage(Player* p) {
         if(restart && s.currentCache && s.currentID) [s openCache:s.currentCache identifier:s.currentID];
         else if(s->player) { s->paused=previousPause;if(!s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime(); }
         else s.status.text=@"オプションを保存しました。ゲームフォルダーを選択してください。";
-        [s updateBossShield];
+        [s refreshMonitor];[s updateBossShield];
     };
     UINavigationController* nav=[[UINavigationController alloc] initWithRootViewController:options];nav.modalInPresentation=YES;
     if(nav.sheetPresentationController) nav.sheetPresentationController.detents=@[UISheetPresentationControllerDetent.largeDetent];
@@ -864,6 +929,20 @@ static UIImage* frameImage(Player* p) {
     [self openCache:root identifier:@"demo"];
 }
 #ifdef PC98PLAYER_TESTING
+- (void)contentFilterSmoke {
+    uint64_t initialFrame=player?player->m->frame_count:0;
+    PC98ContentFilter* probe=[PC98ContentFilter new];
+    [probe runSmokeChecks:^(NSDictionary* checks,UIImage* preview) {
+        NSMutableDictionary* report=[checks mutableCopy];BOOL passed=YES;
+        report[@"emulationContinuedDuringInference"]=@(player && player->m->frame_count>initialFrame);
+        report[@"audioQueueContinuedDuringInference"]=@(audio.queue && audio.started && !audio.paused);
+        for(id value in report.allValues)if([value isKindOfClass:NSNumber.class] && ![value boolValue])passed=NO;
+        if(checks[@"error"])passed=NO;report[@"passed"]=@(passed);
+        [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]
+            writeToURL:area(NSDocumentDirectory,@"content-filter-smoke.json") atomically:YES];
+        [UIImagePNGRepresentation(preview) writeToURL:area(NSDocumentDirectory,@"content-filter-preview.png") atomically:YES];
+    }];
+}
 // Debug-only, input-driven compatibility check inside the real simulator app.
 - (void)verifyGameFrames:(int)total {
     if(!player) return;
@@ -886,7 +965,7 @@ static UIImage* frameImage(Player* p) {
             s->player->run_frame();
             for(int16_t sample:s->player->audio) peak=std::max(peak,std::abs((int)sample));
         }
-        s.monitor.image=frameImage(s->player.get());
+        [s refreshMonitor];
         if(frame<total && !s->player->m->quit) return;
         [timer invalidate];[s releaseKeys];
         Machine* m=s->player->m;std::set<uint32_t> colors;
@@ -1025,7 +1104,7 @@ static UIImage* frameImage(Player* p) {
     result[@"phoneLandscapePanels"]=@(landscape);
     result[@"phoneKeyboardBelowMonitor"]=@(CGRectGetMinY(self.keyboard.frame)>CGRectGetMaxY(self.topPanel.frame));
     UIGraphicsImageRenderer* portraitRenderer=[[UIGraphicsImageRenderer alloc] initWithBounds:self.view.bounds];
-    self.monitor.image=frameImage(player.get());
+    [self refreshMonitor];
     UIImage* portrait=[portraitRenderer imageWithActions:^(UIGraphicsImageRendererContext* context) { [self.view.layer renderInContext:context.CGContext]; }];
     [UIImagePNGRepresentation(portrait) writeToURL:area(NSDocumentDirectory,@"portrait-smoke.png") atomically:YES];
     BOOL hasTwoFingerTap=NO,hasSingleFingerDoubleTap=NO;
@@ -1084,7 +1163,7 @@ static UIImage* frameImage(Player* p) {
     result[@"duoMonitorAboveFold"]=@(CGRectGetMaxY(self.topPanel.frame)<mid);
     result[@"duoKeyboardBelowFold"]=@(CGRectGetMinY(self.keyboard.frame)>mid);
     result[@"hardwareArrows"]=@(pc98_scan_from_hid(82)==0x3A && pc98_scan_from_hid(80)==0x3B);
-    paused=YES; audio.close(); self.monitor.image=frameImage(player.get()); self.status.text=@"Duo上下表示・PC98入力・ステート検証完了";
+    paused=YES; audio.close(); [self refreshMonitor]; self.status.text=@"Duo上下表示・PC98入力・ステート検証完了";
     UIGraphicsImageRenderer* renderer=[[UIGraphicsImageRenderer alloc] initWithBounds:self.view.bounds];
     UIImage* image=[renderer imageWithActions:^(UIGraphicsImageRendererContext* context) { [self.view.layer renderInContext:context.CGContext]; }];
     [UIImagePNGRepresentation(image) writeToURL:area(NSDocumentDirectory,@"duo-smoke.png") atomically:YES];
