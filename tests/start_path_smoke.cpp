@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "player.h"
 #include "hostfs.h"
+#include "../apple/StartupPath.h"
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -17,6 +18,12 @@ int main() {
     fs::path root=temporary;
     std::unique_ptr<Player> player;
     try {
+        check(apple_startup::dos_start_path("").empty(),"empty boot start retained");
+        check(apple_startup::dos_start_path("DEPTH.EXE /Q /path/data")=="DEPTH.EXE /Q /path/data","root program and inline switches retained");
+        check(apple_startup::dos_start_path("aa3558f/DEPTH.EXE /Q /path/data")=="aa3558f\\DEPTH.EXE /Q /path/data","only executable token converted");
+        check(apple_startup::dos_start_path("aa3558f/DEPTH.EXE\t/Q")=="aa3558f\\DEPTH.EXE\t/Q","tab-delimited arguments retained");
+        const std::string japanese=hostfs::to_sjis("ゲーム/DEPTH.EXE");
+        check(apple_startup::dos_start_path(japanese)==hostfs::to_sjis("ゲーム\\DEPTH.EXE"),"CP932 path bytes retained");
         fs::create_directories(root/"aa3558f");
         // COM opens a sibling file relative to the guest CWD, reads its marker,
         // and writes it plus the first argument byte to text VRAM. Loop on error.
@@ -53,6 +60,8 @@ int main() {
             for(const char* start:{"aa3558f/DEPTH.EXE","aa3558f\\DEPTH.EXE","aa3558f/DEPTH.COM","aa3558f\\DEPTH.COM","aa3558f/START.BAT","aa3558f\\START.BAT"}) {
                 PlayerSettings settings; settings.cfg.root=root.string();settings.cfg.start=start;
                 settings.cfg.args="/Q";settings.cfg.midi=0;
+                // Same boundary conversion used by both Apple frontends; the DOS core is unchanged.
+                settings.cfg.start=apple_startup::dos_start_path(settings.cfg.start);
                 player=std::make_unique<Player>();std::string error;
                 check(player->init(settings,&error),"player init");
                 for(int frame=0;frame<10;++frame) player->run_frame();

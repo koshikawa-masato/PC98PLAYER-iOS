@@ -10,6 +10,7 @@
 #include "AudioOut.h"
 #include "font.h"
 #include "player.h"
+#include "StartupPath.h"
 #include "GraphicsSettings.h"
 #include "hostfs.h"
 #include <memory>
@@ -716,6 +717,7 @@ static UIImage* frameImage(Player* p) {
 }
 - (void)launchSettings:(PlayerSettings)settings {
     player=std::make_unique<Player>(); mac_install_font(settings.font_name,settings.font_shift); std::string error;
+    settings.cfg.start = apple_startup::dos_start_path(settings.cfg.start);
     if(!player->init(settings,&error)) { [self stopGame]; [self message:text(error)]; return; }
     paused=NO; nextFrame=CACurrentMediaTime(); self.status.text=@"実行中 — ゲーム本体はキャッシュ、保存データは別領域";
 #if TARGET_OS_SIMULATOR

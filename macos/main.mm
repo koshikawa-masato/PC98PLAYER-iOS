@@ -2,6 +2,7 @@
 #import <Cocoa/Cocoa.h>
 #import <AudioToolbox/AudioToolbox.h>
 #include "player.h"
+#include "StartupPath.h"
 #include "hostfs.h"
 #include "font.h"
 #include "AudioOut.h"
@@ -262,6 +263,7 @@ static NSMenuItem* item(NSMenu* menu, NSString* title, SEL action, NSString* key
     };
     mac_install_font(ps.font_name, ps.font_shift);
     std::string error;
+    ps.cfg.start = apple_startup::dos_start_path(ps.cfg.start);
     if (!player->init(ps,&error)) { alert(ns(error)); player->shutdown(); player.reset(); return; }
     currentIniPath = iniPath; currentSettings = ps;
     NSError* bookmarkError = nil;
