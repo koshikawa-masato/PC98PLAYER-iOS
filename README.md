@@ -1,8 +1,16 @@
 # PC98PLAYER-iOS
 
+**App Store掲載名：RetroDOS Player** · [App Storeで入手](https://apps.apple.com/jp/app/retrodos-player/id6826817332)
+
+## はじめて使う方へ
+
+**[iPhoneへの転送・導入チュートリアル（画像付き）](docs/tutorial/README.md)**
+
+Mac／WindowsからZIPをiPhoneへ送り、「ファイル」で展開してゲームを開く手順を説明しています。NASは不要です。転送練習用のオリジナルデモ、音源・色数の設定、起動できないときの対処も掲載しています。
+
 [PC98PLAYER-MAC](https://github.com/koshikawa-masato/PC98PLAYER-MAC) の `1ca10ac` をベースにしたiOS向け派生版です。原作は [Imaha486/PC98PLAYER](https://github.com/Imaha486/PC98PLAYER)。C++のエミュレータコアとMITライセンス、変更履歴を引き継いでいます。同じアカウントの既存フォークとは別名で作るため、GitHub上では独立した派生リポジトリとして管理します。
 
-Mac／NASをゲーム本体の保存場所として使い、iPhoneにはプレイ用の一時キャッシュを取得します。セーブとステートは別領域に保持します。ゲーム、ROM、商用フォントは同梱しません。
+ゲーム本体はiPhone内のフォルダ、Mac、NASなどに置けます。選んだフォルダからプレイ用の一時キャッシュを取得します。セーブとステートは別領域に保持します。ゲーム、ROM、商用フォントは同梱しません。
 
 C++の共通エミュレータコアをUIKitで動かすiOS版です。iOS 17以降を対象とし、iPhone DuoのiOS 27.0.1でも手動の上下表示を使えます。Duoの自動検出を含むビルドにはXcode 27.1以降のSDKが必要です。古いSDKでは手動レイアウトのみをコンパイルします。
 
