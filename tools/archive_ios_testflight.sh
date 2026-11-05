@@ -15,7 +15,7 @@ if product.is_symlink():
     product.unlink()
 PYTHON
 ./build_ios.sh
-archive="$PWD/out/TestFlight/PC98PLAYER-${IOS_VERSION:-0.2.0}-${IOS_BUILD_NUMBER:-5}.xcarchive"
+archive="$PWD/out/TestFlight/PC98PLAYER-${IOS_VERSION:-0.2.1}-${IOS_BUILD_NUMBER:-10}.xcarchive"
 xcodebuild -project "$IOS_BUILD_ROOT/ios-iphoneos/PC98PLAYER.xcodeproj" -scheme PC98PLAYERiOS \
   -configuration Release -destination 'generic/platform=iOS' -archivePath "$archive" archive
 # CMake puts dSYMs in its configured product directory. Verify before collecting them.
