@@ -2965,8 +2965,14 @@ void shell_start(Machine* m, const std::string& cmdline) {
     // Start=GAME\GAME.EXE のようにゲームのフォルダの下のファイルなら、そのフォルダをカレントにして始める
     // （フォルダの中で起動される前提のゲームが多い）。名前が英数字だけのときに限る
     std::string cl = cmdline;
+    // Apple file choosers supply host-style relative paths. A slash in the
+    // executable token must be a DOS separator before run_command sees it;
+    // otherwise it is parsed as the beginning of a /switch. Leave arguments
+    // untouched so options such as /Q keep their command-line meaning.
+    for (size_t i = 0; i < cl.size() && cl[i] != ' ' && cl[i] != '\t'; ++i)
+        if (cl[i] == '/') cl[i] = '\\';
     {
-        size_t sp = cl.find(' ');
+        size_t sp = cl.find_first_of(" \t");
         std::string prog = cl.substr(0, sp);
         size_t bs = prog.find_last_of("\\/");
         bool ascii = true;
