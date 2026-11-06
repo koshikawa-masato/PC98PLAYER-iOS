@@ -15,7 +15,7 @@ xcrun simctl terminate "$device" "$bundle" >/dev/null 2>&1 || true
 rm -f "$container/Documents/smoke-result.json" "$container/Documents/duo-smoke.png"
 # Isolate playback assertions from a saved closed-hinge boss-mode preference.
 # NSArgumentDomain overrides this launch only; the stored preference is unchanged.
-xcrun simctl launch "$device" "$bundle" --smoke-test -PC98BossMode NO
+xcrun simctl launch "$device" "$bundle" --smoke-test -PC98BossMode NO -PC98AdultFilter NO -PC98HarmFilter NO
 attempt=0
 while [ ! -f "$container/Documents/smoke-result.json" ]; do
   attempt=$((attempt + 1))
