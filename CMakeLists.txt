@@ -89,6 +89,31 @@ elseif(APPLE)
       XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "${IOS_SIGNING_ALLOWED}"
       XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
       XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${PC98PLAYER_IOS_DEVELOPMENT_TEAM}")
+    # App Store screenshot capture only: rotates the simulator itself, which iPadOS 26+
+    # windowing allows while it refuses the app's own requestGeometryUpdate.
+    option(PC98PLAYER_IOS_UI_TESTS "Build the simulator orientation UI test bundle" OFF)
+    if(PC98PLAYER_IOS_UI_TESTS)
+      add_library(PC98PLAYERiOSUITests MODULE ios/UITests/StoreOrientationUITests.mm)
+      add_dependencies(PC98PLAYERiOSUITests PC98PLAYERiOS)
+      # CMake lists an XCTest bundle in its testee's scheme, so generate that scheme too.
+      set_property(TARGET PC98PLAYERiOS PROPERTY XCODE_GENERATE_SCHEME TRUE)
+      target_compile_options(PC98PLAYERiOSUITests PRIVATE -fobjc-arc)
+      target_link_libraries(PC98PLAYERiOSUITests PRIVATE "-framework XCTest" "-framework UIKit" "-framework Foundation")
+      set_target_properties(PC98PLAYERiOSUITests PROPERTIES
+        BUNDLE TRUE
+        BUNDLE_EXTENSION xctest
+        XCTEST TRUE
+        XCTEST_TESTEE PC98PLAYERiOS
+        XCODE_GENERATE_SCHEME TRUE
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/ios/UITests/Info.plist.in"
+        XCODE_PRODUCT_TYPE "com.apple.product-type.bundle.ui-testing"
+        XCODE_ATTRIBUTE_TEST_TARGET_NAME "PC98PLAYERiOS"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${PC98PLAYER_IOS_BUNDLE_ID}.uitests"
+        XCODE_ATTRIBUTE_ENABLE_TESTING_SEARCH_PATHS "YES"
+        XCODE_ATTRIBUTE_FRAMEWORK_SEARCH_PATHS "$(inherited) $(PLATFORM_DIR)/Developer/Library/Frameworks"
+        XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+        XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO")
+    endif()
   else()
     set(MAC_RESOURCES LICENSE THIRD-PARTY-ymfm-LICENSE.txt)
     set_source_files_properties(${MAC_RESOURCES} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
