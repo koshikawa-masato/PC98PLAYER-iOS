@@ -19,6 +19,11 @@ jobs:
           xcrun simctl boot "$device" || true
           xcrun simctl bootstatus "$device" -b
           ./tools/test_ios_simulator.sh "$device"
+      - name: Test offline content models and Metal effects
+        shell: bash
+        run: |
+          device=$(xcrun simctl list devices booted -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
+          ./tools/test_content_filter_simulator.sh "$device"
       - name: Build unsigned iOS device app
         run: IOS_SDK=iphoneos IOS_CONFIGURATION=Release ./build_ios.sh
       - name: Package apps
@@ -33,4 +38,19 @@ jobs:
         if: always()
         with:
           name: iOS-smoke-test
-          path: out/ios-smoke/
+          path: |
+            out/ios-smoke/
+            out/content-filter/
+  screenshots:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build current UI for screenshots
+        run: ./build_ios.sh
+      - name: Capture iPhone and iPad in both orientations
+        run: python3 tools/capture_store_screens.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-store-screenshots
+          path: out/app-store-screens/
+          if-no-files-found: error

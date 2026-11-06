@@ -1,0 +1,44 @@
+{
+  "models": [
+    {
+      "name": "AdultContent",
+      "repository": "Marqo/nsfw-image-detection-384",
+      "revision": "0c26ec22111b83f106d72a55f611ec35962bcb65",
+      "license": "Apache-2.0",
+      "source_sha256": "6bf2e0f64a1d20169736c2836e3a787b12379fdc08ba87f7d94a7a3d58eeefce",
+      "source_filename": "model.safetensors",
+      "labels": [
+        "NSFW",
+        "SFW"
+      ],
+      "preprocessing": "RGB /255, mean .5, std .5; 384x384",
+      "conversion": "Core ML ML Program, iOS17, float16, coremltools9.0 / PyTorch2.7.1",
+      "converted_files": {
+        "Data/com.apple.CoreML/model.mlmodel": "35f7236d7d2bea9cc8d7adf3afc16cdb57c8f8b275f0a480499b4a089389a2e6",
+        "Data/com.apple.CoreML/weights/weight.bin": "25f0a6ee9ddd1c5756a87f3fc61e5c0ae40e3803a36b890369a47b372079ce2d",
+        "Manifest.json": "e60a05ae276c1cbf41a8e3f62e2cb67f039ea7d93e759e244806f66aeb739be4"
+      }
+    },
+    {
+      "name": "HarmContent",
+      "repository": "timm/vit_base_patch32_clip_224.openai",
+      "revision": "a6f597a30f7b82c51704746581f9a4e41421e878",
+      "original_author": "OpenAI",
+      "license": "Apache-2.0 (timm weight mirror); MIT (OpenAI CLIP)",
+      "source_filename": "open_clip_model.safetensors",
+      "source_sha256": "e6d1bd7789aa45192b3bf90570a789b478bae1b74ebcce7eddd908e83a2b7c31",
+      "labels": [
+        "ordinary_scene",
+        "blood_or_graphic_injury_similarity"
+      ],
+      "preprocessing": "RGB /255; CLIP mean [.48145466,.4578275,.40821073], std [.26862954,.26130258,.27577711]; 224x224; runtime uses scale-fill for each full image/crop",
+      "conversion": "Core ML ML Program iOS17; int8 weights with FP16 computation; fixed prompts in harm-prompts.json",
+      "converted_files": {
+        "Data/com.apple.CoreML/model.mlmodel": "045e2348e91e7e35f5b4cb929bc8fb8c8603a4cc4a81b5da7eec6de33f4a7755",
+        "Data/com.apple.CoreML/weights/weight.bin": "2f08c81112f89ac9e67eb9fc8219eadd357b2d6ae8a35c05ba084bc9d006c147",
+        "Manifest.json": "d3c25db9a414eb2d02173846fa6a34e27d97da1aac7d82194d0cdac674c4ae95"
+      },
+      "validation_limit": "Experimental zero-shot similarity, no pixel-art gore recall benchmark. Original broad violence/sensitive ResNet was rejected after false positives."
+    }
+  ]
+}

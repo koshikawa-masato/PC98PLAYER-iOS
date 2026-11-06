@@ -15,7 +15,7 @@ static const std::vector<std::vector<Key>> rows = {
     {{"TAB",15,1.4},{"Q",16},{"W",17},{"E",18},{"R",19},{"T",20},{"Y",21},{"U",22},{"I",23},{"O",24},{"P",25},{"@",26},{"[",27},{"↵",28,1.4}},
     {{"CTRL",0x74,1.4},{"A",29},{"S",30},{"D",31},{"F",32},{"G",33},{"H",34},{"J",35},{"K",36},{"L",37},{";",38},{":",39},{"]",40},{"↵",28,1.4}},
     {{"SHIFT",0x70,1.8},{"Z",41},{"X",42},{"C",43},{"V",44},{"B",45},{"N",46},{"M",47},{",",48},{".",49},{"/",50},{"_",51},{"SHIFT",0x70,1.8}},
-    {{"CAPS",0x71},{"かな",0x72},{"GRPH",0x73},{"NFER",0x51},{"SPACE",0x34,4},{"XFER",0x35},{"↑",0x3A},{"←",0x3B},{"↓",0x3D},{"→",0x3C}},
+    {{"CAPS",0x71},{"かな",0x72},{"GRPH",0x73},{"NFER",0x51},{"SPACE",0x34,4},{"XFER",0x35},{"←",0x3B},{"↑",0x3A},{"↓",0x3D},{"→",0x3C}},
     {{"HELP",0x3F},{"HOME",0x3E},{"INS",0x38},{"DEL",0x39},{"R↓",0x37},{"R↑",0x36},{"7",0x42},{"8",0x43},{"9",0x44},{"/",0x41},{"*",0x45},{"-",0x40}},
     {{"4",0x46},{"5",0x47},{"6",0x48},{"+",0x49},{"1",0x4A},{"2",0x4B},{"3",0x4C},{"=",0x4D},{"0",0x4E},{",",0x4F},{".",0x50},{"↵",28}}
 };
@@ -241,7 +241,8 @@ static std::vector<HardwareKey> hardwareKeys() {
     }
     if(self.hardwareLayout) { [self layoutHardwareKeys]; return; }
     CGFloat gap=3, left=10, top=48, usable=self.bounds.size.width-20;
-    CGRect bank=[self vfBankFrame]; CGFloat vfWidth=(bank.size.width-gap*4)/5;
+    CGRect bank=[self vfBankFrame];
+    CGFloat vfWidth=(bank.size.width-gap*4)/5;
     for(NSUInteger i=0;i<5;++i)
         self.keys[0][i].frame=CGRectMake(bank.origin.x+i*(vfWidth+gap),bank.origin.y,vfWidth,bank.size.height);
     CGFloat h=(self.bounds.size.height-top-12-gap*(rows.size()-2))/(rows.size()-1);

@@ -1,0 +1,66 @@
+name: TestFlight
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Marketing version
+        required: true
+        default: '0.2.2'
+      build_number:
+        description: Unused ascending build number in App Store Connect
+        required: true
+        default: '11'
+  push:
+    branches: [main]
+    paths: ['.github/workflows/testflight.yml', 'tools/ci_testflight.sh']
+permissions:
+  contents: read
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+jobs:
+  distribute:
+    runs-on: macos-latest
+    env:
+      IOS_VERSION: ${{ inputs.version || '0.2.2' }}
+      IOS_BUILD_NUMBER: ${{ inputs.build_number || '11' }}
+      APPLE_DISTRIBUTION_P12_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+      APPLE_P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
+      APPSTORE_PROFILE_BASE64: ${{ secrets.APPSTORE_PROFILE_BASE64 }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check distribution requirements
+        shell: bash
+        run: |
+          missing=0
+          for name in APPLE_DISTRIBUTION_P12_BASE64 APPLE_P12_PASSWORD APPSTORE_PROFILE_BASE64 ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY; do
+            if [[ -z "${!name}" ]]; then echo "::error::Missing repository secret: $name"; missing=1; fi
+          done
+          exit "$missing"
+      - name: Validate core and filter policy
+        run: |
+          ./tools/fetch_ymfm.sh
+          cmake -S . -B build/testflight-checks -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/testflight-checks --parallel 3
+          ctest --test-dir build/testflight-checks --output-on-failure
+      - name: Validate simulator and actual content models
+        run: |
+          ./build_ios.sh
+          device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          ./tools/test_ios_simulator.sh "$device"
+          ./tools/test_content_filter_simulator.sh "$device"
+      - name: Archive, sign and upload to TestFlight
+        run: bash tools/ci_testflight.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: testflight-validation
+          path: |
+            out/ios-smoke/
+            out/content-filter/
+            build/testflight-checks/Testing/Temporary/LastTest.log

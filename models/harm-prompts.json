@@ -1,0 +1,19 @@
+{
+  "safe": [
+    "a normal colorful video game scene",
+    "a screenshot of a retro computer game with text",
+    "pixel art of clothed characters, buildings and landscapes",
+    "an illustration of a fantasy monster in a game",
+    "a harmless drawing of a person",
+    "a normal black text screen in a computer game"
+  ],
+  "harm": [
+    "an image of blood and bleeding wounds",
+    "a graphic depiction of severe bloody injuries",
+    "a gory scene with dismembered bodies",
+    "pixel art depicting blood and gore",
+    "an illustration of mutilation and graphic violence",
+    "a disturbing image of bloody human remains"
+  ],
+  "temperature_scale": 30
+}
