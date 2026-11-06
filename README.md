@@ -4,6 +4,8 @@
 
 ## はじめて使う方へ
 
+画像・動画付きの利用者向けサイトを `docs/index.html` に用意しています。Mac／Windows からの転送に加え、NAS の SMB 接続も案内します。[GitHub Pages の公開・更新手順](docs/SITE.md)を参照してください。
+
 **[iPhoneへの転送・導入チュートリアル（画像付き）](docs/tutorial/README.md)**
 
 Mac／WindowsからZIPをiPhoneへ送り、「ファイル」で展開してゲームを開く手順を説明しています。NASは不要です。転送練習用のオリジナルデモ、音源・色数の設定、起動できないときの対処も掲載しています。
