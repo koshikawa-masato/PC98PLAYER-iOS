@@ -59,22 +59,26 @@ def main():
                 env=dict(os.environ,TEST_RUNNER_STORE_BUNDLE_ID=bundle,TEST_RUNNER_STORE_ORIENTATION=orientation,
                          TEST_RUNNER_STORE_LAUNCH_ARGUMENTS=' '.join(FLAGS),TEST_RUNNER_STORE_DONE_FILE=str(done))
                 log=open(logs/f'{family.lower()}-{orientation}.log','w')
+                # CMake lists the UI test bundle in its testee's scheme (XCTEST_TESTEE).
                 helper=subprocess.Popen(['xcodebuild','test','-project',str(build/'PC98PLAYER.xcodeproj'),
-                    '-scheme','PC98PLAYERiOSUITests','-configuration','Debug','-destination',f'id={udid}',
+                    '-scheme','PC98PLAYERiOS','-configuration','Debug','-destination',f'id={udid}',
                     '-only-testing:PC98PLAYERiOSUITests/StoreOrientationUITests/testHoldStoreOrientation'],
                     env=env,stdout=log,stderr=subprocess.STDOUT)
+                captured=False
                 try:
                     layout=wait_for_layout(report,error,orientation,label,alive=lambda:helper.poll() is None,timeout=600)
                     time.sleep(2)  # let the rotation animation settle
                     run('xcrun','simctl','io',udid,'screenshot',str(output))
+                    captured=True
                 finally:
                     done.touch()
                     try:helper.wait(timeout=180)
                     except subprocess.TimeoutExpired:helper.kill();helper.wait()
                     log.close()
-                if helper.returncode!=0:
-                    print((logs/f'{family.lower()}-{orientation}.log').read_text()[-4000:])
-                    raise RuntimeError(f'Orientation UI test failed: {label}')
+                    if not captured or helper.returncode!=0:
+                        print(f'--- xcodebuild log ({label}) ---')
+                        print((logs/f'{family.lower()}-{orientation}.log').read_text(errors='replace')[-6000:])
+                if helper.returncode!=0:raise RuntimeError(f'Orientation UI test failed: {label}')
             manifest.append({'file':output.name,'device':device['name'],'orientation':orientation,'layout':layout})
         run('xcrun','simctl','status_bar',udid,'clear')
         run('xcrun','simctl','shutdown',udid)

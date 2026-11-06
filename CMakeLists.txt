@@ -95,12 +95,15 @@ elseif(APPLE)
     if(PC98PLAYER_IOS_UI_TESTS)
       add_library(PC98PLAYERiOSUITests MODULE ios/UITests/StoreOrientationUITests.mm)
       add_dependencies(PC98PLAYERiOSUITests PC98PLAYERiOS)
+      # CMake lists an XCTest bundle in its testee's scheme, so generate that scheme too.
+      set_property(TARGET PC98PLAYERiOS PROPERTY XCODE_GENERATE_SCHEME TRUE)
       target_compile_options(PC98PLAYERiOSUITests PRIVATE -fobjc-arc)
       target_link_libraries(PC98PLAYERiOSUITests PRIVATE "-framework XCTest" "-framework UIKit" "-framework Foundation")
       set_target_properties(PC98PLAYERiOSUITests PROPERTIES
         BUNDLE TRUE
         BUNDLE_EXTENSION xctest
         XCTEST TRUE
+        XCTEST_TESTEE PC98PLAYERiOS
         XCODE_GENERATE_SCHEME TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/ios/UITests/Info.plist.in"
         XCODE_PRODUCT_TYPE "com.apple.product-type.bundle.ui-testing"
