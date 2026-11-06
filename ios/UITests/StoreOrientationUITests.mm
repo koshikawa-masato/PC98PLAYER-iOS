@@ -22,8 +22,14 @@
     [app launch];
     XCUIDevice.sharedDevice.orientation=[orientation isEqualToString:@"landscape"] ? UIDeviceOrientationLandscapeLeft : UIDeviceOrientationPortrait;
 
-    // Hold this orientation until the capture script has taken its screenshot.
-    NSDate* limit=[NSDate dateWithTimeIntervalSinceNow:300];
+    [NSThread sleepForTimeInterval:3];
+    NSLog(@"STORE-CAPTURE orientation=%@ deviceOrientation=%ld appState=%ld appFrame=%@ windowFrame=%@",
+          orientation,(long)XCUIDevice.sharedDevice.orientation,(long)app.state,
+          NSStringFromCGRect(app.frame),NSStringFromCGRect(app.windows.firstMatch.frame));
+
+    // Hold this orientation until the capture script has taken its screenshot
+    // (longer than the script's own timeout, so the script reports first).
+    NSDate* limit=[NSDate dateWithTimeIntervalSinceNow:600];
     while(![NSFileManager.defaultManager fileExistsAtPath:done] && limit.timeIntervalSinceNow>0)
         [NSThread sleepForTimeInterval:0.5];
     XCTAssertTrue([NSFileManager.defaultManager fileExistsAtPath:done], @"Capture script did not finish");

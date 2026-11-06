@@ -11,19 +11,25 @@ FLAGS=['--demo','--layout-report','-PC98ManualDuo','NO','-PC98BossMode','NO','-P
 def run(*args):
     return subprocess.check_output(args,text=True).strip()
 
-def wait_for_layout(report,error,orientation,label,alive=lambda:True,timeout=180):
+def app_documents(udid,bundle):
+    """The app's Documents folder, looked up afresh: reinstalling can move the container."""
+    try:return pathlib.Path(run('xcrun','simctl','get_app_container',udid,bundle,'data'))/'Documents'
+    except subprocess.CalledProcessError:return None
+
+def wait_for_layout(documents,orientation,label,alive=lambda:True,timeout=180):
     """Wait until the app's layout report shows the requested orientation."""
-    matched=0
+    matched=0;last=None
     for _ in range(timeout):
-        if error.exists():raise RuntimeError(error.read_text())
-        if not alive():raise RuntimeError(f'Orientation helper exited early: {label}')
+        folder=documents()
+        if folder and (folder/'store-capture-error.txt').exists():raise RuntimeError((folder/'store-capture-error.txt').read_text())
+        if not alive():raise RuntimeError(f'Orientation helper exited early: {label}; last layout: {json.dumps(last)}')
         try:
-            layout=json.loads(report.read_text());w,h=layout['viewBounds'][2:]
+            layout=json.loads((folder/'layout-report.json').read_text());last=layout;w,h=layout['viewBounds'][2:]
             matched=matched+1 if (w>h)==(orientation=='landscape') and w>0 and h>0 else 0
             if matched>=3:return layout
-        except (FileNotFoundError,json.JSONDecodeError):matched=0
+        except (TypeError,FileNotFoundError,json.JSONDecodeError,KeyError):matched=0
         time.sleep(1)
-    raise RuntimeError(f'Orientation not reached: {label}')
+    raise RuntimeError(f'Orientation not reached: {label}; last layout: {json.dumps(last)}')
 
 def main():
     devices=json.loads(run('xcrun','simctl','list','devices','available','-j'))['devices']
@@ -42,17 +48,17 @@ def main():
         run('xcrun','simctl','bootstatus',udid,'-b')
         run('xcrun','simctl','install',udid,str(app))
         run('xcrun','simctl','status_bar',udid,'override','--time','9:41','--batteryState','charged','--batteryLevel','100')
-        container=pathlib.Path(run('xcrun','simctl','get_app_container',udid,bundle,'data'))/'Documents'
-        report=container/'layout-report.json';error=container/'store-capture-error.txt'
+        documents=lambda:app_documents(udid,bundle)
         for orientation in ['portrait','landscape']:
             label=f'{family} {orientation}'
             output=out/f'{family.lower()}-{orientation}.png'
-            report.unlink(missing_ok=True);error.unlink(missing_ok=True)
+            folder=documents()
+            for name in ['layout-report.json','store-capture-error.txt']:(folder/name).unlink(missing_ok=True)
             subprocess.run(['xcrun','simctl','terminate',udid,bundle],capture_output=True)
             if family=='iPhone':
                 # Each launch writes fresh layout evidence for the requested orientation.
                 run('xcrun','simctl','launch','--terminate-running-process',udid,bundle,*FLAGS,'--store-'+orientation)
-                layout=wait_for_layout(report,error,orientation,label)
+                layout=wait_for_layout(documents,orientation,label)
                 run('xcrun','simctl','io',udid,'screenshot',str(output))
             else:
                 done=(logs/f'{family.lower()}-{orientation}.done').resolve();done.unlink(missing_ok=True)
@@ -66,7 +72,7 @@ def main():
                     env=env,stdout=log,stderr=subprocess.STDOUT)
                 captured=False
                 try:
-                    layout=wait_for_layout(report,error,orientation,label,alive=lambda:helper.poll() is None,timeout=600)
+                    layout=wait_for_layout(documents,orientation,label,alive=lambda:helper.poll() is None,timeout=420)
                     time.sleep(2)  # let the rotation animation settle
                     run('xcrun','simctl','io',udid,'screenshot',str(output))
                     captured=True
