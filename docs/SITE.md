@@ -2,6 +2,21 @@
 
 `docs/index.html` が入口です。サイトのビルドは不要です。App Store の入手バッジには Apple 公式の日本語画像（tools.applemediaservices.com）を使用します。画像・動画・ZIP は相対パスのため、GitHub Pages のプロジェクトサイトのサブパスでも動作します。
 
+## デザイン
+
+昭和後期〜平成初期のパソコンをモチーフにしています。アイボリー筐体色・濃紺インク・4色ストライプ（赤／橙／黄／青）、CRT 風の動画セクション、ファンクションキー型の章ナビ、ウインドウ風タイトルバー付きカード、硬い影（オフセットシャドウ）を使います。本文はシステムフォントで可読性を保ち、見出し・ラベルだけドットフォントにしています。
+
+- 見出しフォント：DotGothic16（SIL Open Font License 1.1、`assets/fonts/OFL.txt`）。外部フォント配信は使わず、ページで使う文字だけのサブセット（約50KB）を `assets/fonts/DotGothic16-subset.woff2` に同梱しています。
+- 見出しに新しい漢字を追加したら再生成します（含まれない文字は代替フォントで表示されます）：
+
+```sh
+pip install fonttools brotli
+curl -LO https://raw.githubusercontent.com/google/fonts/main/ofl/dotgothic16/DotGothic16-Regular.ttf
+python3 tools/site/subset_font.py DotGothic16-Regular.ttf
+```
+
+- カーソル点滅などの動きは `prefers-reduced-motion` で停止します。
+
 ## 公開手順
 
 1. GitHub リポジトリの Settings → Pages → Build and deployment で Source を **GitHub Actions** に設定します。
