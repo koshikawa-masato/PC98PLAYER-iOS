@@ -1,5 +1,7 @@
 # PC98PLAYER-iOS
 
+Mac ローカルでの TestFlight 配布・掲載画像更新を引き継ぐ場合は [LOCAL_HANDOFF.md](LOCAL_HANDOFF.md) を参照してください。
+
 **App Store掲載名：RetroDOS Player** · [App Storeで入手](https://apps.apple.com/jp/app/retrodos-player/id6826817332)
 
 ## はじめて使う方へ
