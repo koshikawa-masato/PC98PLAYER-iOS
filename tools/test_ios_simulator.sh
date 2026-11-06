@@ -3,7 +3,7 @@ set -eu
 cd "$(dirname "$0")/.."
 bundle=${IOS_BUNDLE_ID:-jp.pc98player.ios}
 device=${1:?Usage: tools/test_ios_simulator.sh DEVICE_UDID}
-app=build/ios-iphonesimulator/Debug-iphonesimulator/PC98PLAYERiOS.app
+app=${IOS_BUILD_ROOT:-build}/ios-iphonesimulator/Debug-iphonesimulator/PC98PLAYERiOS.app
 if [ ! -d "$app" ]; then
   printf 'Build the Debug simulator app with ./build_ios.sh first.\n' >&2
   exit 1
@@ -13,7 +13,9 @@ container=$(xcrun simctl get_app_container "$device" "$bundle" data)
 xcrun simctl terminate "$device" "$bundle" >/dev/null 2>&1 || true
 # These are generated test artifacts belonging to this app, not game data.
 rm -f "$container/Documents/smoke-result.json" "$container/Documents/duo-smoke.png"
-xcrun simctl launch "$device" "$bundle" --smoke-test
+# Isolate playback assertions from a saved closed-hinge boss-mode preference.
+# NSArgumentDomain overrides this launch only; the stored preference is unchanged.
+xcrun simctl launch "$device" "$bundle" --smoke-test -PC98BossMode NO
 attempt=0
 while [ ! -f "$container/Documents/smoke-result.json" ]; do
   attempt=$((attempt + 1))

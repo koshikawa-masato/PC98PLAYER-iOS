@@ -2,6 +2,7 @@
 #import <Cocoa/Cocoa.h>
 #import <AudioToolbox/AudioToolbox.h>
 #include "player.h"
+#include "StartupPath.h"
 #include "hostfs.h"
 #include "font.h"
 #include "AudioOut.h"
@@ -92,10 +93,10 @@ static __weak AppDelegate* appDelegate;
 
 static NSBitmapImageRep* framebuffer() {
     NSBitmapImageRep* image = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:nullptr
-        pixelsWide:640 pixelsHigh:400 bitsPerSample:8 samplesPerPixel:3 hasAlpha:NO
+        pixelsWide:640 pixelsHigh:player->fb_h bitsPerSample:8 samplesPerPixel:3 hasAlpha:NO
         isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:640*3 bitsPerPixel:24];
     uint8_t* dst = image.bitmapData;
-    for (int i = 0; i < 640*400; ++i) {
+    for (int i = 0; i < 640*player->fb_h; ++i) {
         uint32_t c = player->fb[i]; dst[i*3] = c >> 16; dst[i*3+1] = c >> 8; dst[i*3+2] = c;
     }
     return image;
@@ -110,9 +111,9 @@ static NSBitmapImageRep* framebuffer() {
         [text drawAtPoint:NSMakePoint(40, self.bounds.size.height/2) withAttributes:attrs];
         return;
     }
-    double scale = std::min(self.bounds.size.width/640, self.bounds.size.height/400);
+    double scale = std::min(self.bounds.size.width/640, self.bounds.size.height/player->fb_h);
     NSRect dest = NSMakeRect((self.bounds.size.width-640*scale)/2,
-        (self.bounds.size.height-400*scale)/2, 640*scale, 400*scale);
+        (self.bounds.size.height-player->fb_h*scale)/2, 640*scale, player->fb_h*scale);
     NSGraphicsContext.currentContext.imageInterpolation = player->ps.smooth ? NSImageInterpolationHigh : NSImageInterpolationNone;
     [framebuffer() drawInRect:dest];
 }
@@ -253,8 +254,16 @@ static NSMenuItem* item(NSMenu* menu, NSString* title, SEL action, NSString* key
     if (self.sourceScoped) [self.sourceURL stopAccessingSecurityScopedResource];
     self.sourceURL = source; self.sourceScoped = scoped;
     player = std::make_unique<Player>();
+    player->ask_pc9821 = [](void*) -> bool {
+        NSAlert* prompt = [NSAlert new];
+        prompt.messageText = @"256色対応の機種として起動しますか？";
+        prompt.informativeText = @"このソフトは拡張グラフィックを確認しています。16色で起動したい場合は「16色」を選んでください。INIのPC9821またはVideoColorsで起動方法を指定できます。";
+        [prompt addButtonWithTitle:@"256色"]; [prompt addButtonWithTitle:@"16色"];
+        return [prompt runModal] == NSAlertFirstButtonReturn;
+    };
     mac_install_font(ps.font_name, ps.font_shift);
     std::string error;
+    ps.cfg.start = apple_startup::dos_start_path(ps.cfg.start);
     if (!player->init(ps,&error)) { alert(ns(error)); player->shutdown(); player.reset(); return; }
     currentIniPath = iniPath; currentSettings = ps;
     NSError* bookmarkError = nil;
@@ -263,7 +272,8 @@ static NSMenuItem* item(NSMenu* menu, NSString* title, SEL action, NSString* key
     [self refreshLibrary];
     self.window.representedFilename = iniPath;
     self.window.title = ps.title.empty() ? [@"PC98PLAYER — " stringByAppendingString:root.lastPathComponent] : ns(ps.title);
-    [self.window setContentSize:NSMakeSize(640*ps.scale,400*ps.scale)];
+    self.window.contentAspectRatio = NSMakeSize(640,player->fb_h);
+    [self.window setContentSize:NSMakeSize(640*ps.scale,player->fb_h*ps.scale)];
     if (!muted && !audio.open(ps.sample_rate)) alert(@"音声デバイスを開けませんでした。映像のみで続行します。");
     for (const auto* e : {&player->floppy_error,&player->cd_error,&player->rhythm_error}) if (!e->empty()) alert(ns(*e));
     paused = false; frameCount = 0; self.nextFrame = NSProcessInfo.processInfo.systemUptime;
@@ -276,7 +286,13 @@ static NSMenuItem* item(NSMenu* menu, NSString* title, SEL action, NSString* key
     if (now - self.nextFrame > frameSeconds*3) self.nextFrame = now;
     int n = 0;
     while (now >= self.nextFrame && n++ < 3) {
-        player->run_frame(); audio.push(player->audio); ++frameCount; self.nextFrame += frameSeconds;
+        player->run_frame();
+        if (self.window.contentAspectRatio.height != player->fb_h) {
+            self.window.contentAspectRatio = NSMakeSize(640,player->fb_h);
+            if (!(self.window.styleMask & NSWindowStyleMaskFullScreen))
+                [self.window setContentSize:NSMakeSize(self.window.contentView.bounds.size.width,self.window.contentView.bounds.size.width*player->fb_h/640)];
+        }
+        audio.push(player->audio); ++frameCount; self.nextFrame += frameSeconds;
         if (frameLimit && frameCount >= frameLimit) {
             if (screenshotPath) [framebuffer().TIFFRepresentation writeToFile:screenshotPath atomically:YES];
             [NSApp terminate:nil]; return;
