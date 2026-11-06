@@ -327,6 +327,17 @@ static UIImage* frameImage(Player* p) {
     if([NSProcessInfo.processInfo.arguments containsObject:@"--demo"]) [self demo];
 #ifdef PC98PLAYER_TESTING
     NSArray<NSString*>* arguments=NSProcessInfo.processInfo.arguments;
+    if([arguments containsObject:@"--store-portrait"] || [arguments containsObject:@"--store-landscape"]) {
+        BOOL landscape=[arguments containsObject:@"--store-landscape"];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
+            UIWindowScene* scene=self.view.window.windowScene;
+            UIWindowSceneGeometryPreferencesIOS* preference=[[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:landscape?UIInterfaceOrientationMaskLandscapeLeft:UIInterfaceOrientationMaskPortrait];
+            [scene requestGeometryUpdateWithPreferences:preference errorHandler:^(NSError* error) {
+                [error.localizedDescription writeToURL:area(NSDocumentDirectory,@"store-capture-error.txt") atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            }];
+        });
+    }
+
     NSUInteger cachedIndex=[arguments indexOfObject:@"--cached-game"];
     if(cachedIndex!=NSNotFound && cachedIndex+1<arguments.count) {
         NSString* identifier=arguments[cachedIndex+1];

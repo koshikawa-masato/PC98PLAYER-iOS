@@ -41,3 +41,16 @@ jobs:
           path: |
             out/ios-smoke/
             out/content-filter/
+  screenshots:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build current UI for screenshots
+        run: ./build_ios.sh
+      - name: Capture iPhone and iPad in both orientations
+        run: python3 tools/capture_store_screens.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-store-screenshots
+          path: out/app-store-screens/
+          if-no-files-found: error
