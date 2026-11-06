@@ -5,6 +5,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface GameLibrary : NSObject
 + (BOOL)isUsableCacheAtURL:(NSURL*)url;
 + (BOOL)copyFolderFromURL:(NSURL*)source toURL:(NSURL*)destination error:(NSError**)error;
++ (nullable NSURL*)gameRootAtURL:(NSURL*)cache relativePath:(NSString*)path error:(NSError**)error;
 + (NSArray<NSDictionary*>*)entries;
 + (BOOL)rememberURL:(NSURL*)url name:(NSString*)name error:(NSError**)error;
 + (nullable NSURL*)resolveEntry:(NSDictionary*)entry error:(NSError**)error;

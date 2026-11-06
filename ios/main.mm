@@ -725,6 +725,7 @@ static UIImage* frameImage(Player* p) {
     });
 }
 - (void)openCache:(NSURL*)cache identifier:(NSString*)identifier {
+    cache=cache.URLByStandardizingPath.URLByResolvingSymlinksInPath;
     [self stopGame]; self.currentCache=cache; self.currentID=identifier;
     NSString* saves=[@"PC98Saves/" stringByAppendingString:identifier];
     NSURL* saved=area(NSApplicationSupportDirectory,[saves stringByAppendingPathComponent:@"files"]);
@@ -733,13 +734,9 @@ static UIImage* frameImage(Player* p) {
     hostfs::set_overlay(cache.fileSystemRepresentation,saved.fileSystemRepresentation);
     Ini ini; ini.load([[cache URLByAppendingPathComponent:@"PC98PLAYER.INI"] fileSystemRepresentation]);
     NSString* configured=text(ini.get("PC98PLAYER.ROOT"));
-    NSURL* root=cache;
-    if(configured.length) {
-        configured=[configured stringByReplacingOccurrencesOfString:@"\\" withString:@"/"];
-        root=[cache URLByAppendingPathComponent:configured isDirectory:YES].URLByStandardizingPath;
-        if(configured.isAbsolutePath || ![root.path hasPrefix:[cache.path stringByAppendingString:@"/"]]) {
-            [self message:@"iOSではRoot=にゲームフォルダ内の相対パスを指定してください。"]; return;
-        }
+    NSURL* root=[GameLibrary gameRootAtURL:cache relativePath:configured error:&error];
+    if(!root) {
+        [self message:[@"Root= の指定先を開けません。ゲームフォルダ内の相対パスと取得状態を確認してください。\n" stringByAppendingString:error.localizedDescription ?: @""]]; return;
     }
     PlayerSettings ps; player_settings_from_ini(ini,root.fileSystemRepresentation,&ps);
     NSNumber* sound=[NSUserDefaults.standardUserDefaults objectForKey:@"PC98SoundBoard"];
@@ -756,14 +753,16 @@ static UIImage* frameImage(Player* p) {
 }
 - (void)chooseProgram:(NSURL*)root settings:(PlayerSettings)settings {
     NSMutableArray* programs=[NSMutableArray new];
-    NSDirectoryEnumerator* e=[NSFileManager.defaultManager enumeratorAtURL:root includingPropertiesForKeys:@[NSURLIsRegularFileKey] options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:nil];
+    __block NSError* scanError=nil;
+    NSDirectoryEnumerator* e=[NSFileManager.defaultManager enumeratorAtURL:root includingPropertiesForKeys:@[NSURLIsRegularFileKey] options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:^BOOL(NSURL* url,NSError* error) { scanError=error; return NO; }];
     for(NSURL* url in e) {
         if([@[@"bat",@"com",@"exe"] containsObject:url.pathExtension.lowercaseString]) {
-            NSNumber* regular=nil; [url getResourceValue:&regular forKey:NSURLIsRegularFileKey error:nil];
+            NSNumber* regular=nil; if(![url getResourceValue:&regular forKey:NSURLIsRegularFileKey error:&scanError]) break;
             if(regular.boolValue) [programs addObject:[url.path substringFromIndex:root.path.length+1]];
         }
     }
-    if(!programs.count) { [self message:@"起動ファイルがありません。ゲームフォルダとINIのStart=を確認してください。"]; return; }
+    if(scanError) { [self message:[@"ゲームフォルダを読み取れません。取得状態を確認してください。\n" stringByAppendingString:scanError.localizedDescription]]; return; }
+    if(!programs.count) { [self message:@"起動ファイルがありません。ZIPを展開し、BAT・COM・EXEのあるフォルダを選んでください。iCloudでは「ファイル」でダウンロード完了を確認してください。以前取得した内容が不完全な場合は「場所」でゲーム本体のキャッシュを消去して再取得してください（セーブは保持されます）。"]; return; }
     [programs sortUsingSelector:@selector(localizedStandardCompare:)];
     FileChooser* chooser=[FileChooser new]; chooser.title=@"起動するプログラム"; chooser.paths=programs;
     __weak PlayerController* weak=self;

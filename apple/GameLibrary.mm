@@ -100,6 +100,22 @@ static BOOL copyIndexedFolder(NSURL* source,NSURL* destination,NSDictionary* ind
     return YES;
 }
 
++ (NSURL*)gameRootAtURL:(NSURL*)cache relativePath:(NSString*)path error:(NSError**)error {
+    NSString* relative=[path stringByReplacingOccurrencesOfString:@"\\" withString:@"/"];
+    NSURL* base=cache.URLByStandardizingPath.URLByResolvingSymlinksInPath;
+    NSURL* root=relative.length ? [base URLByAppendingPathComponent:relative isDirectory:YES].URLByStandardizingPath.URLByResolvingSymlinksInPath : base;
+    if(relative.isAbsolutePath || [relative containsString:@":"] ||
+       (![root.path isEqualToString:base.path] && ![root.path hasPrefix:[base.path stringByAppendingString:@"/"]])) {
+        if(error) *error=cacheError(9,@"Root= が選択フォルダの外を指しています。空欄、.、またはフォルダ内の相対パスを指定してください。"); return nil;
+    }
+    NSNumber* directory=nil;
+    if(![root getResourceValue:&directory forKey:NSURLIsDirectoryKey error:error]) return nil;
+    if(!directory.boolValue) {
+        if(error) *error=cacheError(9,@"Root= の指定先がフォルダではありません。"); return nil;
+    }
+    return root;
+}
+
 + (NSArray<NSDictionary*>*)entries {
     NSArray* entries = [NSUserDefaults.standardUserDefaults arrayForKey:@"PC98GameFolders"];
     return entries ?: @[];
