@@ -53,6 +53,7 @@ static std::vector<HardwareKey> hardwareKeys() {
 @property(nonatomic) BOOL retroPressed;
 @property BOOL modifier;
 @property BOOL steppedReturn;
+@property BOOL alignedLegend;
 @property CGFloat detailScale;
 @property BOOL expandedLegends;
 @property NSString* kana;
@@ -76,7 +77,15 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (BOOL)containsKeyPoint:(CGPoint)point { return [[self capPath:self.bounds] containsPoint:point]; }
 - (CGRect)titleRectForContentRect:(CGRect)contentRect {
-    if(self.steppedReturn) return CGRectMake(self.bounds.size.width*.25,self.bounds.size.height*.28,self.bounds.size.width*.67,self.bounds.size.height*.4);
+    if(self.alignedLegend) {
+        CGRect legend=self.bounds;
+        if(self.steppedReturn) {
+            CGFloat notch=CGRectGetWidth(legend)*12/56;
+            legend.origin.x+=notch;
+            legend.size.width-=notch;
+        }
+        return CGRectInset(legend,2*self.detailScale,0);
+    }
     CGFloat inset=(self.bounds.size.width<24 ? 2 : 4)*self.detailScale;
     return CGRectMake(inset,2*self.detailScale,MAX(1,self.bounds.size.width-inset*2),self.bounds.size.height*(self.kana.length?.56:.85));
 }
@@ -84,6 +93,10 @@ static std::vector<HardwareKey> hardwareKeys() {
     CGFloat size=self.expandedLegends ? MAX(5,MIN(16,MIN(self.bounds.size.width*.58,self.bounds.size.height*.34))) : MAX(3,MIN(13*self.detailScale,MIN(self.bounds.size.width*.36,self.bounds.size.height*.32)));
     self.titleLabel.font=[UIFont monospacedSystemFontOfSize:size weight:UIFontWeightMedium];
     [super layoutSubviews];
+    if(self.alignedLegend) {
+        self.titleLabel.textAlignment=self.tag==0x3C ? NSTextAlignmentRight : NSTextAlignmentCenter;
+        self.titleLabel.frame=[self titleRectForContentRect:self.bounds];
+    }
 }
 - (void)drawRect:(CGRect)rect {
     CGFloat detail=self.detailScale;
@@ -147,6 +160,7 @@ static std::vector<HardwareKey> hardwareKeys() {
             NSMutableArray* group=[NSMutableArray new];
             for(const auto& k:row) {
                 PC98KeyButton* b=[PC98KeyButton buttonWithType:UIButtonTypeCustom]; b.tag=k.scan; b.detailScale=1;
+                b.alignedLegend=k.scan==28 || k.scan==0x3A || k.scan==0x3C || k.scan==0x3D;
                 [b setTitle:[NSString stringWithUTF8String:k.name] forState:UIControlStateNormal];
                 b.titleLabel.font=[UIFont monospacedSystemFontOfSize:13 weight:UIFontWeightSemibold];
                 b.titleLabel.adjustsFontSizeToFitWidth=YES; b.titleLabel.minimumScaleFactor=0.5;
@@ -234,7 +248,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     NSMutableArray* buttons=[NSMutableArray new];
     for(NSUInteger i=0;i<labels.count;++i) {
         PC98KeyButton* key=[PC98KeyButton buttonWithType:UIButtonTypeCustom];
-        key.tag=[self controllerScanAtIndex:i];
+        key.tag=self.controllerBindings ? self.controllerBindings[i].intValue : controllerDefaultScans[i];
         key.detailScale=1;
         key.expandedLegends=YES;
         key.titleLabel.textAlignment=NSTextAlignmentCenter;
@@ -295,89 +309,29 @@ static std::vector<HardwareKey> hardwareKeys() {
 - (void)loadControllerBindingsForGame:(NSString*)identifier {
     NSUserDefaults* defaults=NSUserDefaults.standardUserDefaults;
     self.controllerBindingsKey=[@"PC98ControllerBindings." stringByAppendingString:identifier];
-    self.controllerBindings=[defaults arrayForKey:self.controllerBindingsKey]
-        ?: [defaults arrayForKey:@"PC98TouchControllerBindings"];
+    self.controllerBindings=pc98_controller_bindings([defaults arrayForKey:self.controllerBindingsKey]
+        ?: [defaults arrayForKey:@"PC98TouchControllerBindings"]);
+    [self applyControllerBindings];
+}
+- (void)applyControllerBindings {
     for(NSUInteger i=0;i<self.controllerKeys.count;++i)
-        self.controllerKeys[i].tag=[self controllerScanAtIndex:i];
-    [self updateControllerMenu];
-}
-- (int)controllerScanAtIndex:(NSUInteger)index {
-    if(index<self.controllerBindings.count) {
-        NSNumber* binding=self.controllerBindings[index];
-        if([binding isKindOfClass:NSNumber.class] && binding.intValue>=0 && binding.intValue<128)
-            return binding.intValue;
-    }
-    return controllerDefaultScans[index];
-}
-- (void)saveControllerBindings {
-    NSMutableArray* bindings=[NSMutableArray new];
-    for(PC98KeyButton* control in self.controllerKeys) [bindings addObject:@(control.tag)];
-    self.controllerBindings=bindings;
-    [NSUserDefaults.standardUserDefaults setObject:bindings forKey:self.controllerBindingsKey ?: @"PC98TouchControllerBindings"];
+        self.controllerKeys[i].tag=self.controllerBindings[i].intValue;
     [self updateControllerMenu];
 }
 - (void)updateControllerMenu {
     if(!self.controllerSettings) return;
-    NSMutableArray<NSString*>* letters=[NSMutableArray new];
-    for(char c='A';c<='Z';++c) [letters addObject:[NSString stringWithFormat:@"%c",c]];
-    NSMutableArray<NSString*>* functions=[NSMutableArray new];
-    for(int i=1;i<=10;++i) [functions addObject:[NSString stringWithFormat:@"F%d",i]];
-    for(int i=1;i<=5;++i) [functions addObject:[NSString stringWithFormat:@"VF%d",i]];
-    NSArray* categories=@[@"アルファベット",@"ファンクションキー",@"数字",@"操作キー"];
-    NSArray* names=@[letters,functions,@[@"0",@"1",@"2",@"3",@"4",@"5",@"6",@"7",@"8",@"9"],
-                     @[@"Enter",@"Space",@"Esc",@"Tab",@"Backspace",@"←",@"↑",@"↓",@"→"]];
-    NSMutableArray* controls=[NSMutableArray new];
+    NSMutableArray<NSString*>* names=[NSMutableArray new];
     __weak PC98Keyboard* weak=self;
-    for(NSUInteger index=0;index<self.controllerKeys.count;++index) {
-        PC98KeyButton* key=self.controllerKeys[index];
-        key.accessibilityValue=nil;
-        NSMutableArray* groups=[NSMutableArray new];
-        for(NSUInteger category=0;category<categories.count;++category) {
-            NSMutableArray* actions=[NSMutableArray new];
-            for(NSUInteger i=0;i<[names[category] count];++i) {
-                const int special[]={28,0x34,0,15,14,0x3B,0x3A,0x3D,0x3C};
-                int scan;
-                switch(category) {
-                    case 0: scan=pc98_scan_from_hid(4+i); break;
-                    case 1: scan=i<10 ? 0x62+(int)i : 0x52+(int)i-10; break;
-                    case 2: scan=i ? (int)i : 10; break;
-                    default: scan=special[i]; break;
-                }
-                NSString* name=names[category][i];
-                if(key.tag==scan) key.accessibilityValue=name;
-                __weak PC98KeyButton* weakKey=key;
-                UIAction* action=[UIAction actionWithTitle:name image:nil identifier:nil handler:^(__kindof UIAction* sender) {
-                    PC98Keyboard* keyboard=weak;
-                    PC98KeyButton* button=weakKey;
-                    if(!keyboard || !button) return;
-                    [keyboard releaseAll];
-                    button.tag=scan;
-                    [keyboard saveControllerBindings];
-                }];
-                action.state=key.tag==scan ? UIMenuElementStateOn : UIMenuElementStateOff;
-                [actions addObject:action];
-            }
-            [groups addObject:[UIMenu menuWithTitle:categories[category] children:actions]];
-        }
-        UIAction* reset=[UIAction actionWithTitle:@"この割り当てを初期値に戻す" image:nil identifier:nil handler:^(__kindof UIAction* action) {
-            PC98Keyboard* keyboard=weak;
-            [keyboard releaseAll];
-            keyboard.controllerKeys[index].tag=controllerDefaultScans[index];
-            [keyboard saveControllerBindings];
-        }];
-        [groups addObject:reset];
-        NSString* title=[NSString stringWithFormat:@"%@  ·  %@",key.currentTitle,key.accessibilityValue ?: @""];
-        [controls addObject:[UIMenu menuWithTitle:title children:groups]];
-    }
-    UIAction* resetAll=[UIAction actionWithTitle:@"すべての割り当てを初期値に戻す" image:nil identifier:nil handler:^(__kindof UIAction* action) {
+    self.controllerSettings.menu=pc98_controller_binding_menu(pc98_controller_bindings(self.controllerBindings),names,^(NSArray<NSNumber*>* bindings) {
         PC98Keyboard* keyboard=weak;
+        if(!keyboard) return;
         [keyboard releaseAll];
-        for(NSUInteger index=0;index<keyboard.controllerKeys.count;++index)
-            keyboard.controllerKeys[index].tag=controllerDefaultScans[index];
-        [keyboard saveControllerBindings];
-    }];
-    [controls addObject:resetAll];
-    self.controllerSettings.menu=[UIMenu menuWithTitle:@"キー割り当て" children:controls];
+        keyboard.controllerBindings=bindings;
+        [NSUserDefaults.standardUserDefaults setObject:bindings forKey:keyboard.controllerBindingsKey ?: @"PC98TouchControllerBindings"];
+        [keyboard applyControllerBindings];
+    });
+    for(NSUInteger i=0;i<self.controllerKeys.count;++i)
+        self.controllerKeys[i].accessibilityValue=names[i];
 }
 - (void)layoutController {
     CGFloat width=self.bounds.size.width, height=self.bounds.size.height;
@@ -571,13 +525,18 @@ static std::vector<HardwareKey> hardwareKeys() {
         CGFloat unit=(usable-gap*(rows[r].size()-1))/units, x=left;
         for(size_t c=0;c<rows[r].size();++c) {
             CGFloat w=unit*rows[r][c].width;
-            self.keys[r][c].frame=CGRectMake(x,top+(r-1)*(h+gap),w,MAX(1,h)); x+=w+gap;
+            PC98KeyButton* key=self.keys[r][c];
+            key.frame=CGRectMake(x,top+(r-1)*(h+gap),w,MAX(1,h));
+            if(key.alignedLegend) [key setNeedsLayout];
+            x+=w+gap;
         }
     }
     // The two row slots form one tall Return key; the numeric Return stays separate.
     UIButton* upperReturn=self.keys[3].lastObject;
     UIButton* lowerReturn=self.keys[4].lastObject;
     upperReturn.frame=CGRectUnion(upperReturn.frame,lowerReturn.frame);
+    [upperReturn setNeedsLayout];
+    [upperReturn setNeedsDisplay];
     lowerReturn.hidden=YES; lowerReturn.isAccessibilityElement=NO;
     [self bringSubviewToFront:upperReturn];
     [self setNeedsDisplay];
@@ -592,8 +551,9 @@ static std::vector<HardwareKey> hardwareKeys() {
             if(!button && key.tag==spec.scan && !placed.count(key)) button=key;
         if(!button) continue;
         placed.insert(button); button.detailScale=scale; button.expandedLegends=YES; button.hidden=NO; button.isAccessibilityElement=YES;
-        button.frame=[self hardwareRect:CGRectMake(spec.x,spec.y,spec.w,spec.h)];
         button.steppedReturn=spec.scan==28 && spec.h>40;
+        button.frame=[self hardwareRect:CGRectMake(spec.x,spec.y,spec.w,spec.h)];
+        if(button.alignedLegend) [button setNeedsLayout];
         if(spec.scan==0x34) [button setTitle:@"" forState:UIControlStateNormal];
         if(spec.scan>=0x52 && spec.scan<=0x6B) button.modifier=YES;
         [button setNeedsDisplay];
@@ -800,7 +760,13 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (BOOL)tapReturnSectionsForTesting {
     [self layoutIfNeeded];
-    UIButton* key=self.keys[3].lastObject;
+    PC98KeyButton* key=self.keys[3].lastObject;
+    [key layoutIfNeeded];
+    CGRect legend=key.titleLabel.frame;
+    CGFloat expectedX=CGRectGetMidX(key.bounds);
+    if(key.steppedReturn) expectedX+=CGRectGetWidth(key.bounds)*6/56;
+    if(std::abs(CGRectGetMidX(legend)-expectedX)>.5 ||
+       std::abs(CGRectGetMidY(legend)-CGRectGetMidY(key.bounds))>.5) return NO;
     // Include the former seam as well as the upper and lower ends.
     for(CGFloat fraction : {.15,.5,.85}) {
         CGPoint point=CGPointMake(key.frame.origin.x+key.frame.size.width*.65,key.frame.origin.y+key.frame.size.height*fraction);
@@ -875,4 +841,67 @@ int pc98_scan_from_hid(NSInteger u) {
         case 224:case 228:return 0x74; case 225:case 229:return 0x70; case 226:case 230:return 0x73;
         default:return -1;
     }
+}
+
+NSArray<NSNumber*>* pc98_controller_bindings(NSArray<NSNumber*>* saved) {
+    NSMutableArray<NSNumber*>* bindings=[NSMutableArray new];
+    for(NSUInteger i=0;i<std::size(controllerDefaultScans);++i) {
+        NSNumber* value=i<saved.count ? saved[i] : nil;
+        BOOL valid=[value isKindOfClass:NSNumber.class] && value.intValue>=0 && value.intValue<128;
+        [bindings addObject:valid ? value : @(controllerDefaultScans[i])];
+    }
+    return bindings;
+}
+
+UIMenu* pc98_controller_binding_menu(NSArray<NSNumber*>* bindings, NSMutableArray<NSString*>* selectedNames,
+                                    void (^changed)(NSArray<NSNumber*>*)) {
+    NSMutableArray<NSString*>* letters=[NSMutableArray new];
+    for(char c='A';c<='Z';++c) [letters addObject:[NSString stringWithFormat:@"%c",c]];
+    NSMutableArray<NSString*>* functions=[NSMutableArray new];
+    for(int i=1;i<=10;++i) [functions addObject:[NSString stringWithFormat:@"F%d",i]];
+    for(int i=1;i<=5;++i) [functions addObject:[NSString stringWithFormat:@"VF%d",i]];
+    NSArray* categories=@[@"アルファベット",@"ファンクションキー",@"数字",@"操作キー"];
+    NSArray* names=@[letters,functions,@[@"0",@"1",@"2",@"3",@"4",@"5",@"6",@"7",@"8",@"9"],
+                     @[@"Enter",@"Space",@"Esc",@"Tab",@"Backspace",@"←",@"↑",@"↓",@"→"]];
+    NSArray<NSString*>* labels=@[@"↑",@"←",@"→",@"↓",@"A",@"B"];
+    NSMutableArray* controls=[NSMutableArray new];
+    for(NSUInteger index=0;index<labels.count;++index) {
+        int selected=bindings[index].intValue;
+        NSString* selectedName=@"";
+        void (^assign)(int)=^(int scan) {
+            NSMutableArray<NSNumber*>* updated=[bindings mutableCopy];
+            updated[index]=@(scan);
+            changed(updated);
+        };
+        NSMutableArray* groups=[NSMutableArray new];
+        for(NSUInteger category=0;category<categories.count;++category) {
+            NSMutableArray* actions=[NSMutableArray new];
+            for(NSUInteger i=0;i<[names[category] count];++i) {
+                const int special[]={28,0x34,0,15,14,0x3B,0x3A,0x3D,0x3C};
+                int scan;
+                switch(category) {
+                    case 0: scan=pc98_scan_from_hid(4+i); break;
+                    case 1: scan=i<10 ? 0x62+(int)i : 0x52+(int)i-10; break;
+                    case 2: scan=i ? (int)i : 10; break;
+                    default: scan=special[i]; break;
+                }
+                NSString* name=names[category][i];
+                if(selected==scan) selectedName=name;
+                UIAction* action=[UIAction actionWithTitle:name image:nil identifier:nil handler:^(__kindof UIAction* sender) { assign(scan); }];
+                action.state=selected==scan ? UIMenuElementStateOn : UIMenuElementStateOff;
+                [actions addObject:action];
+            }
+            [groups addObject:[UIMenu menuWithTitle:categories[category] children:actions]];
+        }
+        [groups addObject:[UIAction actionWithTitle:@"この割り当てを初期値に戻す" image:nil identifier:nil handler:^(__kindof UIAction* action) {
+            assign(controllerDefaultScans[index]);
+        }]];
+        [selectedNames addObject:selectedName];
+        NSString* title=[NSString stringWithFormat:@"%@  ·  %@",labels[index],selectedName];
+        [controls addObject:[UIMenu menuWithTitle:title children:groups]];
+    }
+    [controls addObject:[UIAction actionWithTitle:@"すべての割り当てを初期値に戻す" image:nil identifier:nil handler:^(__kindof UIAction* action) {
+        changed(pc98_controller_bindings(nil));
+    }]];
+    return [UIMenu menuWithTitle:@"キー割り当て" children:controls];
 }
