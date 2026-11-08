@@ -59,11 +59,34 @@ static UIImage* frameImage(Player* p) {
     CGImageRef image=CGImageCreate(640,p->fb_h,8,32,640*4,colors,kCGBitmapByteOrder32Little|kCGImageAlphaNoneSkipFirst,provider,nullptr,false,kCGRenderingIntentDefault);
     UIImage* result=[UIImage imageWithCGImage:image]; CGImageRelease(image); CGColorSpaceRelease(colors); CGDataProviderRelease(provider); return result;
 }
+// Match guest pixels before filtering, but only export the image shown to the user.
+static NSData* titleFrameDigest(const void* pixels, size_t length) {
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(pixels, (CC_LONG)length, digest);
+    return [NSData dataWithBytes:digest length:sizeof(digest)];
+}
+static NSString* titleReferenceKey(NSString* identifier) {
+    return [@"PC98TitleFrame." stringByAppendingString:identifier];
+}
+static NSURL* titleScreenshotURL(NSString* identifier) {
+    return [area(NSDocumentDirectory, @"TitleScreenshots")
+        URLByAppendingPathComponent:[identifier stringByAppendingPathExtension:@"png"]];
+}
+static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
+    NSData* png=UIImagePNGRepresentation(image);
+    if(!png) return NO;
+    NSURL* url=titleScreenshotURL(identifier);
+    if(![NSFileManager.defaultManager createDirectoryAtURL:url.URLByDeletingLastPathComponent
+        withIntermediateDirectories:YES attributes:nil error:nil]) return NO;
+    return [png writeToURL:url options:NSDataWritingAtomic error:nil];
+}
 @interface FileChooser : UITableViewController
 @property NSArray<NSString*>* paths;
+@property NSString* explanation;
 @property(copy) void (^selected)(NSString*);
 @end
 @implementation FileChooser
+- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return self.explanation; }
 - (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return self.paths.count; }
 - (UITableViewCell*)tableView:(UITableView*)tableView cellForRowAtIndexPath:(NSIndexPath*)index {
     UITableViewCell* cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
@@ -229,6 +252,9 @@ static UIImage* frameImage(Player* p) {
 @property UIView* bossShield;
 @property id<UIInteraction> hingeInteraction;
 @property UIImageView* monitor;
+@property UIImage* displayedSourceFrame;
+@property NSData* titleReference;
+@property BOOL titleCaptureAttempted;
 @property PC98ContentFilter* contentFilter;
 @property PC98MonitorCabinet* topPanel;
 @property PC98Keyboard* keyboard;
@@ -639,17 +665,32 @@ static UIImage* frameImage(Player* p) {
     if(!player)return;
     if(filterFrameHeight!=player->fb_h) { [self.contentFilter reset];self.monitor.image=nil;filterFrameHeight=player->fb_h; }
     UIImage* image=frameImage(player.get());
+    NSData* reference=self.titleReference;
+    BOOL matchesTitle=reference && !self.titleCaptureAttempted &&
+        !(bossMode && hingeClosed) &&
+        [reference isEqualToData:titleFrameDigest(player->fb, 640 * player->fb_h * sizeof(uint32_t))];
     if(self.contentFilter.settings.enabled() && !self.monitor.image)
         self.status.text=self.contentFilter.lastError?[@"保護フィルター: " stringByAppendingString:self.contentFilter.lastError]:@"保護フィルター: 判定中…";
     __weak PlayerController* weak=self;
     [self.contentFilter submitImage:image completion:^(UIImage* filtered,NSString* error) {
         PlayerController* s=weak;if(!s || !s->player)return;
         s.monitor.image=filtered;
+        s.displayedSourceFrame=filtered && !error ? image : nil;
         if(error)s.status.text=[@"保護フィルター: " stringByAppendingString:error];
         else if([s.status.text hasPrefix:@"保護フィルター:"])s.status.text=s->paused?@"一時停止":s.contentFilter.settings.enabled()?@"実行中 — 保護フィルター有効":@"実行中";
+        if(matchesTitle && filtered && !error && !s.titleCaptureAttempted &&
+           UIApplication.sharedApplication.applicationState==UIApplicationStateActive &&
+           [reference isEqualToData:s.titleReference] && !(s->bossMode && s->hingeClosed)) {
+            s.titleCaptureAttempted=YES;
+            s.status.text=writeTitleScreenshot(filtered,s.currentID)
+                ? @"タイトル画面を保存しました" : @"タイトル画面を保存できませんでした";
+        }
     }];
 }
 - (void)stopGame {
+    self.displayedSourceFrame=nil;
+    self.titleReference=nil;
+    self.titleCaptureAttempted=NO;
     [self.contentFilter reset];self.monitor.image=nil;filterFrameHeight=0;
     fullscreenMenuPaused=NO; paused=YES; [self releaseKeys]; audio.close();
     if(player) { player->shutdown(); player.reset(); }
@@ -743,7 +784,9 @@ static UIImage* frameImage(Player* p) {
     NSError* error=nil;
     if(![NSFileManager.defaultManager createDirectoryAtURL:saved withIntermediateDirectories:YES attributes:nil error:&error]) { [self message:error.localizedDescription]; return; }
     hostfs::set_overlay(cache.fileSystemRepresentation,saved.fileSystemRepresentation);
-    Ini ini; ini.load([[cache URLByAppendingPathComponent:@"PC98PLAYER.INI"] fileSystemRepresentation]);
+    NSURL* iniURL=[cache URLByAppendingPathComponent:@"PC98PLAYER.INI"];
+    Ini ini;
+    BOOL loadedINI=ini.load(iniURL.fileSystemRepresentation);
     NSString* configured=text(ini.get("PC98PLAYER.ROOT"));
     NSURL* root=[GameLibrary gameRootAtURL:cache relativePath:configured error:&error];
     if(!root) {
@@ -759,10 +802,20 @@ static UIImage* frameImage(Player* p) {
         apple_set_video_colors(ps.cfg,ps.cfg.pc9821 || ps.cfg.video_colors==256 ? 256 : 16);
     }
     ps.cfg.midi=0; ps.cfg.trace=0; ps.sample_rate=std::clamp(ps.sample_rate,8000,192000);
-    if(ps.cfg.start.empty() && !ps.cfg.boot_fd) { [self chooseProgram:root settings:ps]; return; }
+    if(ps.cfg.start.empty() && !ps.cfg.boot_fd) {
+        NSString* explanation;
+        if(loadedINI)
+            explanation=@"PC98PLAYER.INI に起動指定がありません。[PC98PLAYER] の下に Start=実行ファイル名 を記入してください。";
+        else if([NSFileManager.defaultManager fileExistsAtPath:iniURL.path])
+            explanation=@"PC98PLAYER.INI を読み込めませんでした。ファイルを確認してください。";
+        else
+            explanation=@"選んだフォルダの直下に PC98PLAYER.INI がありません。ここから起動ファイルを選べます。";
+        [self chooseProgram:root settings:ps explanation:explanation];
+        return;
+    }
     [self launchSettings:ps];
 }
-- (void)chooseProgram:(NSURL*)root settings:(PlayerSettings)settings {
+- (void)chooseProgram:(NSURL*)root settings:(PlayerSettings)settings explanation:(NSString*)explanation {
     NSMutableArray* programs=[NSMutableArray new];
     __block NSError* scanError=nil;
     NSDirectoryEnumerator* e=[NSFileManager.defaultManager enumeratorAtURL:root includingPropertiesForKeys:@[NSURLIsRegularFileKey] options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:^BOOL(NSURL* url,NSError* error) { scanError=error; return NO; }];
@@ -775,7 +828,7 @@ static UIImage* frameImage(Player* p) {
     if(scanError) { [self message:[@"ゲームフォルダを読み取れません。取得状態を確認してください。\n" stringByAppendingString:scanError.localizedDescription]]; return; }
     if(!programs.count) { [self message:@"起動ファイルがありません。ZIPを展開し、BAT・COM・EXEのあるフォルダを選んでください。iCloudでは「ファイル」でダウンロード完了を確認してください。以前取得した内容が不完全な場合は「場所」でゲーム本体のキャッシュを消去して再取得してください（セーブは保持されます）。"]; return; }
     [programs sortUsingSelector:@selector(localizedStandardCompare:)];
-    FileChooser* chooser=[FileChooser new]; chooser.title=@"起動するプログラム"; chooser.paths=programs;
+    FileChooser* chooser=[FileChooser new]; chooser.title=@"起動するプログラム"; chooser.paths=programs; chooser.explanation=explanation;
     __weak PlayerController* weak=self;
     chooser.selected=^(NSString* selected) { PlayerSettings s=settings; s.cfg.start=hostfs::to_sjis(selected.UTF8String); [weak launchSettings:s]; };
     UINavigationController* navigation=[[UINavigationController alloc] initWithRootViewController:chooser];
@@ -792,6 +845,9 @@ static UIImage* frameImage(Player* p) {
         self.status.text=@"実行中 — NASを直接読込、保存データは別領域";
 #endif
 
+    if(self.currentID.length && ![self.currentID isEqualToString:@"demo"])
+        self.titleReference=[NSUserDefaults.standardUserDefaults dataForKey:titleReferenceKey(self.currentID)];
+    self.titleCaptureAttempted=NO;
     [self startAudio]; [self becomeFirstResponder];
     NSString* warnings=@"";
     for(auto* e:{&player->floppy_error,&player->cd_error,&player->rhythm_error}) if(!e->empty()) warnings=[warnings stringByAppendingFormat:@"%@\n",text(*e)];
@@ -868,6 +924,49 @@ static UIImage* frameImage(Player* p) {
     GameLocationsController* menu=[GameLocationsController new];
     menu.message=@"「開く」から、このiPhone内／ファイルで接続したNASのフォルダを選べます。元データは書き換えません。";
     __weak PlayerController* weak=self;
+    NSString* identifier=self.currentID;
+    if(player && !player->m->quit && identifier.length && ![identifier isEqualToString:@"demo"]) {
+        UIImage* shown=self.monitor.image;
+        UIImage* source=self.displayedSourceFrame;
+        if(shown && source && !(bossMode && hingeClosed)) {
+            menu.message=@"タイトル画面で「今の画面を登録」を選ぶと、次回から同じ画面が出たときに自動でPNGを保存します。";
+            [menu addTitle:@"今の画面をタイトル画面として登録" destructive:NO action:^{
+                PlayerController* s=weak;
+                if(!s || ![identifier isEqualToString:s.currentID] || (s->bossMode && s->hingeClosed)) return;
+                CGDataProviderRef provider=CGImageGetDataProvider(source.CGImage);
+                NSData* pixels=provider ? CFBridgingRelease(CGDataProviderCopyData(provider)) : nil;
+                if(!pixels.length || !writeTitleScreenshot(shown,identifier)) {
+                    [s message:@"タイトル画面を保存できませんでした。"];
+                    return;
+                }
+                NSData* digest=titleFrameDigest(pixels.bytes,pixels.length);
+                [NSUserDefaults.standardUserDefaults setObject:digest forKey:titleReferenceKey(identifier)];
+                s.titleReference=digest;
+                s.titleCaptureAttempted=YES;
+                s.status.text=@"タイトル画面を登録しました";
+            }];
+        }
+        NSURL* screenshot=titleScreenshotURL(identifier);
+        if([NSFileManager.defaultManager fileExistsAtPath:screenshot.path]) {
+            [menu addTitle:@"保存したタイトル画面を共有" destructive:NO action:^{
+                PlayerController* s=weak;
+                if(!s || (s->bossMode && s->hingeClosed)) return;
+                UIActivityViewController* share=[[UIActivityViewController alloc]
+                    initWithActivityItems:@[screenshot] applicationActivities:nil];
+                share.popoverPresentationController.sourceView=s.toolbar;
+                share.popoverPresentationController.sourceRect=s.toolbar.bounds;
+                [s presentViewController:share animated:YES completion:nil];
+            }];
+        }
+        if(self.titleReference) {
+            [menu addTitle:@"タイトル画面の自動保存を解除" destructive:NO action:^{
+                [NSUserDefaults.standardUserDefaults removeObjectForKey:titleReferenceKey(identifier)];
+                PlayerController* s=weak;
+                if([identifier isEqualToString:s.currentID]) s.titleReference=nil;
+            }];
+        }
+    }
+
 #if TARGET_OS_SIMULATOR
     NSString* nasPath=[NSUserDefaults.standardUserDefaults stringForKey:@"PC98SimulatorNASRoot"];
     if(nasPath.length) {
