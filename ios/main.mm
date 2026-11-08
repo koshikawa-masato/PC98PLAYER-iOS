@@ -14,6 +14,7 @@
 #include "GraphicsSettings.h"
 #import "ContentFilter.h"
 #include "hostfs.h"
+#include <deque>
 #include <memory>
 #include <set>
 #include <algorithm>
@@ -64,6 +65,9 @@ static NSData* titleFrameDigest(const void* pixels, size_t length) {
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256(pixels, (CC_LONG)length, digest);
     return [NSData dataWithBytes:digest length:sizeof(digest)];
+}
+static NSString* gameClockKey(NSString* identifier) {
+    return [@"PC98GameClockMHz." stringByAppendingString:identifier];
 }
 static NSString* titleReferenceKey(NSString* identifier) {
     return [@"PC98TitleFrame." stringByAppendingString:identifier];
@@ -128,7 +132,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
 @implementation GameLocationsController
 - (instancetype)init { if((self=[super initWithStyle:UITableViewStyleInsetGrouped])) self.choices=[NSMutableArray new];return self; }
 - (void)viewDidLoad {
-    [super viewDidLoad];self.title=@"ゲームデータの場所";
+    [super viewDidLoad];self.title=@"ゲーム一覧";
     self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"閉じる" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
     self.tableView.rowHeight=UITableViewAutomaticDimension;self.tableView.estimatedRowHeight=60;
 }
@@ -241,6 +245,13 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     std::unique_ptr<Player> player;
     AudioOut audio;
     double nextFrame;
+    double fpsSampleStart;
+    int fpsSampleFrames;
+    struct FPSSample {
+        double elapsed;
+        int frames;
+    };
+    std::deque<FPSSample> fpsHistory;
     DuoFullscreenPresentation fullscreenPresentation;
     BOOL bossMode, hingeClosed;
     BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
@@ -259,6 +270,8 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
 @property PC98MonitorCabinet* topPanel;
 @property PC98Keyboard* keyboard;
 @property UILabel* status;
+@property UILabel* fpsLabel;
+@property UIStackView* statusRow;
 @property UIStackView* toolbar;
 @property CADisplayLink* displayLink;
 @property UIActivityIndicatorView* spinner;
@@ -305,9 +318,16 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     [tap requireGestureRecognizerToFail:hold];[tap requireGestureRecognizerToFail:doubleTap];[tap requireGestureRecognizerToFail:twoFingerTap];[self.monitor addGestureRecognizer:tap];
     self.status=[UILabel new]; self.status.text=@"ゲームフォルダを選択してください";
     self.status.textColor=[UIColor colorWithWhite:.24 alpha:1]; self.status.font=[UIFont monospacedSystemFontOfSize:8 weight:UIFontWeightRegular]; self.status.numberOfLines=1; self.status.adjustsFontSizeToFitWidth=YES;
-    [self.view addSubview:self.status];
+    self.fpsLabel=[UILabel new];
+    self.fpsLabel.font=self.status.font;
+    self.fpsLabel.textColor=self.status.textColor;
+    self.fpsLabel.hidden=YES;
+    [self.fpsLabel setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    self.statusRow=[[UIStackView alloc] initWithArrangedSubviews:@[self.status,self.fpsLabel,[UIView new]]];
+    self.statusRow.spacing=4;
+    [self.view addSubview:self.statusRow];
     self.toolbar=[UIStackView new]; self.toolbar.axis=UILayoutConstraintAxisHorizontal; self.toolbar.distribution=UIStackViewDistributionFillEqually; self.toolbar.spacing=3;
-    NSArray* titles=@[@"オプション",@"開く",@"場所",@"▶︎ / Ⅱ",@"保存",@"読込",@"リセット",@"右クリック"];
+    NSArray* titles=@[@"オプション",@"開く",@"一覧",@"▶︎ / Ⅱ",@"保存",@"読込",@"リセット",@"右クリック"];
     SEL actions[]={@selector(showOptions),@selector(openFolder),@selector(showLibrary),@selector(togglePause),@selector(saveSlot),@selector(loadSlot),@selector(resetGame),@selector(rightClick)};
     for(NSUInteger i=0;i<titles.count;++i) { UIButton* b=[UIButton buttonWithType:UIButtonTypeSystem]; [b setTitle:titles[i] forState:UIControlStateNormal]; b.titleLabel.font=[UIFont systemFontOfSize:10 weight:UIFontWeightMedium]; [b setTitleColor:[UIColor colorWithWhite:.18 alpha:1] forState:UIControlStateNormal]; [b setTitleColor:UIColor.grayColor forState:UIControlStateHighlighted]; b.backgroundColor=PC98Plastic(.87); b.layer.cornerRadius=2; b.layer.borderWidth=1; b.layer.borderColor=PC98Plastic(.55).CGColor; b.layer.shadowColor=UIColor.blackColor.CGColor; b.layer.shadowOffset=CGSizeMake(0,1); b.layer.shadowOpacity=.25; b.layer.shadowRadius=0; b.titleLabel.adjustsFontSizeToFitWidth=YES; [b addTarget:self action:actions[i] forControlEvents:UIControlEventTouchUpInside]; [self.toolbar addArrangedSubview:b]; }
     [self.view addSubview:self.toolbar];
@@ -316,6 +336,11 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
         PlayerController* s=weak; if(!s) return;
         if(down) s->touchKeys.insert(scan); else s->touchKeys.erase(scan);
         [s updateScan:scan];
+    };
+    self.keyboard.pauseChanged=^{ [weak togglePause]; };
+    self.keyboard.controllerSettingsOpening=^{
+        PlayerController* controller=weak;
+        if(controller && !controller->paused) [controller togglePause];
     };
     [self.view addSubview:self.keyboard];
     self.spinner=[[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge]; self.spinner.color=PC98Plastic(.8); [self.topPanel addSubview:self.spinner];
@@ -331,7 +356,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
         NSString* root=simulatorArguments[nasIndex+1].stringByStandardizingPath;BOOL directory=NO;
         if(root.isAbsolutePath && [NSFileManager.defaultManager fileExistsAtPath:root isDirectory:&directory] && directory) {
             [NSUserDefaults.standardUserDefaults setObject:root forKey:@"PC98SimulatorNASRoot"];
-            self.status.text=@"NASを登録しました。「場所」からゲームを選べます。";
+            self.status.text=@"NASを登録しました。「一覧」からゲームを選べます。";
         } else self.status.text=@"NASのフォルダーが見つかりません。Macの共有接続を確認してください。";
     }
 #endif
@@ -518,13 +543,13 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     if(separateControls) {
         CGRect lower=self.keyboard.frame;
         self.toolbar.frame=CGRectMake(lower.origin.x+12,lower.origin.y+4,lower.size.width-24,32);
-        self.status.frame=CGRectMake(lower.origin.x+15,lower.origin.y+40,lower.size.width-30,10);
+        self.statusRow.frame=CGRectMake(lower.origin.x+15,lower.origin.y+40,lower.size.width-30,10);
     } else {
-        self.status.frame=[self.topPanel convertRect:[self.topPanel statusFrame] toView:self.view];
+        self.statusRow.frame=[self.topPanel convertRect:[self.topPanel statusFrame] toView:self.view];
         self.toolbar.frame=[self.topPanel convertRect:[self.topPanel controlsFrame] toView:self.view];
     }
     [self.view bringSubviewToFront:self.toolbar];
-    [self.view bringSubviewToFront:self.status];
+    [self.view bringSubviewToFront:self.statusRow];
     if(fullScreen) {
         CGFloat width=MAX(1,MIN(fullscreenAvailable.size.width,fullscreenAvailable.size.height*1.6));
         self.monitor.frame=CGRectMake(CGRectGetMidX(fullscreenAvailable)-width/2,CGRectGetMidY(fullscreenAvailable)-width/3.2,width,width/1.6);
@@ -561,7 +586,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     [self.audioProbe event:fullScreen?@"fullscreen-enter":@"fullscreen-exit"];
 #endif
     self.topPanel.hidden=fullScreen;self.keyboard.hidden=fullScreen;
-    self.toolbar.hidden=fullScreen;self.status.hidden=fullScreen;
+    self.toolbar.hidden=fullScreen;self.statusRow.hidden=fullScreen;
     self.view.backgroundColor=fullScreen?UIColor.blackColor:PC98Plastic(.84);
     self.monitor.layer.cornerRadius=fullScreen?0:4;
     [self.monitor removeFromSuperview];
@@ -643,23 +668,57 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     [self click:1];
 }
 - (void)rightClick { [self click:2]; }
+- (void)resetFPS {
+    fpsSampleStart=0;
+    fpsSampleFrames=0;
+    fpsHistory.clear();
+    self.fpsLabel.hidden=YES;
+}
 - (void)tick:(CADisplayLink*)link {
+    [self.keyboard updateControllerPause:paused enabled:player && !player->m->quit && !fetching && !(bossMode && hingeClosed)];
     self.topPanel.playbackState=(!player || player->m->quit)?PC98PlaybackStateInactive:paused?PC98PlaybackStatePaused:PC98PlaybackStateRunning;
-    if(!player || paused || fetching || (bossMode && hingeClosed)) return;
+    if(!player || player->m->quit || paused || fetching || (bossMode && hingeClosed)) {
+        [self resetFPS];
+        return;
+    }
     constexpr double seconds=(double)FRAME_TICKS/MASTER_CLOCK;
     double now=CACurrentMediaTime(); if(now-nextFrame>seconds*3) nextFrame=now;
     [self.keyboard repeatHeldKeys];
-    int frames=0;BOOL audioClock=audio.queue!=nullptr;
-    while((audioClock?audio.needsFrames():now>=nextFrame) && frames++<(audioClock?8:3)) {
+    // Match macOS: advance the guest on elapsed time. Audio output consumes
+    // the generated samples without deciding when the guest runs.
+    int frames=0;
+    while(now>=nextFrame && frames<3) {
         player->run_frame();
+        ++frames;
 #ifdef PC98PLAYER_TESTING
         [self.audioProbe appendReference:player->audio rate:player->ps.sample_rate];
 #endif
         audio.push(player->audio); nextFrame+=seconds;
         if(player->m->quit) { paused=YES; [self releaseKeys]; audio.close(); self.status.text=player->m->quit==2 ? text(player->m->status) : @"実行が終了しました"; break; }
     }
-    if(audioClock) nextFrame=now;
-    [self refreshMonitor];
+    if(frames) [self refreshMonitor];
+
+    if(!fpsSampleStart) {
+        fpsSampleStart=now;
+        return;
+    }
+    fpsSampleFrames+=frames;
+    double elapsed=now-fpsSampleStart;
+    if(elapsed>=1.0 && !paused) {
+        // Update every second using up to ten seconds of measured guest frames.
+        fpsHistory.push_back({elapsed,fpsSampleFrames});
+        if(fpsHistory.size()>10) fpsHistory.pop_front();
+        double totalElapsed=0;
+        int totalFrames=0;
+        for(const auto& sample : fpsHistory) {
+            totalElapsed+=sample.elapsed;
+            totalFrames+=sample.frames;
+        }
+        self.fpsLabel.text=[NSString stringWithFormat:@"%.1f / %.1f fps",totalFrames/totalElapsed,1.0/seconds];
+        self.fpsLabel.hidden=NO;
+        fpsSampleStart=now;
+        fpsSampleFrames=0;
+    }
 }
 - (void)refreshMonitor {
     if(!player)return;
@@ -688,6 +747,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     }];
 }
 - (void)stopGame {
+    [self resetFPS];
     self.displayedSourceFrame=nil;
     self.titleReference=nil;
     self.titleCaptureAttempted=NO;
@@ -776,6 +836,8 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
         [self message:[@"Root= の指定先を開けません。ゲームフォルダ内の相対パスと取得状態を確認してください。\n" stringByAppendingString:error.localizedDescription ?: @""]]; return;
     }
     PlayerSettings ps; player_settings_from_ini(ini,root.fileSystemRepresentation,&ps);
+    NSInteger clock=[NSUserDefaults.standardUserDefaults integerForKey:gameClockKey(identifier)];
+    if(clock==66) ps.cfg.cpu_mhz=(int)clock;
     NSNumber* sound=[NSUserDefaults.standardUserDefaults objectForKey:@"PC98SoundBoard"];
     NSNumber* colors=[NSUserDefaults.standardUserDefaults objectForKey:@"PC98VideoColors"];
     if(sound) ps.cfg.sound_board=sound.integerValue==26?26:86;
@@ -809,7 +871,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
         }
     }
     if(scanError) { [self message:[@"ゲームフォルダを読み取れません。取得状態を確認してください。\n" stringByAppendingString:scanError.localizedDescription]]; return; }
-    if(!programs.count) { [self message:@"起動ファイルがありません。ZIPを展開し、BAT・COM・EXEのあるフォルダを選んでください。iCloudでは「ファイル」でダウンロード完了を確認してください。以前取得した内容が不完全な場合は「場所」でゲーム本体のキャッシュを消去して再取得してください（セーブは保持されます）。"]; return; }
+    if(!programs.count) { [self message:@"起動ファイルがありません。ZIPを展開し、BAT・COM・EXEのあるフォルダを選んでください。iCloudでは「ファイル」でダウンロード完了を確認してください。以前取得した内容が不完全な場合は「一覧」でゲーム本体のキャッシュを消去して再取得してください（セーブは保持されます）。"]; return; }
     [programs sortUsingSelector:@selector(localizedStandardCompare:)];
     FileChooser* chooser=[FileChooser new]; chooser.title=@"起動するプログラム"; chooser.paths=programs; chooser.explanation=explanation;
     __weak PlayerController* weak=self;
@@ -902,6 +964,27 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
+- (void)showGameClock {
+    if(!player || !self.currentCache || !self.currentID) return;
+    NSString* identifier=self.currentID;
+    NSURL* cache=self.currentCache;
+    NSString* message=[NSString stringWithFormat:@"現在は %u MHz です。このゲームの設定を保存し、ゲームを再起動します。", player->m->cpu_hz/1000000];
+    UIAlertController* alert=[UIAlertController alertControllerWithTitle:@"CPUクロック" message:message preferredStyle:UIAlertControllerStyleAlert];
+    __weak PlayerController* weak=self;
+    void (^applyClock)(NSInteger)=^(NSInteger clock) {
+        PlayerController* s=weak;
+        if(!s || ![s.currentID isEqualToString:identifier]) return;
+        NSUserDefaults* defaults=NSUserDefaults.standardUserDefaults;
+        NSString* key=gameClockKey(identifier);
+        if(clock) [defaults setInteger:clock forKey:key];
+        else [defaults removeObjectForKey:key];
+        [s openCache:cache identifier:identifier];
+    };
+    [alert addAction:[UIAlertAction actionWithTitle:@"66 MHzに固定" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) { applyClock(66); }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"INIの設定に戻す" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) { applyClock(0); }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
 - (void)showLibrary {
     if(fetching || self.presentedViewController) return;
     GameLocationsController* menu=[GameLocationsController new];
@@ -909,6 +992,8 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     __weak PlayerController* weak=self;
     NSString* identifier=self.currentID;
     if(player && !player->m->quit && identifier.length && ![identifier isEqualToString:@"demo"]) {
+        NSString* clockTitle=[NSString stringWithFormat:@"CPUクロック（%u MHz）",player->m->cpu_hz/1000000];
+        [menu addTitle:clockTitle destructive:NO action:^{ [weak showGameClock]; }];
         UIImage* shown=self.monitor.image;
         UIImage* source=self.displayedSourceFrame;
         if(shown && source && !(bossMode && hingeClosed)) {
@@ -1181,6 +1266,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     [self.keyboard releaseScanForTesting:0x70 cancelled:YES];
     result[@"cancelledModifierReleased"]=@(!player->m->kb_down[0x70]);
     [self releaseKeys];
+    result[@"controllerChord"]=@([self.keyboard controllerChordForTesting:^BOOL(int scan) { return player->m->kb_down[scan]!=0; }]);
     std::string error; bool saved=player->save_state(7,&error);
     uint8_t previous=player->m->ram[0x90000]; player->m->ram[0x90000]=previous^0xFF;
     bool loaded=player->load_state(7,&error);
@@ -1216,7 +1302,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     CGRect previousMonitor=self.monitor.frame;
     [self.keyboard pressScansForTesting:@[@0x70,@29]];
     [self toggleFullScreen];
-    result[@"fullscreenHidesControls"]=@(fullScreen && self.topPanel.hidden && self.keyboard.hidden && self.toolbar.hidden && self.status.hidden && self.monitor.superview==self.view && self.prefersStatusBarHidden);
+    result[@"fullscreenHidesControls"]=@(fullScreen && self.topPanel.hidden && self.keyboard.hidden && self.toolbar.hidden && self.statusRow.hidden && self.monitor.superview==self.view && self.prefersStatusBarHidden);
     CGRect fullscreenSafe=UIEdgeInsetsInsetRect(self.view.bounds,self.view.safeAreaInsets);
     result[@"fullscreenAspectFit"]=@(CGRectContainsRect(fullscreenSafe,self.monitor.frame) && fabs(self.monitor.frame.size.width/self.monitor.frame.size.height-1.6)<.001);
     result[@"fullscreenReleasesKeys"]=@(!player->m->kb_down[0x70] && !player->m->kb_down[29]);
@@ -1237,7 +1323,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     [self leftClick:nil];
     result[@"normalViewDoesNotTapResume"]=@(paused && !fullscreenMenuPaused);
     [self togglePause];
-    result[@"fullscreenRestoresLayout"]=@(!fullScreen && !self.topPanel.hidden && !self.keyboard.hidden && !self.toolbar.hidden && !self.status.hidden && self.monitor.superview==self.topPanel && CGRectEqualToRect(previousMonitor,self.monitor.frame));
+    result[@"fullscreenRestoresLayout"]=@(!fullScreen && !self.topPanel.hidden && !self.keyboard.hidden && !self.toolbar.hidden && !self.statusRow.hidden && self.monitor.superview==self.topPanel && CGRectEqualToRect(previousMonitor,self.monitor.frame));
     manualDuo=YES; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     CGRect camera=CGRectMake(540,0,129,82), panel=CGRectMake(0,0,669,448);
     CGRect clear=monitorAvoiding(panel,camera);

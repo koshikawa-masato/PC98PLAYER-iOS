@@ -4,9 +4,11 @@
 #include <map>
 #include <vector>
 #include <algorithm>
+#include <cmath>
 
 #include <set>
 #import <QuartzCore/QuartzCore.h>
+static constexpr int controllerDefaultScans[]={0x3A,0x3B,0x3C,0x3D,0x34,28};
 struct Key { const char* name; int scan; float width=1; };
 static const std::vector<std::vector<Key>> rows = {
     {{"VF1",0x52},{"VF2",0x53},{"VF3",0x54},{"VF4",0x55},{"VF5",0x56}},
@@ -57,7 +59,11 @@ static std::vector<HardwareKey> hardwareKeys() {
 @end
 @implementation PC98KeyButton
 - (BOOL)accessibilityActivate { return self.activate ? self.activate() : NO; }
-- (void)setRetroPressed:(BOOL)value { _retroPressed=value; [self setNeedsDisplay]; [self setNeedsLayout]; }
+- (void)setRetroPressed:(BOOL)value {
+    if(_retroPressed==value) return;
+    _retroPressed=value;
+    [self setNeedsDisplay];
+}
 - (UIBezierPath*)capPath:(CGRect)r {
     if(!self.steppedReturn) return [UIBezierPath bezierPathWithRoundedRect:r cornerRadius:2*self.detailScale];
     CGFloat notch=r.size.width*12/56, step=r.origin.y+r.size.height*31/63;
@@ -72,7 +78,7 @@ static std::vector<HardwareKey> hardwareKeys() {
 - (CGRect)titleRectForContentRect:(CGRect)contentRect {
     if(self.steppedReturn) return CGRectMake(self.bounds.size.width*.25,self.bounds.size.height*.28,self.bounds.size.width*.67,self.bounds.size.height*.4);
     CGFloat inset=(self.bounds.size.width<24 ? 2 : 4)*self.detailScale;
-    return CGRectMake(inset,(self.retroPressed?4:2)*self.detailScale,MAX(1,self.bounds.size.width-inset*2),self.bounds.size.height*(self.kana.length?.56:.85));
+    return CGRectMake(inset,2*self.detailScale,MAX(1,self.bounds.size.width-inset*2),self.bounds.size.height*(self.kana.length?.56:.85));
 }
 - (void)layoutSubviews {
     CGFloat size=self.expandedLegends ? MAX(5,MIN(16,MIN(self.bounds.size.width*.58,self.bounds.size.height*.34))) : MAX(3,MIN(13*self.detailScale,MIN(self.bounds.size.width*.36,self.bounds.size.height*.32)));
@@ -107,15 +113,27 @@ static std::vector<HardwareKey> hardwareKeys() {
     }
 }
 @end
-@interface PC98Keyboard () {
+@interface PC98Keyboard () <UIGestureRecognizerDelegate> {
     std::map<UITouch*,UIButton*> touches;
     std::map<int,int> counts;
     std::set<int> latched;
     std::set<int> modifierChords;
     std::map<int,double> repeatAt;
+    __weak UITouch* stickTouch;
+    CGPoint panelSwipeOrigin;
+    CGRect stickFrame;
+    CGRect actionChordFrame;
+    std::map<UITouch*,unsigned> actionTouches;
+    unsigned stickDirections;
 }
 @property(strong) NSArray<NSArray<UIButton*>*>* keys;
 @property(strong) UIImpactFeedbackGenerator* keyFeedback;
+@property(strong) NSArray<PC98KeyButton*>* controllerKeys;
+@property(strong) UIButton* controllerSettings;
+@property(strong) UIButton* controllerPause;
+@property(strong) UIView* stickKnob;
+@property BOOL controllerMode;
+@property BOOL switchingInputMode;
 @end
 @implementation PC98Keyboard
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -143,8 +161,265 @@ static std::vector<HardwareKey> hardwareKeys() {
             [groups addObject:group];
         }
         self.keys=groups;
+        UIPanGestureRecognizer* swipe=[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(swipeInputPanel:)];
+        swipe.delegate=self;
+        swipe.maximumNumberOfTouches=1;
+        [self addGestureRecognizer:swipe];
     }
     return self;
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer*)gesture shouldReceiveTouch:(UITouch*)touch {
+    panelSwipeOrigin=[touch locationInView:self.superview];
+    if(!self.controllerMode) return YES;
+    CGPoint point=[touch locationInView:self];
+    return !CGRectContainsPoint(stickFrame,point) && ![self actionButtonsAt:point] &&
+           !CGRectContainsPoint(self.controllerPause.frame,point) &&
+           !CGRectContainsPoint(self.controllerSettings.frame,point);
+}
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer*)gesture {
+    UIPanGestureRecognizer* swipe=(UIPanGestureRecognizer*)gesture;
+    CGPoint point=[swipe locationInView:self.superview];
+    CGPoint movement=CGPointMake(point.x-panelSwipeOrigin.x,point.y-panelSwipeOrigin.y);
+    if(CGPointEqualToPoint(movement,CGPointZero)) movement=[swipe velocityInView:self.superview];
+    return !self.switchingInputMode && std::abs(movement.x)>=std::abs(movement.y)*1.4 &&
+           (self.controllerMode ? movement.x>=0 : movement.x<=0);
+}
+- (void)swipeInputPanel:(UIPanGestureRecognizer*)gesture {
+    CGFloat direction=self.controllerMode ? 1 : -1;
+    CGFloat distance=MIN(64,self.bounds.size.width*.18);
+    CGFloat drag=MAX(0,([gesture locationInView:self.superview].x-panelSwipeOrigin.x)*direction);
+    BOOL reduceMotion=UIAccessibilityIsReduceMotionEnabled();
+    if(gesture.state==UIGestureRecognizerStateBegan) [self releaseAll];
+    if(gesture.state==UIGestureRecognizerStateBegan || gesture.state==UIGestureRecognizerStateChanged) {
+        if(!reduceMotion) self.transform=CGAffineTransformMakeTranslation(direction*MIN(distance,drag*.55),0);
+        return;
+    }
+
+    CGFloat velocity=[gesture velocityInView:self.superview].x*direction;
+    BOOL change=gesture.state==UIGestureRecognizerStateEnded &&
+                (drag>=MIN(70,self.bounds.size.width*.22) || (drag>=20 && velocity>450));
+    if(!change) {
+        [UIView animateWithDuration:reduceMotion ? 0 : .18 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+            self.transform=CGAffineTransformIdentity;
+        } completion:nil];
+        return;
+    }
+
+    self.switchingInputMode=YES;
+    [UIView animateWithDuration:reduceMotion ? 0 : .10 animations:^{
+        if(!reduceMotion) {
+            self.transform=CGAffineTransformMakeTranslation(direction*distance,0);
+        }
+    } completion:^(BOOL finished) {
+        [self releaseAll];
+        self.controllerMode=!self.controllerMode;
+        if(self.controllerMode && !self.controllerKeys) [self buildController];
+        [self setNeedsLayout];
+        [self layoutIfNeeded];
+        [self setNeedsDisplay];
+        // Keep the slide on the same side of the resting position, avoiding
+        // a full-panel fade and the intermediate offscreen composition.
+        self.transform=reduceMotion ? CGAffineTransformIdentity : CGAffineTransformMakeTranslation(direction*distance,0);
+        [UIView animateWithDuration:reduceMotion ? 0 : .18 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+            self.transform=CGAffineTransformIdentity;
+        } completion:^(BOOL completed) {
+            self.switchingInputMode=NO;
+        }];
+    }];
+}
+- (void)buildController {
+    NSArray* labels=@[@"↑",@"←",@"→",@"↓",@"A",@"B"];
+    NSArray* saved=[NSUserDefaults.standardUserDefaults arrayForKey:@"PC98TouchControllerBindings"];
+    NSMutableArray* buttons=[NSMutableArray new];
+    for(NSUInteger i=0;i<labels.count;++i) {
+        PC98KeyButton* key=[PC98KeyButton buttonWithType:UIButtonTypeCustom];
+        key.tag=saved.count==labels.count ? [saved[i] integerValue] : controllerDefaultScans[i];
+        key.detailScale=1;
+        key.expandedLegends=YES;
+        key.titleLabel.textAlignment=NSTextAlignmentCenter;
+        key.userInteractionEnabled=NO;
+        key.accessibilityLabel=labels[i];
+        [key setTitle:labels[i] forState:UIControlStateNormal];
+        [key setTitleColor:PC98Plastic(.20) forState:UIControlStateNormal];
+        __weak PC98Keyboard* weak=self;
+        __weak PC98KeyButton* weakKey=key;
+        key.activate=^BOOL {
+            PC98Keyboard* keyboard=weak;
+            PC98KeyButton* button=weakKey;
+            if(!keyboard || !button) return NO;
+            [keyboard updateKey:button down:YES];
+            [keyboard updateKey:button down:NO];
+            return YES;
+        };
+        [self addSubview:key];
+        [buttons addObject:key];
+    }
+    self.controllerKeys=buttons;
+    self.stickKnob=[UIView new];
+    self.stickKnob.userInteractionEnabled=NO;
+    self.stickKnob.backgroundColor=PC98Plastic(.55);
+    self.stickKnob.layer.borderWidth=2;
+    self.stickKnob.layer.borderColor=PC98Plastic(.40).CGColor;
+    [self addSubview:self.stickKnob];
+
+    self.controllerPause=[UIButton buttonWithType:UIButtonTypeSystem];
+    self.controllerPause.backgroundColor=PC98Plastic(.96);
+    self.controllerPause.layer.cornerRadius=6;
+    self.controllerPause.titleLabel.font=[UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+    [self.controllerPause addTarget:self action:@selector(tapControllerPause) forControlEvents:UIControlEventTouchUpInside];
+    [self addSubview:self.controllerPause];
+    [self updateControllerPause:NO enabled:NO];
+    self.controllerSettings=[UIButton buttonWithType:UIButtonTypeSystem];
+    [self.controllerSettings setTitle:@"キー設定" forState:UIControlStateNormal];
+    self.controllerSettings.backgroundColor=PC98Plastic(.96);
+    self.controllerSettings.layer.cornerRadius=6;
+    self.controllerSettings.showsMenuAsPrimaryAction=YES;
+    [self.controllerSettings addTarget:self action:@selector(openControllerSettings) forControlEvents:UIControlEventMenuActionTriggered];
+    [self addSubview:self.controllerSettings];
+    [self updateControllerMenu];
+}
+- (void)openControllerSettings {
+    if(self.controllerSettingsOpening) self.controllerSettingsOpening();
+}
+- (void)tapControllerPause {
+    if(self.pauseChanged) self.pauseChanged();
+}
+- (void)updateControllerPause:(BOOL)paused enabled:(BOOL)enabled {
+    if(!self.controllerPause) return;
+    NSString* title=paused ? @"▶ 再開" : @"Ⅱ ポーズ";
+    if(![self.controllerPause.currentTitle isEqualToString:title])
+        [self.controllerPause setTitle:title forState:UIControlStateNormal];
+    self.controllerPause.enabled=enabled;
+}
+- (void)saveControllerBindings {
+    NSMutableArray* bindings=[NSMutableArray new];
+    for(PC98KeyButton* control in self.controllerKeys) [bindings addObject:@(control.tag)];
+    [NSUserDefaults.standardUserDefaults setObject:bindings forKey:@"PC98TouchControllerBindings"];
+    [self updateControllerMenu];
+}
+- (void)updateControllerMenu {
+    NSMutableArray<NSString*>* letters=[NSMutableArray new];
+    for(char c='A';c<='Z';++c) [letters addObject:[NSString stringWithFormat:@"%c",c]];
+    NSMutableArray<NSString*>* functions=[NSMutableArray new];
+    for(int i=1;i<=10;++i) [functions addObject:[NSString stringWithFormat:@"F%d",i]];
+    for(int i=1;i<=5;++i) [functions addObject:[NSString stringWithFormat:@"VF%d",i]];
+    NSArray* categories=@[@"アルファベット",@"ファンクションキー",@"数字",@"操作キー"];
+    NSArray* names=@[letters,functions,@[@"0",@"1",@"2",@"3",@"4",@"5",@"6",@"7",@"8",@"9"],
+                     @[@"Enter",@"Space",@"Esc",@"Tab",@"Backspace",@"←",@"↑",@"↓",@"→"]];
+    NSMutableArray* controls=[NSMutableArray new];
+    __weak PC98Keyboard* weak=self;
+    for(NSUInteger index=0;index<self.controllerKeys.count;++index) {
+        PC98KeyButton* key=self.controllerKeys[index];
+        NSMutableArray* groups=[NSMutableArray new];
+        for(NSUInteger category=0;category<categories.count;++category) {
+            NSMutableArray* actions=[NSMutableArray new];
+            for(NSUInteger i=0;i<[names[category] count];++i) {
+                const int special[]={28,0x34,0,15,14,0x3B,0x3A,0x3D,0x3C};
+                int scan;
+                switch(category) {
+                    case 0: scan=pc98_scan_from_hid(4+i); break;
+                    case 1: scan=i<10 ? 0x62+(int)i : 0x52+(int)i-10; break;
+                    case 2: scan=i ? (int)i : 10; break;
+                    default: scan=special[i]; break;
+                }
+                NSString* name=names[category][i];
+                if(key.tag==scan) key.accessibilityValue=name;
+                __weak PC98KeyButton* weakKey=key;
+                UIAction* action=[UIAction actionWithTitle:name image:nil identifier:nil handler:^(__kindof UIAction* sender) {
+                    PC98Keyboard* keyboard=weak;
+                    PC98KeyButton* button=weakKey;
+                    if(!keyboard || !button) return;
+                    [keyboard releaseAll];
+                    button.tag=scan;
+                    [keyboard saveControllerBindings];
+                }];
+                action.state=key.tag==scan ? UIMenuElementStateOn : UIMenuElementStateOff;
+                [actions addObject:action];
+            }
+            [groups addObject:[UIMenu menuWithTitle:categories[category] children:actions]];
+        }
+        UIAction* reset=[UIAction actionWithTitle:@"この割り当てを初期値に戻す" image:nil identifier:nil handler:^(__kindof UIAction* action) {
+            PC98Keyboard* keyboard=weak;
+            [keyboard releaseAll];
+            keyboard.controllerKeys[index].tag=controllerDefaultScans[index];
+            [keyboard saveControllerBindings];
+        }];
+        [groups addObject:reset];
+        NSString* title=[NSString stringWithFormat:@"%@  ·  %@",key.currentTitle,key.accessibilityValue ?: @""];
+        [controls addObject:[UIMenu menuWithTitle:title children:groups]];
+    }
+    UIAction* resetAll=[UIAction actionWithTitle:@"すべての割り当てを初期値に戻す" image:nil identifier:nil handler:^(__kindof UIAction* action) {
+        PC98Keyboard* keyboard=weak;
+        [keyboard releaseAll];
+        for(NSUInteger index=0;index<keyboard.controllerKeys.count;++index)
+            keyboard.controllerKeys[index].tag=controllerDefaultScans[index];
+        [keyboard saveControllerBindings];
+    }];
+    [controls addObject:resetAll];
+    self.controllerSettings.menu=[UIMenu menuWithTitle:@"キー割り当て" children:controls];
+}
+- (void)layoutController {
+    CGFloat width=self.bounds.size.width, height=self.bounds.size.height;
+    CGFloat unit=MAX(1,MIN(74,MIN((height-12)/3,(width-30)/6)));
+    CGFloat left=MAX(6,(width*.28-1.5*unit));
+    CGFloat top=(height-3*unit)/2;
+    stickFrame=CGRectMake(left,top,3*unit,3*unit);
+    CGFloat knob=unit*.63;
+    self.stickKnob.bounds=CGRectMake(0,0,knob,knob);
+    self.stickKnob.layer.cornerRadius=knob/2;
+    self.stickKnob.center=CGPointMake(CGRectGetMidX(stickFrame),CGRectGetMidY(stickFrame));
+    const int cols[]={1,0,2,1}, lines[]={0,1,1,2};
+    for(int i=0;i<4;++i)
+        self.controllerKeys[i].frame=CGRectInset(CGRectMake(left+cols[i]*unit,top+lines[i]*unit,unit,unit),2,2);
+    CGFloat right=width-MAX(8,width*.09);
+    self.controllerKeys[4].frame=CGRectInset(CGRectMake(right-2*unit,top+1.5*unit,unit,unit),2,2);
+    self.controllerKeys[5].frame=CGRectInset(CGRectMake(right-unit,top+.8*unit,unit,unit),2,2);
+    CGRect a=self.controllerKeys[4].frame, b=self.controllerKeys[5].frame;
+    CGFloat chordX=(CGRectGetMidX(a)+CGRectGetMidX(b))/2;
+    CGFloat chordY=(CGRectGetMidY(a)+CGRectGetMidY(b))/2;
+    actionChordFrame=CGRectMake(chordX-.34*unit,chordY-.30*unit,.68*unit,.60*unit);
+    CGFloat toolbarButtonWidth=MAX(1,MIN(82,(width-22)/2));
+    CGFloat toolbarButtonHeight=MAX(1,MIN(38,top+.8*unit-8));
+    CGFloat settingsX=width-8-toolbarButtonWidth;
+    self.controllerSettings.frame=CGRectMake(settingsX,5,toolbarButtonWidth,toolbarButtonHeight);
+    self.controllerPause.frame=CGRectMake(settingsX-6-toolbarButtonWidth,5,toolbarButtonWidth,toolbarButtonHeight);
+}
+- (unsigned)actionButtonsAt:(CGPoint)point {
+    if(CGRectContainsPoint(actionChordFrame,point)) return 3;
+    if(CGRectContainsPoint(self.controllerKeys[4].frame,point)) return 1;
+    if(CGRectContainsPoint(self.controllerKeys[5].frame,point)) return 2;
+    return 0;
+}
+- (void)changeActionButtonsFrom:(unsigned)previous to:(unsigned)next {
+    for(unsigned index=0;index<2;++index) {
+        unsigned bit=1u<<index;
+        if((next & ~previous) & bit) [self updateKey:self.controllerKeys[4+index] down:YES];
+    }
+    for(unsigned index=0;index<2;++index) {
+        unsigned bit=1u<<index;
+        if((previous & ~next) & bit) [self updateKey:self.controllerKeys[4+index] down:NO];
+    }
+}
+- (void)moveStickTo:(CGPoint)point {
+    CGFloat cx=CGRectGetMidX(stickFrame), cy=CGRectGetMidY(stickFrame);
+    CGFloat dx=point.x-cx, dy=point.y-cy;
+    CGFloat distance=std::hypot(dx,dy), radius=stickFrame.size.width/2;
+    CGFloat travel=radius*.35;
+    CGFloat scale=distance>travel ? travel/distance : 1;
+    self.stickKnob.center=CGPointMake(cx+dx*scale,cy+dy*scale);
+    unsigned next=0;
+    if(distance>=radius*.23) {
+        constexpr CGFloat diagonal=0.41421356;
+        if(std::abs(dy)>=std::abs(dx)*diagonal) next|=dy<0 ? 1u : 8u;
+        if(std::abs(dx)>=std::abs(dy)*diagonal) next|=dx<0 ? 2u : 4u;
+    }
+    for(int i=0;i<4;++i) if((stickDirections & ~next) & (1u<<i))
+        [self updateKey:self.controllerKeys[i] down:NO cancelled:YES];
+    NSMutableArray* pressed=[NSMutableArray new];
+    for(int i=0;i<4;++i) if((next & ~stickDirections) & (1u<<i))
+        [pressed addObject:self.controllerKeys[i]];
+    stickDirections=next;
+    [self pressKeys:pressed];
 }
 - (void)setHardwareLayout:(BOOL)value {
     if(_hardwareLayout==value) return;
@@ -206,6 +481,13 @@ static std::vector<HardwareKey> hardwareKeys() {
     }
 }
 - (void)drawRect:(CGRect)rect {
+    if(self.controllerMode) {
+        PC98Gradient(CGRectInset(self.bounds,1,1),PC98Plastic(.91),PC98Plastic(.69),10);
+        [PC98Plastic(.61) setFill];
+        [[UIBezierPath bezierPathWithOvalInRect:stickFrame] fill];
+        [[UIBezierPath bezierPathWithRoundedRect:actionChordFrame cornerRadius:5] fill];
+        return;
+    }
     if(self.hardwareLayout) { [self drawHardwareCase]; return; }
     CGRect shell=CGRectInset(self.bounds,.5,.5);
     PC98Gradient(shell,PC98Plastic(.91),PC98Plastic(.69),10);
@@ -233,6 +515,23 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
+    CGRect caseFrame=self.controllerMode || !self.hardwareLayout ? CGRectInset(self.bounds,1,1) : [self hardwareFrame];
+    self.layer.shadowPath=[UIBezierPath bezierPathWithRoundedRect:caseFrame cornerRadius:10].CGPath;
+    self.controllerSettings.hidden=!self.controllerMode;
+    self.controllerPause.hidden=!self.controllerMode;
+    self.stickKnob.hidden=!self.controllerMode;
+    for(PC98KeyButton* key in self.controllerKeys) {
+        key.hidden=!self.controllerMode;
+        key.isAccessibilityElement=self.controllerMode;
+    }
+    if(self.controllerMode) {
+        for(NSArray* row in self.keys) for(UIButton* key in row) {
+            key.hidden=YES;
+            key.isAccessibilityElement=NO;
+        }
+        [self layoutController];
+        return;
+    }
     for(size_t r=0;r<rows.size();++r) for(size_t i=0;i<rows[r].size();++i) {
         PC98KeyButton* key=(PC98KeyButton*)self.keys[r][i]; const Key& definition=rows[r][i];
         key.hidden=NO; key.isAccessibilityElement=YES; key.steppedReturn=NO; key.detailScale=1; key.expandedLegends=NO;
@@ -319,7 +618,8 @@ static std::vector<HardwareKey> hardwareKeys() {
     }
     for(NSArray* row in self.keys) for(PC98KeyButton* b in row) if(b.tag==scan)
         b.retroPressed=counts[scan]>0 || latched.count(scan);
-    [self setNeedsDisplay];
+    for(PC98KeyButton* b in self.controllerKeys) if(b.tag==scan) b.retroPressed=counts[scan]>0;
+    if(!self.controllerMode && (scan==0x71 || scan==0x72)) [self setNeedsDisplay];
 }
 - (void)pressKeys:(NSArray<UIButton*>*)keys {
     // NSSet touch order is unspecified: Shift/Ctrl/GRPH must precede letters.
@@ -351,7 +651,18 @@ static std::vector<HardwareKey> hardwareKeys() {
 - (void)touchesBegan:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
     NSMutableArray* pressed=[NSMutableArray new];
     for(UITouch* t in set) {
-        UIButton* key=[self keyAtPoint:[t locationInView:self]];
+        CGPoint point=[t locationInView:self];
+        if(self.controllerMode) {
+            if(CGRectContainsPoint(stickFrame,point)) {
+                if(!stickTouch) { stickTouch=t; [self moveStickTo:point]; }
+            } else {
+                unsigned buttons=[self actionButtonsAt:point];
+                actionTouches[t]=buttons;
+                [self changeActionButtonsFrom:0 to:buttons];
+            }
+            continue;
+        }
+        UIButton* key=[self keyAtPoint:point];
         touches[t]=key;
         if(key) [pressed addObject:key];
     }
@@ -360,6 +671,16 @@ static std::vector<HardwareKey> hardwareKeys() {
 - (void)touchesMoved:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
     NSMutableArray* pressed=[NSMutableArray new];
     for(UITouch* t in set) {
+        if(t==stickTouch) { [self moveStickTo:[t locationInView:self]]; continue; }
+        auto action=actionTouches.find(t);
+        if(action!=actionTouches.end()) {
+            unsigned next=[self actionButtonsAt:[t locationInView:self]];
+            if(action->second!=next) {
+                [self changeActionButtonsFrom:action->second to:next];
+                action->second=next;
+            }
+            continue;
+        }
         auto it=touches.find(t); if(it==touches.end()) continue;
         UIButton* next=[self keyAtPoint:[t locationInView:self]];
         if(next==it->second) continue;
@@ -371,6 +692,17 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (void)endTouches:(NSSet<UITouch*>*)set cancelled:(BOOL)cancelled {
     for(UITouch* t in set) {
+        if(t==stickTouch) {
+            [self moveStickTo:CGPointMake(CGRectGetMidX(stickFrame),CGRectGetMidY(stickFrame))];
+            stickTouch=nil;
+            continue;
+        }
+        auto action=actionTouches.find(t);
+        if(action!=actionTouches.end()) {
+            [self changeActionButtonsFrom:action->second to:0];
+            actionTouches.erase(action);
+            continue;
+        }
         auto it=touches.find(t); if(it==touches.end()) continue;
         if(it->second) [self updateKey:it->second down:NO cancelled:cancelled];
         touches.erase(it);
@@ -383,6 +715,51 @@ static std::vector<HardwareKey> hardwareKeys() {
     for(auto& pair:repeatAt) if(now>=pair.second) { if(self.keyChanged) self.keyChanged(pair.first,YES); pair.second=now+0.05; }
 }
 #ifdef PC98PLAYER_TESTING
+- (BOOL)controllerChordForTesting:(BOOL (^)(int scan))isDown {
+    PC98Keyboard* controller=[[PC98Keyboard alloc] initWithFrame:self.bounds];
+    controller.keyChanged=self.keyChanged;
+    [controller buildController];
+    [controller layoutController];
+    for(NSUInteger index=0;index<controller.controllerKeys.count;++index)
+        controller.controllerKeys[index].tag=controllerDefaultScans[index];
+
+    PC98KeyButton* a=controller.controllerKeys[4];
+    PC98KeyButton* b=controller.controllerKeys[5];
+    const int right=controllerDefaultScans[2], space=(int)a.tag, enter=(int)b.tag;
+    CGRect stick=controller->stickFrame;
+    CGPoint center=CGPointMake(CGRectGetMidX(stick),CGRectGetMidY(stick));
+    [controller moveStickTo:CGPointMake(CGRectGetMaxX(stick),center.y)];
+    [controller pressKeys:@[a,b]];
+    BOOL passed=isDown(right) && isDown(space) && isDown(enter);
+    [controller updateKey:a down:NO];
+    passed=passed && isDown(right) && !isDown(space) && isDown(enter);
+    [controller moveStickTo:center];
+    passed=passed && !isDown(right) && isDown(enter);
+    [controller updateKey:b down:NO];
+    passed=passed && !isDown(enter);
+
+    CGPoint actionA=CGPointMake(CGRectGetMidX(a.frame),CGRectGetMidY(a.frame));
+    CGPoint actionB=CGPointMake(CGRectGetMidX(b.frame),CGRectGetMidY(b.frame));
+    CGPoint midpoint=CGPointMake((actionA.x+actionB.x)/2,(actionA.y+actionB.y)/2);
+    unsigned onlyA=[controller actionButtonsAt:actionA];
+    unsigned onlyB=[controller actionButtonsAt:actionB];
+    unsigned both=[controller actionButtonsAt:midpoint];
+    passed=passed && onlyA==1 && onlyB==2 && both==3;
+    [controller changeActionButtonsFrom:0 to:onlyA];
+    [controller changeActionButtonsFrom:onlyA to:both];
+    passed=passed && isDown(space) && isDown(enter);
+    [controller changeActionButtonsFrom:both to:onlyB];
+    passed=passed && !isDown(space) && isDown(enter);
+    [controller changeActionButtonsFrom:onlyB to:0];
+    passed=passed && !isDown(enter);
+
+    b.tag=a.tag;
+    [controller pressKeys:@[a,b]];
+    [controller updateKey:a down:NO];
+    passed=passed && isDown(space);
+    [controller updateKey:b down:NO];
+    return passed && !isDown(space);
+}
 - (BOOL)pressScansForTesting:(NSArray<NSNumber*>*)scans {
     NSMutableArray* buttons=[NSMutableArray new];
     for(NSNumber* scan in scans) {
@@ -443,11 +820,17 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 #endif
 - (void)releaseAll {
+    BOOL lampsWereOn=latched.count(0x71) || latched.count(0x72);
     std::set<int> down=latched; for(auto pair:counts) if(pair.second) down.insert(pair.first);
     for(int scan:down) if(self.keyChanged) self.keyChanged(scan,NO);
+    stickTouch=nil;
+    stickDirections=0;
+    self.stickKnob.center=CGPointMake(CGRectGetMidX(stickFrame),CGRectGetMidY(stickFrame));
+    actionTouches.clear();
     touches.clear(); counts.clear(); latched.clear(); modifierChords.clear(); repeatAt.clear();
     for(NSArray* row in self.keys) for(PC98KeyButton* b in row) b.retroPressed=NO;
-    [self setNeedsDisplay];
+    for(PC98KeyButton* key in self.controllerKeys) key.retroPressed=NO;
+    if(!self.controllerMode && lampsWereOn) [self setNeedsDisplay];
 }
 @end
 int pc98_scan_from_hid(NSInteger u) {
