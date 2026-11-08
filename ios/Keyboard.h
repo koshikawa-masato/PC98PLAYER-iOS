@@ -4,6 +4,8 @@
 @property(nonatomic) BOOL hardwareLayout;
 @property(copy) void (^pauseChanged)(void);
 @property(copy) void (^controllerSettingsOpening)(void);
+- (void)loadControllerBindingsForGame:(NSString*)identifier;
+- (int)controllerScanAtIndex:(NSUInteger)index;
 - (void)updateControllerPause:(BOOL)paused enabled:(BOOL)enabled;
 @property(copy) void (^keyChanged)(int scan, BOOL down);
 - (void)releaseAll;

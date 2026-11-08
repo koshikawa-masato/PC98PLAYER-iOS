@@ -129,6 +129,8 @@ static std::vector<HardwareKey> hardwareKeys() {
 @property(strong) NSArray<NSArray<UIButton*>*>* keys;
 @property(strong) UIImpactFeedbackGenerator* keyFeedback;
 @property(strong) NSArray<PC98KeyButton*>* controllerKeys;
+@property(copy) NSString* controllerBindingsKey;
+@property(copy) NSArray<NSNumber*>* controllerBindings;
 @property(strong) UIButton* controllerSettings;
 @property(strong) UIButton* controllerPause;
 @property(strong) UIView* stickKnob;
@@ -229,11 +231,10 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (void)buildController {
     NSArray* labels=@[@"↑",@"←",@"→",@"↓",@"A",@"B"];
-    NSArray* saved=[NSUserDefaults.standardUserDefaults arrayForKey:@"PC98TouchControllerBindings"];
     NSMutableArray* buttons=[NSMutableArray new];
     for(NSUInteger i=0;i<labels.count;++i) {
         PC98KeyButton* key=[PC98KeyButton buttonWithType:UIButtonTypeCustom];
-        key.tag=saved.count==labels.count ? [saved[i] integerValue] : controllerDefaultScans[i];
+        key.tag=[self controllerScanAtIndex:i];
         key.detailScale=1;
         key.expandedLegends=YES;
         key.titleLabel.textAlignment=NSTextAlignmentCenter;
@@ -291,13 +292,32 @@ static std::vector<HardwareKey> hardwareKeys() {
         [self.controllerPause setTitle:title forState:UIControlStateNormal];
     self.controllerPause.enabled=enabled;
 }
+- (void)loadControllerBindingsForGame:(NSString*)identifier {
+    NSUserDefaults* defaults=NSUserDefaults.standardUserDefaults;
+    self.controllerBindingsKey=[@"PC98ControllerBindings." stringByAppendingString:identifier];
+    self.controllerBindings=[defaults arrayForKey:self.controllerBindingsKey]
+        ?: [defaults arrayForKey:@"PC98TouchControllerBindings"];
+    for(NSUInteger i=0;i<self.controllerKeys.count;++i)
+        self.controllerKeys[i].tag=[self controllerScanAtIndex:i];
+    [self updateControllerMenu];
+}
+- (int)controllerScanAtIndex:(NSUInteger)index {
+    if(index<self.controllerBindings.count) {
+        NSNumber* binding=self.controllerBindings[index];
+        if([binding isKindOfClass:NSNumber.class] && binding.intValue>=0 && binding.intValue<128)
+            return binding.intValue;
+    }
+    return controllerDefaultScans[index];
+}
 - (void)saveControllerBindings {
     NSMutableArray* bindings=[NSMutableArray new];
     for(PC98KeyButton* control in self.controllerKeys) [bindings addObject:@(control.tag)];
-    [NSUserDefaults.standardUserDefaults setObject:bindings forKey:@"PC98TouchControllerBindings"];
+    self.controllerBindings=bindings;
+    [NSUserDefaults.standardUserDefaults setObject:bindings forKey:self.controllerBindingsKey ?: @"PC98TouchControllerBindings"];
     [self updateControllerMenu];
 }
 - (void)updateControllerMenu {
+    if(!self.controllerSettings) return;
     NSMutableArray<NSString*>* letters=[NSMutableArray new];
     for(char c='A';c<='Z';++c) [letters addObject:[NSString stringWithFormat:@"%c",c]];
     NSMutableArray<NSString*>* functions=[NSMutableArray new];
@@ -310,6 +330,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     __weak PC98Keyboard* weak=self;
     for(NSUInteger index=0;index<self.controllerKeys.count;++index) {
         PC98KeyButton* key=self.controllerKeys[index];
+        key.accessibilityValue=nil;
         NSMutableArray* groups=[NSMutableArray new];
         for(NSUInteger category=0;category<categories.count;++category) {
             NSMutableArray* actions=[NSMutableArray new];
