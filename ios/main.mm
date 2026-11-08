@@ -735,36 +735,19 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     if(fetching) return;
     fetching=YES; [self suspend]; [self.spinner startAnimating]; self.status.text=@"ゲームデータをキャッシュしています…";
     BOOL scoped=[source startAccessingSecurityScopedResource];
-    NSError* bookmarkError=nil;
-    [GameLibrary rememberURL:source name:source.lastPathComponent error:&bookmarkError];
     NSString* identifier=gameID(source);
     NSURL* destination=area(NSCachesDirectory,[@"PC98Games/" stringByAppendingString:identifier]);
     __weak PlayerController* weak=self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
         @autoreleasepool {
             NSError* error=nil;
-            NSFileManager* manager=NSFileManager.defaultManager;
-            if(![GameLibrary isUsableCacheAtURL:destination]) {
-                // Keep invalid legacy caches recoverable; game saves live in a separate directory.
-                if([manager fileExistsAtPath:destination.path]) {
-                    NSURL* rejected=area(NSCachesDirectory,@"PC98Rejected");
-                    [manager createDirectoryAtURL:rejected withIntermediateDirectories:YES attributes:nil error:&error];
-                    if(!error) [manager moveItemAtURL:destination toURL:[rejected URLByAppendingPathComponent:NSUUID.UUID.UUIDString] error:&error];
-                }
-                NSURL* temporary=[destination.URLByDeletingLastPathComponent URLByAppendingPathComponent:NSUUID.UUID.UUIDString isDirectory:YES];
-                if(!error) [manager createDirectoryAtURL:temporary.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:&error];
-                BOOL copied=NO;
-                if(!error) copied=[GameLibrary copyFolderFromURL:source toURL:temporary error:&error];
-                if(!copied && !error) error=[NSError errorWithDomain:@"PC98GameCache" code:6 userInfo:@{NSLocalizedDescriptionKey:@"NASからゲームを取得できませんでした。"}];
-                if(copied) {
-                    if(![GameLibrary isUsableCacheAtURL:temporary]) error=[NSError errorWithDomain:@"PC98GameCache" code:1 userInfo:@{NSLocalizedDescriptionKey:@"ゲームの中身を取得できませんでした。Games内の作品フォルダーを選び直してください。NASのファイル一覧が表示されるまで待ってから「開く」を押してください。"}];
-                    if(!error) [manager moveItemAtURL:temporary toURL:destination error:&error];
-                }
-                if(error) [manager removeItemAtURL:temporary error:nil];
-            }
-            if(scoped) [source stopAccessingSecurityScopedResource];
-            dispatch_async(dispatch_get_main_queue(),^{
-                PlayerController* s=weak; if(!s) return;
+            // An explicit folder selection is a request to import its current contents.
+            [GameLibrary refreshCacheFromURL:source toURL:destination error:&error];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                PlayerController* s=weak;
+                if(s && !error) [GameLibrary rememberURL:source name:source.lastPathComponent error:nil];
+                if(scoped) [source stopAccessingSecurityScopedResource];
+                if(!s) return;
                 s->fetching=NO; [s.spinner stopAnimating];
 #if defined(PC98PLAYER_TESTING)
                 NSDictionary* report=@{@"sourceName":source.lastPathComponent ?: @"", @"scoped":@(scoped), @"identifier":identifier, @"error":error.localizedDescription ?: @"", @"domain":error.domain ?: @"", @"code":@(error.code), @"usableCache":@([GameLibrary isUsableCacheAtURL:destination])};

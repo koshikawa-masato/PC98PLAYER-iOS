@@ -24,6 +24,21 @@ int main() { @autoreleasepool {
     NSURL* blank=[base URLByAppendingPathComponent:@"blank"];
     [fm createDirectoryAtURL:blank withIntermediateDirectories:NO attributes:nil error:nil];
     check(![GameLibrary isUsableCacheAtURL:blank],@"empty legacy cache rejected");
+    // A same-path reimport must refresh both the executable and startup settings.
+    NSURL* cachedProgram=[copy URLByAppendingPathComponent:@"SUB/PLAY.COM"];
+    NSURL* cachedINI=[copy URLByAppendingPathComponent:@"PC98PLAYER.INI"];
+    NSData* ini=[@"[PC98PLAYER]\nStart=SUB/PLAY.COM\n" dataUsingEncoding:NSUTF8StringEncoding];
+    [ini writeToURL:[source URLByAppendingPathComponent:@"PC98PLAYER.INI"] atomically:YES];
+    NSData* updated=[@"Updated program" dataUsingEncoding:NSUTF8StringEncoding];
+    [updated writeToURL:[source URLByAppendingPathComponent:@"SUB/PLAY.COM"] atomically:YES];
+    check([GameLibrary refreshCacheFromURL:source toURL:copy error:&error],@"same-path import refreshes cache");
+    check([[NSData dataWithContentsOfURL:cachedProgram] isEqualToData:updated],@"refreshed executable used");
+    check([[NSData dataWithContentsOfURL:cachedINI] isEqualToData:ini],@"refreshed startup INI used");
+    error=nil;
+    check(![GameLibrary refreshCacheFromURL:blank toURL:copy error:&error] && error!=nil,@"unusable refresh rejected");
+    check([[NSData dataWithContentsOfURL:cachedProgram] isEqualToData:updated] &&
+          [[NSData dataWithContentsOfURL:cachedINI] isEqualToData:ini],@"failed refresh preserves old cache");
+    [binary writeToURL:[source URLByAppendingPathComponent:@"SUB/PLAY.COM"] atomically:YES];
     NSURL* index=[source URLByAppendingPathComponent:@"PC98PLAYER.FILES.json"];
     NSDictionary* entry=@{@"path":@"SUB/PLAY.COM",@"size":@(binary.length),@"sha256":digest(binary)};
     void (^writeIndex)(id)=^(id contents) { [[NSJSONSerialization dataWithJSONObject:contents options:0 error:nil] writeToURL:index atomically:YES]; };

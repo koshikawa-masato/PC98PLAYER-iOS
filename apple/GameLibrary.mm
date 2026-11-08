@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #import "GameLibrary.h"
 #import <TargetConditionals.h>
+#include <stdio.h>
+#include <errno.h>
+#include <fcntl.h>
 #import <CommonCrypto/CommonDigest.h>
 static NSError* cacheError(NSInteger code,NSString* message) {
     return [NSError errorWithDomain:@"PC98GameCache" code:code userInfo:@{NSLocalizedDescriptionKey:message}];
@@ -52,6 +55,33 @@ static BOOL copyIndexedFolder(NSURL* source,NSURL* destination,NSDictionary* ind
     }
     return ini && disk;
 }
++ (BOOL)refreshCacheFromURL:(NSURL*)source toURL:(NSURL*)destination error:(NSError**)error {
+    NSFileManager* manager=NSFileManager.defaultManager;
+    NSURL* parent=destination.URLByDeletingLastPathComponent;
+    if(![manager createDirectoryAtURL:parent withIntermediateDirectories:YES attributes:nil error:error]) return NO;
+
+    NSURL* staged=[parent URLByAppendingPathComponent:NSUUID.UUID.UUIDString isDirectory:YES];
+    NSError* failure=nil;
+    BOOL copied=[self copyFolderFromURL:source toURL:staged error:&failure];
+    if(!copied) {
+        failure=failure ?: cacheError(6,@"ゲームフォルダを取得できませんでした。");
+    } else if(![self isUsableCacheAtURL:staged]) {
+        failure=cacheError(1,@"ゲームの中身を取得できませんでした。展開済みの作品フォルダを選び直してください。");
+    } else if([manager fileExistsAtPath:destination.path]) {
+        // Both paths are in the same cache directory. Swap atomically so a failed
+        // import cannot remove the previous copy.
+        if(renameatx_np(AT_FDCWD,staged.fileSystemRepresentation,
+                       AT_FDCWD,destination.fileSystemRepresentation,RENAME_SWAP)!=0)
+            failure=[NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil];
+    } else {
+        [manager moveItemAtURL:staged toURL:destination error:&failure];
+    }
+
+    [manager removeItemAtURL:staged error:nil];
+    if(failure && error) *error=failure;
+    return failure==nil;
+}
+
 + (BOOL)copyFolderFromURL:(NSURL*)source toURL:(NSURL*)destination error:(NSError**)error {
     NSFileManager* manager=NSFileManager.defaultManager;
     if(![manager createDirectoryAtURL:destination withIntermediateDirectories:NO attributes:nil error:error]) return NO;
