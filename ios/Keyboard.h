@@ -5,7 +5,6 @@
 @property(copy) void (^pauseChanged)(void);
 @property(copy) void (^controllerSettingsOpening)(void);
 - (void)loadControllerBindingsForGame:(NSString*)identifier;
-- (int)controllerScanAtIndex:(NSUInteger)index;
 - (void)updateControllerPause:(BOOL)paused enabled:(BOOL)enabled;
 @property(copy) void (^keyChanged)(int scan, BOOL down);
 - (void)releaseAll;
@@ -21,3 +20,7 @@
 @end
 // USB HID usages from hardware keyboards share the guest scan codes with touch keys.
 int pc98_scan_from_hid(NSInteger usage);
+
+NSArray<NSNumber*>* pc98_controller_bindings(NSArray<NSNumber*>* saved);
+UIMenu* pc98_controller_binding_menu(NSArray<NSNumber*>* bindings, NSMutableArray<NSString*>* names,
+                                    void (^changed)(NSArray<NSNumber*>*));

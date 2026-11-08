@@ -157,11 +157,14 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
 @end
 
+static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
+
 @interface GameOptionsController : UITableViewController
 @property NSInteger soundBoard;
 @property NSInteger videoColors;
 @property BOOL manualDuo;
 @property BOOL bossMode;
+@property(copy) NSArray<NSNumber*>* bluetoothBindings;
 @property content_filter::Settings filterSettings;
 @property(copy) void (^willApply)(content_filter::Settings);
 @property(copy) void (^applied)(NSInteger,NSInteger,BOOL,BOOL,content_filter::Settings);
@@ -170,12 +173,13 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
 @implementation GameOptionsController
 - (void)viewDidLoad {
     [super viewDidLoad];self.title=@"オプション";
+    self.bluetoothBindings=pc98_controller_bindings([NSUserDefaults.standardUserDefaults arrayForKey:bluetoothBindingsKey]);
     self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"キャンセル" style:UIBarButtonItemStylePlain target:self action:@selector(cancel)];
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
-- (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 5; }
-- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?3:section==3?6:2; }
-- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数",@"表示",@"コンテンツフィルター",@"このアプリについて"][section]; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 6; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?3:section==3?6:section==4?1:2; }
+- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数",@"表示",@"コンテンツフィルター",@"Bluetoothコントローラー",@"このアプリについて"][section]; }
 - (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section {
     if(section==1)return @"音源・色数の変更はゲームを再起動します。必要な場合は、先にゲーム内で保存してください。";
     if(section==2)return @"通常は自動判別を使います。Duo上下表示を固定すると、上にモニタ、下にキーボードを配置します。表示だけの変更では再起動しません。「ボスがきた」モードはDuoを閉じると一時停止し、アウターのアプリ画面を黒くします。開き直しても自動再生せず、▶︎で再開します。端末の画面電源やシステム表示は変更しません。";
@@ -219,6 +223,21 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
             level.accessibilityLabel=@"検出感度";[level addTarget:self action:@selector(changeSensitivity:) forControlEvents:UIControlEventValueChanged];
             cell.accessoryView=level;cell.selectionStyle=UITableViewCellSelectionStyleNone;
         }
+    } else if(index.section==4) {
+        cell.textLabel.text=@"デフォルトのキー割り当て";
+        UIButton* button=[UIButton buttonWithType:UIButtonTypeSystem];
+        [button setTitle:@"変更" forState:UIControlStateNormal];
+        button.accessibilityLabel=@"Bluetoothコントローラーのキー割り当てを変更";
+        button.showsMenuAsPrimaryAction=YES;
+        __weak GameOptionsController* weak=self;
+        button.menu=pc98_controller_binding_menu(self.bluetoothBindings,nil,^(NSArray<NSNumber*>* bindings) {
+            GameOptionsController* options=weak;
+            options.bluetoothBindings=bindings;
+            [options.tableView reloadData];
+        });
+        [button sizeToFit];
+        cell.accessoryView=button;
+        cell.selectionStyle=UITableViewCellSelectionStyleNone;
     } else {
         cell.textLabel.text=index.row==0?@"プライバシーポリシー":@"ライセンス";
         cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
@@ -226,7 +245,8 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     return cell;
 }
 - (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)index {
-    if(index.section==4) {
+    if(index.section==4) return;
+    if(index.section==5) {
         LegalTextController* document=[LegalTextController new];document.title=index.row==0?@"プライバシーポリシー":@"ライセンス";
         document.resource=index.row==0?@"privacy-policy.txt":@"LICENSE";[self.navigationController pushViewController:document animated:YES];return;
     }
@@ -240,7 +260,9 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
 - (void)changeFilter:(UISwitch*)sender { auto settings=self.filterSettings;if(sender.tag==0)settings.adult=sender.on;else settings.harm=sender.on;self.filterSettings=settings; }
 - (void)changeSensitivity:(UISegmentedControl*)sender { auto settings=self.filterSettings;settings.sensitivity=(int)sender.selectedSegmentIndex;self.filterSettings=settings; }
 - (void)cancel { [self dismissViewControllerAnimated:YES completion:^{if(self.cancelled)self.cancelled();}]; }
-- (void)apply { if(self.willApply)self.willApply(self.filterSettings);[self dismissViewControllerAnimated:YES completion:^{if(self.applied)self.applied(self.soundBoard,self.videoColors,self.manualDuo,self.bossMode,self.filterSettings);}]; }
+- (void)apply {
+    [NSUserDefaults.standardUserDefaults setObject:self.bluetoothBindings forKey:bluetoothBindingsKey];
+    if(self.willApply)self.willApply(self.filterSettings);[self dismissViewControllerAnimated:YES completion:^{if(self.applied)self.applied(self.soundBoard,self.videoColors,self.manualDuo,self.bossMode,self.filterSettings);}]; }
 @end
 
 @interface PlayerController : UIViewController <UIDocumentPickerDelegate,UIAdaptivePresentationControllerDelegate,UIGestureRecognizerDelegate> {
@@ -274,6 +296,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
 @property PC98Keyboard* keyboard;
 @property UILabel* status;
 @property UILabel* fpsLabel;
+@property(copy) NSArray<NSNumber*>* bluetoothBindings;
 @property UIStackView* statusRow;
 @property UIStackView* toolbar;
 @property CADisplayLink* displayLink;
@@ -345,6 +368,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
         PlayerController* controller=weak;
         if(controller && !controller->paused) [controller togglePause];
     };
+    self.bluetoothBindings=pc98_controller_bindings([NSUserDefaults.standardUserDefaults arrayForKey:bluetoothBindingsKey]);
     [self.keyboard loadControllerBindingsForGame:@"demo"];
     [self.view addSubview:self.keyboard];
     self.spinner=[[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge]; self.spinner.color=PC98Plastic(.8); [self.topPanel addSubview:self.spinner];
@@ -622,7 +646,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
             pad.buttonB.isPressed
         };
         for(NSUInteger i=0;i<std::size(controls);++i)
-            if(controls[i]) pressed.set([self.keyboard controllerScanAtIndex:i]);
+            if(controls[i]) pressed.set(self.bluetoothBindings[i].intValue);
     }
     const auto changed=controllerKeys ^ pressed;
     if(changed.none()) return;
@@ -970,6 +994,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
         [NSUserDefaults.standardUserDefaults setInteger:(int)filter.effect forKey:@"PC98FilterEffect"];
         [NSUserDefaults.standardUserDefaults setInteger:filter.sensitivity forKey:@"PC98FilterSensitivity"];
         [s releaseKeys];s->manualDuo=duo;s->bossMode=boss;
+        s.bluetoothBindings=pc98_controller_bindings([NSUserDefaults.standardUserDefaults arrayForKey:bluetoothBindingsKey]);
         [NSUserDefaults.standardUserDefaults setBool:boss forKey:@"PC98BossMode"];
         [NSUserDefaults.standardUserDefaults setBool:duo forKey:@"PC98ManualDuo"];
         [s setNeedsUpdateOfSupportedInterfaceOrientations];[s setNeedsStatusBarAppearanceUpdate];[s.view setNeedsLayout];
@@ -1300,13 +1325,15 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     result[@"cancelledModifierReleased"]=@(!player->m->kb_down[0x70]);
     [self releaseKeys];
     result[@"controllerChord"]=@([self.keyboard controllerChordForTesting:^BOOL(int scan) { return player->m->kb_down[scan]!=0; }]);
+    NSArray<NSNumber*>* savedBluetoothBindings=self.bluetoothBindings;
+    self.bluetoothBindings=pc98_controller_bindings(@[@0x3A,@0x3B,@0x3C,@0x3D,@29,@28]);
     GCController* gamepad=[GCController controllerWithExtendedGamepad];
     [gamepad.extendedGamepad.leftThumbstick setValueForXAxis:.8f yAxis:0];
     [gamepad.extendedGamepad.buttonA setValue:1];
     [self updateGameControllerInput:@[gamepad]];
-    int gamepadRight=[self.keyboard controllerScanAtIndex:2];
-    int gamepadAction=[self.keyboard controllerScanAtIndex:4];
-    bool gamepadChord=player->m->kb_down[gamepadRight] && player->m->kb_down[gamepadAction];
+    int gamepadRight=self.bluetoothBindings[2].intValue;
+    int gamepadAction=self.bluetoothBindings[4].intValue;
+    bool gamepadChord=player->m->kb_down[gamepadRight] && player->m->kb_down[gamepadAction] && !player->m->kb_down[0x34];
     touchKeys.insert(gamepadRight);
     [self updateGameControllerInput:nil];
     gamepadChord &= player->m->kb_down[gamepadRight] && !player->m->kb_down[gamepadAction];
@@ -1315,6 +1342,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     [self updateGameControllerInput:@[gamepad]];
     gamepadChord &= player->m->kb_down[gamepadRight] && player->m->kb_down[gamepadAction];
     [self releaseKeys];
+    self.bluetoothBindings=savedBluetoothBindings;
     result[@"gameControllerChordAndReconnect"]=@(gamepadChord &&
         !player->m->kb_down[gamepadRight] && !player->m->kb_down[gamepadAction]);
     std::string error; bool saved=player->save_state(7,&error);
