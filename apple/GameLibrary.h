@@ -4,6 +4,7 @@ NS_ASSUME_NONNULL_BEGIN
 // Folder bookmarks are kept outside game folders. No credentials are stored here.
 @interface GameLibrary : NSObject
 + (BOOL)isUsableCacheAtURL:(NSURL*)url;
++ (BOOL)refreshCacheFromURL:(NSURL*)source toURL:(NSURL*)destination error:(NSError**)error;
 + (BOOL)copyFolderFromURL:(NSURL*)source toURL:(NSURL*)destination error:(NSError**)error;
 + (nullable NSURL*)gameRootAtURL:(NSURL*)cache relativePath:(NSString*)path error:(NSError**)error;
 + (NSArray<NSDictionary*>*)entries;
