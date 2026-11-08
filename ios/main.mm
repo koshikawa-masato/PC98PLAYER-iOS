@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import <UIKit/UIKit.h>
+#import <GameController/GameController.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CommonCrypto/CommonDigest.h>
@@ -14,6 +15,7 @@
 #include "GraphicsSettings.h"
 #import "ContentFilter.h"
 #include "hostfs.h"
+#include <bitset>
 #include <deque>
 #include <memory>
 #include <set>
@@ -259,6 +261,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     int filterFrameHeight;
     std::set<NSInteger> physicalKeys;
     std::set<int> touchKeys;
+    std::bitset<128> controllerKeys;
 }
 @property UIView* bossShield;
 @property id<UIInteraction> hingeInteraction;
@@ -342,6 +345,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
         PlayerController* controller=weak;
         if(controller && !controller->paused) [controller togglePause];
     };
+    [self.keyboard loadControllerBindingsForGame:@"demo"];
     [self.view addSubview:self.keyboard];
     self.spinner=[[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge]; self.spinner.color=PC98Plastic(.8); [self.topPanel addSubview:self.spinner];
     self.displayLink=[CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
@@ -599,11 +603,35 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
 }
 - (void)updateScan:(int)scan {
     if(!player || paused) return;
-    BOOL down=touchKeys.count(scan)>0;
+    BOOL down=touchKeys.count(scan)>0 || controllerKeys.test(scan);
     for(NSInteger u:physicalKeys) if(pc98_scan_from_hid(u)==scan) down=YES;
     machine_key(player->m,(uint8_t)scan,down);
 }
+- (void)updateGameControllerInput:(NSArray<GCController*>*)controllers {
+    constexpr float deadZone=.45f;
+    std::bitset<128> pressed;
+    for(GCController* controller in controllers) {
+        GCExtendedGamepad* pad=controller.extendedGamepad;
+        if(!pad) continue;
+        const bool controls[]={
+            pad.dpad.up.isPressed || pad.leftThumbstick.yAxis.value>deadZone,
+            pad.dpad.left.isPressed || pad.leftThumbstick.xAxis.value<-deadZone,
+            pad.dpad.right.isPressed || pad.leftThumbstick.xAxis.value>deadZone,
+            pad.dpad.down.isPressed || pad.leftThumbstick.yAxis.value<-deadZone,
+            pad.buttonA.isPressed,
+            pad.buttonB.isPressed
+        };
+        for(NSUInteger i=0;i<std::size(controls);++i)
+            if(controls[i]) pressed.set([self.keyboard controllerScanAtIndex:i]);
+    }
+    const auto changed=controllerKeys ^ pressed;
+    if(changed.none()) return;
+    controllerKeys=pressed;
+    for(size_t scan=0;scan<changed.size();++scan)
+        if(changed.test(scan)) [self updateScan:(int)scan];
+}
 - (void)releaseKeys {
+    controllerKeys.reset();
     [self.keyboard releaseAll]; touchKeys.clear(); physicalKeys.clear(); mouseButtons=0;
     if(player) { for(int i=0;i<128;++i) if(player->m->kb_down[i]) machine_key(player->m,i,false); machine_mouse(player->m,0,0,0); }
 }
@@ -675,6 +703,10 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     self.fpsLabel.hidden=YES;
 }
 - (void)tick:(CADisplayLink*)link {
+    BOOL acceptsControllerInput=player && !player->m->quit && !paused && !fetching &&
+        !(bossMode && hingeClosed) && !self.presentedViewController &&
+        self.view.window.windowScene.activationState==UISceneActivationStateForegroundActive;
+    [self updateGameControllerInput:acceptsControllerInput ? GCController.controllers : nil];
     [self.keyboard updateControllerPause:paused enabled:player && !player->m->quit && !fetching && !(bossMode && hingeClosed)];
     self.topPanel.playbackState=(!player || player->m->quit)?PC98PlaybackStateInactive:paused?PC98PlaybackStatePaused:PC98PlaybackStateRunning;
     if(!player || player->m->quit || paused || fetching || (bossMode && hingeClosed)) {
@@ -822,6 +854,7 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
 - (void)openCache:(NSURL*)cache identifier:(NSString*)identifier {
     cache=cache.URLByStandardizingPath.URLByResolvingSymlinksInPath;
     [self stopGame]; self.currentCache=cache; self.currentID=identifier;
+    [self.keyboard loadControllerBindingsForGame:identifier];
     NSString* saves=[@"PC98Saves/" stringByAppendingString:identifier];
     NSURL* saved=area(NSApplicationSupportDirectory,[saves stringByAppendingPathComponent:@"files"]);
     NSError* error=nil;
@@ -1267,6 +1300,23 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     result[@"cancelledModifierReleased"]=@(!player->m->kb_down[0x70]);
     [self releaseKeys];
     result[@"controllerChord"]=@([self.keyboard controllerChordForTesting:^BOOL(int scan) { return player->m->kb_down[scan]!=0; }]);
+    GCController* gamepad=[GCController controllerWithExtendedGamepad];
+    [gamepad.extendedGamepad.leftThumbstick setValueForXAxis:.8f yAxis:0];
+    [gamepad.extendedGamepad.buttonA setValue:1];
+    [self updateGameControllerInput:@[gamepad]];
+    int gamepadRight=[self.keyboard controllerScanAtIndex:2];
+    int gamepadAction=[self.keyboard controllerScanAtIndex:4];
+    bool gamepadChord=player->m->kb_down[gamepadRight] && player->m->kb_down[gamepadAction];
+    touchKeys.insert(gamepadRight);
+    [self updateGameControllerInput:nil];
+    gamepadChord &= player->m->kb_down[gamepadRight] && !player->m->kb_down[gamepadAction];
+    touchKeys.erase(gamepadRight);
+    [self updateScan:gamepadRight];
+    [self updateGameControllerInput:@[gamepad]];
+    gamepadChord &= player->m->kb_down[gamepadRight] && player->m->kb_down[gamepadAction];
+    [self releaseKeys];
+    result[@"gameControllerChordAndReconnect"]=@(gamepadChord &&
+        !player->m->kb_down[gamepadRight] && !player->m->kb_down[gamepadAction]);
     std::string error; bool saved=player->save_state(7,&error);
     uint8_t previous=player->m->ram[0x90000]; player->m->ram[0x90000]=previous^0xFF;
     bool loaded=player->load_state(7,&error);
