@@ -8,6 +8,57 @@
 static NSError* cacheError(NSInteger code,NSString* message) {
     return [NSError errorWithDomain:@"PC98GameCache" code:code userInfo:@{NSLocalizedDescriptionKey:message}];
 }
+static NSData* fileDigest(NSURL* url,NSError** error) {
+    NSInputStream* input=[NSInputStream inputStreamWithURL:url];
+    [input open];
+    CC_SHA256_CTX context;
+    CC_SHA256_Init(&context);
+    uint8_t buffer[64*1024];
+    NSInteger count;
+    while((count=[input read:buffer maxLength:sizeof(buffer)])>0)
+        CC_SHA256_Update(&context,buffer,(CC_LONG)count);
+    NSError* failure=count<0 ? input.streamError : nil;
+    [input close];
+    if(count<0) {
+        if(error) *error=failure ?: cacheError(6,@"ゲームファイルを照合できませんでした。");
+        return nil;
+    }
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256_Final(digest,&context);
+    return [NSData dataWithBytes:digest length:sizeof(digest)];
+}
+
+// Keys preserve relative names, and nested dictionaries preserve empty directories.
+static NSDictionary* cacheContents(NSURL* directory,NSError** error) {
+    NSNumber* rootIsDirectory=nil;
+    if(![directory getResourceValue:&rootIsDirectory forKey:NSURLIsDirectoryKey error:error]) return nil;
+    if(!rootIsDirectory.boolValue) {
+        if(error) *error=cacheError(6,@"ゲームキャッシュがフォルダではありません。");
+        return nil;
+    }
+
+    NSArray* keys=@[NSURLIsSymbolicLinkKey,NSURLIsDirectoryKey,NSURLIsRegularFileKey];
+    NSArray<NSURL*>* children=[NSFileManager.defaultManager contentsOfDirectoryAtURL:directory
+        includingPropertiesForKeys:keys options:0 error:error];
+    if(!children) return nil;
+    NSMutableDictionary* contents=[NSMutableDictionary new];
+    for(NSURL* child in children) {
+        NSDictionary* values=[child resourceValuesForKeys:keys error:error];
+        if(!values) return nil;
+        if([values[NSURLIsSymbolicLinkKey] boolValue] ||
+           !([values[NSURLIsDirectoryKey] boolValue] || [values[NSURLIsRegularFileKey] boolValue])) {
+            if(error) *error=cacheError(6,@"ゲームキャッシュに照合できない項目があります。");
+            return nil;
+        }
+        id entry;
+        if([values[NSURLIsDirectoryKey] boolValue]) entry=cacheContents(child,error);
+        else entry=fileDigest(child,error);
+        if(!entry) return nil;
+        contents[child.lastPathComponent]=entry;
+    }
+    return contents;
+}
+
 static BOOL copyIndexedFolder(NSURL* source,NSURL* destination,NSDictionary* index,NSError** error) {
     if(![index isKindOfClass:NSDictionary.class] || ![index[@"version"] isEqual:@1] || ![index[@"files"] isKindOfClass:NSArray.class] || ![index[@"files"] count]) {
         if(error) *error=cacheError(4,@"NASのゲームファイル一覧が正しくありません。");return NO;
@@ -60,7 +111,8 @@ static BOOL copyIndexedFolder(NSURL* source,NSURL* destination,NSDictionary* ind
     NSURL* parent=destination.URLByDeletingLastPathComponent;
     if(![manager createDirectoryAtURL:parent withIntermediateDirectories:YES attributes:nil error:error]) return NO;
 
-    NSURL* staged=[parent URLByAppendingPathComponent:NSUUID.UUID.UUIDString isDirectory:YES];
+    NSString* stagingName=[@".import-" stringByAppendingString:NSUUID.UUID.UUIDString];
+    NSURL* staged=[parent URLByAppendingPathComponent:stagingName isDirectory:YES];
     NSError* failure=nil;
     BOOL copied=[self copyFolderFromURL:source toURL:staged error:&failure];
     if(!copied) {
@@ -68,11 +120,15 @@ static BOOL copyIndexedFolder(NSURL* source,NSURL* destination,NSDictionary* ind
     } else if(![self isUsableCacheAtURL:staged]) {
         failure=cacheError(1,@"ゲームの中身を取得できませんでした。展開済みの作品フォルダを選び直してください。");
     } else if([manager fileExistsAtPath:destination.path]) {
-        // Both paths are in the same cache directory. Swap atomically so a failed
-        // import cannot remove the previous copy.
-        if(renameatx_np(AT_FDCWD,staged.fileSystemRepresentation,
-                       AT_FDCWD,destination.fileSystemRepresentation,RENAME_SWAP)!=0)
-            failure=[NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil];
+        NSDictionary* incoming=cacheContents(staged,&failure);
+        if(!incoming) failure=failure ?: cacheError(6,@"ゲームキャッシュを照合できませんでした。");
+        else if(![incoming isEqualToDictionary:cacheContents(destination,nil)]) {
+            // Both paths are in the same cache directory. A failed swap leaves
+            // the previous cache in place.
+            if(renameatx_np(AT_FDCWD,staged.fileSystemRepresentation,
+                           AT_FDCWD,destination.fileSystemRepresentation,RENAME_SWAP)!=0)
+                failure=[NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil];
+        }
     } else {
         [manager moveItemAtURL:staged toURL:destination error:&failure];
     }
