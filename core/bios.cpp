@@ -21,6 +21,7 @@ static inline uint16_t CX(Machine* m) { return (uint16_t)m->cpu.r[ECX]; }
 static inline uint16_t DX(Machine* m) { return (uint16_t)m->cpu.r[EDX]; }
 static inline uint8_t AH(Machine* m) { return (uint8_t)(m->cpu.r[EAX] >> 8); }
 static inline uint8_t AL(Machine* m) { return (uint8_t)m->cpu.r[EAX]; }
+static inline uint8_t BH(Machine* m) { return (uint8_t)(m->cpu.r[EBX] >> 8); }
 static inline void SETAX(Machine* m, uint16_t v) { m->cpu.r[EAX] = (m->cpu.r[EAX] & 0xFFFF0000u) | v; }
 static inline void SETBX(Machine* m, uint16_t v) { m->cpu.r[EBX] = (m->cpu.r[EBX] & 0xFFFF0000u) | v; }
 static inline void SETCX(Machine* m, uint16_t v) { m->cpu.r[ECX] = (m->cpu.r[ECX] & 0xFFFF0000u) | v; }
@@ -34,6 +35,7 @@ static inline uint32_t lin(uint16_t s, uint16_t o) { return ((uint32_t)s << 4) +
 static uint16_t s_stub_ptr;
 static uint16_t put_stub(Machine* m, const uint8_t* code, int len) {
     uint16_t off = s_stub_ptr;
+    if (off < 0x8E80 && off + len > 0x8E80) plog("[bios] 入口の置き場が機種の印（F8E80h）に届きました\n");
     for (int i = 0; i < len; i++) m->ram[lin(ROMSEG, (uint16_t)(off + i))] = code[i];
     s_stub_ptr = (uint16_t)(s_stub_ptr + len);
     return off;
@@ -320,6 +322,9 @@ static void console_putc_body(Machine* m, uint8_t c) {
             k.esc = 0; return;
         }
         if (k.esc == 2) {
+            // 数字の代わりに 00h〜09h（数そのもの）を送るソフトがある（"ESC [ 3" + 07h + "m" で白）。
+            // 実機の CON は数字を下位 4 ビットで読むので、同じ数字として受ける
+            if (c <= 0x09) c = (uint8_t)('0' + c);
             if ((c >= '0' && c <= '9') || c == ';' || c == '>' || c == '?') {
                 if (k.blen < 30) { k.buf[k.blen++] = (char)c; k.buf[k.blen] = 0; }
                 return;
@@ -489,12 +494,60 @@ static void int18(Machine* m) {
         for (int i = 0; i < 4; i++) m->dig_pal[i] = mem_rb(m, a + i);
         return; }
     case 0x44: m->border = (uint8_t)(CX(m) >> 8); return;
+    case 0x30: {   // PC-9821: 画面モードの設定（9801 の BIOS には無く、AH はそのまま返る）
+        // AL = 周波数（08h = 24kHz、0Ch = 31kHz。上位 5 ビットは 00001b 固定）
+        // BH = bit5-4 グラフィックの縦（00 = 200 ライン上半分 / 01 = 200 ライン下半分 / 10 = 400 / 11 = 480）
+        //      bit0 テキスト 25 行(1) / 20 行(0)、bit1 テキスト 31 行の印
+        // 成功すると AH=05h・AL=BH=0、引数が正しくないと AH=0・AL=BH=1。ソフトは AL|BH や AH で BIOS の有無を確かめる
+        pc9821_probe(m, "INT 18h AH=30h");
+        if (!is_pc9821(m)) return;
+        uint8_t al = AL(m), bh = BH(m);
+        int g = (bh >> 4) & 3;
+        bool hi = (al & 0x04) != 0;
+        bool ok = (al & 0xF8) == 0x08 && !(bh & 0xCC) && (bh & 3) != 3 && (g != 3 || hi);
+        if (!ok) { SETAH(m, 0); SETAL(m, 1); SETBH(m, 1); return; }
+        m->pegc.crt31 = (g == 3) ? 1 : 0;
+        if (g == 3) { m->pegc.on = 1; m->ram[0x54D] |= 0x80; }      // 480 ラインは 256 色の拡張モードで出る
+        else if (m->pegc.on) { m->pegc.on = 0; m->ram[0x54D] &= 0x7F; plog("[pegc] 16 色モードに戻しました（INT 18h AH=30h）\n"); }
+        m->s31_rate = hi ? 1 : 0;
+        // グラフィックの縦（AH=42h と同じ作り方）
+        memset(m->gdcs.pram, 0, 4);
+        m->gdcs.csrform[0] = (uint8_t)((m->gdcs.csrform[0] & 0xE0) | (g >= 2 ? 0 : 1));
+        if (g >= 2) { m->gfx_200 = 0; m->gdcs.zoom = 0; }
+        else {
+            m->gfx_200 = 1; m->gfx_200_lower = 0; m->gdcs.zoom = 0;
+            if (g == 1) { m->gdcs.pram[0] = (uint8_t)(8000 & 0xFF); m->gdcs.pram[1] = (uint8_t)(8000 >> 8); }
+            m->gdcs.pram[3] = 0x40;
+        }
+        // テキストの行数
+        int rows = (bh & 1) ? 25 : 20;
+        uint8_t ras = (uint8_t)(rows == 20 ? 19 : 15);
+        m->ram[0x53C] = (uint8_t)((m->ram[0x53C] & ~0x11) | (rows == 20 ? 0x01 : 0) | ((bh & 2) ? 0x10 : 0));
+        m->ram[0x53B] = ras;
+        m->gdcm.csrform[0] = (uint8_t)((m->gdcm.csrform[0] & 0xE0) | ras);
+        m->gdcm.csrform[2] = (uint8_t)((ras << 3) | 3);
+        s_con.rows = rows;
+        m->ram[0x712] = (uint8_t)(rows - 1);
+        m->gdcm.display = 0;                 // 実機と同じく、切り替えるとテキストの表示は止まる（AH=0Ch で出し直す）
+        SETAH(m, 0x05); SETAL(m, 0); SETBH(m, 0);
+        return; }
+    case 0x31: {   // PC-9821: 画面モードの読み出し（AH=30h の AL / BH の形）
+        if (!is_pc9821(m)) return;
+        SETAL(m, (uint8_t)(0x08 | (m->s31_rate ? 0x04 : 0)));
+        int g = !m->gfx_200 ? (m->pegc.crt31 ? 3 : 2) : ((m->gdcs.pram[0] | (m->gdcs.pram[1] << 8)) ? 1 : 0);
+        uint8_t bh = (uint8_t)(g << 4);
+        if (!(m->ram[0x53C] & 0x01)) bh |= 0x01;
+        if (m->ram[0x53C] & 0x10) bh |= 0x02;
+        SETBH(m, bh);
+        return; }
     case 0x4D: {   // PC-9821: 拡張グラフィックの切り替え（CH=0 16 色、CH=1 256 色）。9801 の BIOS には無い
         uint8_t ch = (uint8_t)(CX(m) >> 8);
         if (ch <= 1) pc9821_probe(m, "INT 18h AH=4Dh");
         if (!is_pc9821(m) || ch > 1) return;
         if (m->pegc.on != ch) plog("[pegc] %s（INT 18h AH=4Dh）\n", ch ? "256 色モードにしました" : "16 色モードに戻しました");
         m->pegc.on = ch;
+        if (ch) m->ram[0x54D] |= 0x80;                         // bit7: いま 256 色
+        else m->ram[0x54D] &= 0x7F;
         return; }
     default:
         if (m->cfg.trace) plog("[bios] INT 18h AH=%02Xh 未対応\n", ah);
@@ -856,7 +909,7 @@ void bios_init(Machine* m) {
     r[0x594] = 0;
     r[0x481] = 0x00;
     r[0x458] = 0x00;
-    if (is_pc9821(m)) r[0x45C] |= 0x40;   // PC-9821（256 色のグラフィックあり）
+    if (is_pc9821(m)) pc9821_mark(m);     // PC-9821（256 色のグラフィックあり）
     { extern uint32_t g_probe_addr; g_probe_addr = (m->cfg.pc9821_ask && !is_pc9821(m)) ? 0x45Cu : 0xFFFFFFFFu; }
     r[0x55D] = 0x01;               // ハードディスク（SASI/IDE）がユニット 0 に付いている（ゲームのフォルダ）
     r[0x55C] = 0x03;               // 1MB の FDD がユニット 0・1 に付いている（仮想フロッピーはユニット 0）
@@ -879,6 +932,19 @@ void bios_init(Machine* m) {
     r[0xFFFFE] = 0xFE;
 }
 
+// ---- PC-9821 の印 --------------------------------------------------------------
+// ソフトが PC-9821 かどうかを見る場所は機種によりまちまちなので、知られているものに全部印を付ける。
+//  ・0045Ch bit6: 拡張グラフィック（256 色）あり
+//  ・00597h bit2: CRT BIOS が PC-9821 のもの / bit7: 画面モードの設定（AH=30h）がある
+//  ・F8E8:0000〜: ROM の機種の印（先頭 2 バイトが 98h 21h。続きは機能の印）
+static const uint32_t k_id_rom = 0xF8E80;
+static const uint8_t k_id_bytes[6] = {0x98, 0x21, 0x1F, 0x20, 0x2C, 0xB0};
+void pc9821_mark(Machine* m) {
+    m->ram[0x45C] |= 0x40;
+    m->ram[0x597] |= 0x84;          // bit7: CRT BIOS に画面モードの設定（INT 18h AH=30h/31h）がある
+    for (int i = 0; i < 6; i++) m->ram[k_id_rom + (uint32_t)i] = k_id_bytes[i];
+}
+
 // ---- ブートモード（フロッピーの IPL から起動する） ---------------------------------
 //  PC-98 の起動 ROM と同じく、ユニット 0 の C=0 H=0 R=1 から IPL を読み込んで実行を始める。
 //   ・まず MFM（倍密度）で ID を探し、無ければ FM（単密度）で探す
@@ -893,6 +959,7 @@ static bool rom_fill_area(uint32_t a) {
     if (a < k_basic_lo || a >= k_rom_hi) return false;
     if (a >= s_rom_used_lo && a < s_rom_used_hi) return false;
     if (a >= 0xF9900 && a < 0xF9A00) return false;                    // LIO の入口
+    if (a >= 0xF8E80 && a < 0xF8E90) return false;                    // 機種の印（PC-9821）
     return true;
 }
 bool bios_rom_trap(Machine* m) {

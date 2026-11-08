@@ -1593,7 +1593,7 @@ static void dos_exec(Machine* m) {
     }
     LoadResult lr;
     int err = load_program(m, name, tail, env ? env : rw(m, lin(s_psp, 0x2C)), s_psp, &lr, as_given ? name.c_str() : nullptr);
-    if (err) { dos_error(m, (uint16_t)err); return; }
+    if (err) { if (m->cfg.trace) plog("[dos] 起動できません: %s（エラー %d）\n", name.c_str(), err); dos_error(m, (uint16_t)err); return; }
     if (al == 1) {
         ww(m, pb + 0x0E, lr.sp); ww(m, pb + 0x10, lr.ss);
         ww(m, pb + 0x12, lr.ip); ww(m, pb + 0x14, lr.cs);
@@ -3016,7 +3016,20 @@ void shell_start(Machine* m, const std::string& cmdline) {
 
 // ゲストから見える SFT（LoL+4 から辿れる表）を中身に合わせる。
 // PMD などは自分の名前をこの表から探すので、鎖が正しく終わっていることが大事。
+static uint64_t s_sft_sig = 0; static bool s_sft_force = true;
 static void sft_sync_guest(Machine* m) {
+    // 前に書いたときから表の中身が変わっていなければ書き直さない（INT 21h のたびに呼ばれるので）。
+    // 開く・閉じるは 1 回の呼び出しで 1 つずつなので、使用数・種類・PC 側のハンドルなどを見れば変わったことが分かる
+    uint64_t sig = 1469598103934665603ull;
+    auto mix = [&](uint64_t v) { sig ^= v; sig *= 1099511628211ull; };
+    mix((uint64_t)s_sft.size()); mix((uint64_t)(uint8_t)m->cfg.drive);
+    for (int i = 0; i < SFT_GUEST_N && i < (int)s_sft.size(); i++) {
+        const Sft& f = s_sft[i];
+        mix((uint64_t)f.refs | ((uint64_t)f.kind << 16) | ((uint64_t)(f.mode & 0xFF) << 24) | ((uint64_t)f.owner << 32));
+        mix((uint64_t)(uintptr_t)f.h); mix((uint64_t)f.name.size());
+    }
+    if (sig == s_sft_sig && !s_sft_force) return;
+    s_sft_sig = sig; s_sft_force = false;
     uint32_t base = lin(DOSSEG, D_SFT) + 6;
     for (int i = 0; i < SFT_GUEST_N; i++) {
         uint32_t e = base + (uint32_t)i * 0x3B;
@@ -3266,7 +3279,7 @@ static void mscdex(Machine* m) {
         uint32_t key = ((uint32_t)al << 16) | ((uint32_t)cmd << 8) | code;
         if (key == last) {
             rep++;
-            if ((rep & (rep - 1)) == 0 && rep >= 4 && k < 4000) { k++; plog("[cd]   （同じ要求が %u 回続いています）\n", rep); }
+            if ((rep & (rep - 1)) == 0 && rep >= 4 && k < 4000) { k++; plog("[cd]   （INT 2Fh の同じ要求が %u 回続いています）\n", rep); }
         } else {
             last = key; rep = 1;
             if (k < 4000) { k++;
@@ -3342,7 +3355,7 @@ static void cd_request(Machine* m, uint32_t q, bool drv_ok) {
         uint8_t cmd = mem_rb(m, q + 2);
         uint16_t st = 0x0100;   // 完了
         if (!drv_ok) st = 0x8101;   // 不明なユニット
-        else if (cmd == 3) st = cd_ioctl_input(m, lin(rw(m, q + 0x10), rw(m, q + 0x0E)));
+        else if (cmd == 3) { st = cd_ioctl_input(m, lin(rw(m, q + 0x10), rw(m, q + 0x0E))); machine_driver_wait(m, 1000); }   // ドライブへの問い合わせ: 約 1ms
         else if (cmd == 12) st = cd_ioctl_output(m, lin(rw(m, q + 0x10), rw(m, q + 0x0E)));
         else if (cmd == 128) {   // 読み出し（long）
             uint8_t mode = mem_rb(m, q + 0x0D);
@@ -3377,8 +3390,13 @@ static uint32_t s_cd_reqhdr = 0;
 static void cd_strategy(Machine* m) { s_cd_reqhdr = lin(ES(m), BX(m)); }
 static void cd_interrupt(Machine* m) {
     if (!s_cd_reqhdr) return;
-    if (m->cfg.trace) { static int k = 0; if (k++ < 200) { uint8_t cmd = mem_rb(m, s_cd_reqhdr + 2); uint8_t code = (cmd == 3 || cmd == 12) ? mem_rb(m, lin(rw(m, s_cd_reqhdr + 0x10), rw(m, s_cd_reqhdr + 0x0E))) : 0;
-        plog("[cd] 装置への直接の要求 %u（コード %u）\n", cmd, code); } }
+    if (m->cfg.trace) {   // 同じ要求が続くときは回数だけ（1・2・4・8… 回目）を書く
+        static int k = 0; static uint32_t last = 0xFFFFFFFF, rep = 0;
+        uint8_t cmd = mem_rb(m, s_cd_reqhdr + 2); uint8_t code = (cmd == 3 || cmd == 12) ? mem_rb(m, lin(rw(m, s_cd_reqhdr + 0x10), rw(m, s_cd_reqhdr + 0x0E))) : 0;
+        uint32_t key = ((uint32_t)cmd << 8) | code;
+        if (key == last) { rep++; if ((rep & (rep - 1)) == 0 && rep >= 4 && k < 4000) { k++; plog("[cd]   （装置への同じ要求が %u 回続いています）\n", rep); } }
+        else { last = key; rep = 1; if (k < 4000) { k++; plog("[cd] 装置への直接の要求 %u（コード %u）\n", cmd, code); } }
+    }
     cd_request(m, s_cd_reqhdr, cd_letter(m) != 0);
 }
 
@@ -3590,6 +3608,7 @@ void dos_init(Machine* m) {
     m->avg.on = 0;
     scsicd_setup(m);
     if (m->cfg.avsdrv == 1) avsdrv_install(m);   // AVSDRV=1: CONFIG.SYS にかかわらず用意する
+    s_sft_force = true;
     sft_sync_guest(m);
 
     // 使われていない割込みベクタは、実機の MS-DOS と同じく 0060:xxxx の IRET を指すようにする。
@@ -3664,7 +3683,7 @@ void dos_state_save(Machine* m, StateW& w) {
 
 void dos_state_load(Machine* m, StateR& r) {
     (void)m;
-    r.tag("DOS ");
+    r.tag("DOS "); s_sft_force = true;
     if (r.peek_tag("DRV1")) {
         r.tag("DRV1");
         r.pod(s_curdrv); s_fdcwd = r.str();

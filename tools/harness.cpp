@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <chrono>
 #include <vector>
 #include <set>
 #include <time.h>
@@ -43,6 +44,7 @@ int main(int argc, char** argv) {
     if (argc < 2) { fprintf(stderr, "usage: harness gamedir [--start cmd] [--frames n] [--shot a,b] [--key f:sc[:u]] [--wav f] [--out prefix]\n"); return 1; }
     std::string dir = argv[1];
     std::string start, out = "shot", wav, ini_path;
+    int scp_f = -1; std::string scp_path;
     int frames = 600, mhz = 0;
     std::set<int> shots;
     std::vector<KeyEv> keys;
@@ -59,6 +61,7 @@ int main(int argc, char** argv) {
         else if (a == "--save") { std::string s2 = next(); sscanf(s2.c_str(), "%d:%d", &save_f, &save_slot); }
         else if (a == "--load") { std::string s2 = next(); sscanf(s2.c_str(), "%d:%d", &load_f, &load_slot); }
         else if (a == "--wav") wav = next();
+        else if (a == "--scpsave") { std::string s2 = next(); size_t c = s2.find(':'); scp_f = atoi(s2.substr(0, c).c_str()); scp_path = s2.substr(c + 1); }
         else if (a == "--fd") { std::string s2 = next(); size_t c = s2.find(':'); fdev.push_back({atoi(s2.substr(0, c).c_str()), s2.substr(c + 1)}); }
         else if (a == "--cpfile") { std::string s2 = next(); size_t c1 = s2.find(':'), c2 = s2.find(':', c1 + 1); cpev.push_back({atoi(s2.substr(0, c1).c_str()), {s2.substr(c1 + 1, c2 - c1 - 1), s2.substr(c2 + 1)}}); }
         else if (a == "--out") out = next();
@@ -71,6 +74,7 @@ int main(int argc, char** argv) {
     extern int g_itr_stop_cs; if (getenv("ITRACE_STOP")) g_itr_stop_cs = (int)strtol(getenv("ITRACE_STOP"), 0, 16);
     { extern int g_trace_full; if (getenv("TRACEFULL")) g_trace_full = atoi(getenv("TRACEFULL")); }
     extern int g_trace_int; if (getenv("TRACEINT")) g_trace_int = (int)strtol(getenv("TRACEINT"), 0, 16);
+    { extern unsigned* g_stall_port; if (getenv("PORTCOUNT")) g_stall_port = new unsigned[65536](); }
     extern int g_trace_port_lo, g_trace_port_hi; if (getenv("TRACEPORT")) sscanf(getenv("TRACEPORT"), "%x-%x", &g_trace_port_lo, &g_trace_port_hi);
     if (getenv("WATCH")) { sscanf(getenv("WATCH"), "%x-%x", &g_watch_lo, &g_watch_hi); }
     FILE* ff = fopen("/home/claude/g/pc98player/tools/font.bin", "rb");
@@ -163,6 +167,23 @@ int main(int argc, char** argv) {
             if (f == from) { g_trace_port_lo = saved_lo; g_trace_port_hi = saved_hi; } } }
         bool shot = shots.count(f) > 0 || f == frames - 1; bool rend = shot || getenv("RENDERALL");
         p->run_frame(rend, !getenv("NOAUDIO"));
+        if (getenv("FRAMEHASH") && rend) {   // 画面が変わったフレームを数える（動きのなめらかさを見る）
+            uint64_t h = 1469598103934665603ull; for (int i = 0; i < 640 * p->fb_h; i++) { h ^= p->fb[i]; h *= 1099511628211ull; }
+            fprintf(stderr, "[fh] %d %016llx\n", f, (unsigned long long)h);
+        }
+        if (f == scp_f && !scp_path.empty()) {
+            FloppyImage* im = floppy::image_unit(0); std::string er;
+            bool ok = im && im->save_scp(scp_path, &er, [](int d, int t, void*) { if (d % 40 == 0) fprintf(stderr, "scp %d/%d\n", d, t); return true; }, nullptr);
+            fprintf(stderr, "scpsave %s: %s\n", scp_path.c_str(), ok ? "ok" : er.c_str());
+        }
+        if (getenv("PERFREP") && f % 282 == 0) {
+            static auto t0 = std::chrono::steady_clock::now(); static int64_t c0 = 0;
+            auto t1 = std::chrono::steady_clock::now();
+            extern int64_t g_burn_cycles; static int64_t b0 = 0;
+            fprintf(stderr, "[perfh] frame %d: %.1f ms / 282 frames, cycles %.1fM (burn %.1fM)\n", f, std::chrono::duration<double, std::milli>(t1 - t0).count(), (p->m->cpu.cycles - c0) / 1e6, (g_burn_cycles - b0) / 1e6);
+            t0 = t1; c0 = p->m->cpu.cycles; b0 = g_burn_cycles;
+            void perf_report(Machine* m); perf_report(p->m);
+        }
         if (!wav.empty()) pcm.insert(pcm.end(), p->audio.begin(), p->audio.end());
         if (shot) {
             char fn[256]; snprintf(fn, sizeof(fn), "%s_%05d.ppm", out.c_str(), f);
@@ -209,6 +230,7 @@ int main(int argc, char** argv) {
     { extern unsigned g_opna_hist[2][256]; fprintf(stderr, "hist:"); for (int pt = 0; pt < 2; pt++) for (int a = 0; a < 256; a++) if (g_opna_hist[pt][a]) fprintf(stderr, " %d:%02X=%u", pt, a, g_opna_hist[pt][a]); fprintf(stderr, "\n"); }
     if (getenv("DUMPMEM")) { unsigned sg, off, n; sscanf(getenv("DUMPMEM"), "%x:%x:%x", &sg, &off, &n); for (unsigned i = 0; i < n; i++) { if (i % 32 == 0) fprintf(stderr, "\n%04X:%04X ", sg, off + i); fprintf(stderr, "%02X ", p->m->ram[((sg << 4) + off + i) & 0xFFFFF]); } fprintf(stderr, "\n"); }
     { extern unsigned g_spin_hits; fprintf(stderr, "spin hits=%u\n", g_spin_hits); }
+    { extern unsigned* g_stall_port; if (getenv("PORTCOUNT") && g_stall_port) { fprintf(stderr, "ports:"); for (int i = 0; i < 65536; i++) if (g_stall_port[i] > 10000) fprintf(stderr, " %04X=%u", i, g_stall_port[i]); fprintf(stderr, "\n"); } }
     if (getenv("DUMPTEXT")) {
         int r0 = atoi(getenv("DUMPTEXT"));
         uint32_t tsad = (uint32_t)(p->m->gdcm.pram[0] | (p->m->gdcm.pram[1] << 8));
@@ -233,7 +255,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "\n[pegc] gdcm.disp=%d text tvram[0..8]=%02X %02X attr %02X\n", mm->gdcm.display, mm->tvram[0], mm->tvram[1], mm->tvram[0x2000]);
     }
     if (getenv("DUMPRAM")) { FILE* df = fopen(getenv("DUMPRAM"), "wb"); if (df) { fwrite(p->m->ram, 1, 0x100000, df); fclose(df); } }
-    { extern unsigned* g_prof_lin; if (g_prof_lin) { FILE* o = fopen(getenv("PROFLIN"), "wb"); fwrite(g_prof_lin, 4, 0x100000, o); fclose(o); } }
+    { extern unsigned* g_prof_lin; if (g_prof_lin && getenv("PROFLIN")) { FILE* o = fopen(getenv("PROFLIN"), "wb"); fwrite(g_prof_lin, 4, 0x100000, o); fclose(o); } }
     { extern unsigned* g_prof; if (g_prof) { for (int i = 0; i < 65536; i++) if (g_prof[i]) fprintf(stderr, "%04X:%u ", i, g_prof[i]); fprintf(stderr, "\n"); } }
     if (getenv("FDLIST") && floppy::image()) {   // フロッピーの各トラックの ID と状態
         FloppyImage* im = floppy::image();
