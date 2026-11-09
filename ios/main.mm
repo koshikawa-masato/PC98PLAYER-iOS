@@ -875,6 +875,18 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         }
     });
 }
+- (BOOL)prepareLocalProgram:(NSURL*)program root:(NSURL*)root settings:(PlayerSettings&)settings {
+    if([GameLibrary isWindowsProgramAtURL:program]) {
+        [self message:@"この実行ファイルはWindows用です。PC-98／DOS用の起動ファイルを選んでください。"];
+        return NO;
+    }
+    NSURL* launchFolder=[GameLibrary launchFolderForProgram:program relativeToRoot:root];
+    if(![launchFolder.path isEqualToString:root.path]) {
+        settings.cfg.root=launchFolder.fileSystemRepresentation;
+        settings.cfg.start=program.lastPathComponent.UTF8String;
+    }
+    return YES;
+}
 - (void)openCache:(NSURL*)cache identifier:(NSString*)identifier {
     cache=cache.URLByStandardizingPath.URLByResolvingSymlinksInPath;
     [self stopGame]; self.currentCache=cache; self.currentID=identifier;
@@ -915,6 +927,17 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         [self chooseProgram:root settings:ps explanation:explanation];
         return;
     }
+    // An INI may give a literal path containing spaces. Resolve it on the
+    // host first, before the DOS shell interprets the path as a command.
+    NSString* start=text(ps.cfg.start);
+    NSString* relative=[start stringByReplacingOccurrencesOfString:@"\\" withString:@"/"];
+    if(!ps.cfg.boot_fd && relative.length && !relative.isAbsolutePath && ![relative containsString:@":"]) {
+        NSURL* program=[root URLByAppendingPathComponent:relative].URLByStandardizingPath.URLByResolvingSymlinksInPath;
+        NSNumber* regular=nil;
+        if([GameLibrary relativePathForProgram:program inRoot:root] &&
+           [program getResourceValue:&regular forKey:NSURLIsRegularFileKey error:nil] && regular.boolValue &&
+           ![self prepareLocalProgram:program root:root settings:ps]) return;
+    }
     [self launchSettings:ps];
 }
 - (void)chooseProgram:(NSURL*)root settings:(PlayerSettings)settings explanation:(NSString*)explanation {
@@ -924,7 +947,9 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     for(NSURL* url in e) {
         if([@[@"bat",@"com",@"exe"] containsObject:url.pathExtension.lowercaseString]) {
             NSNumber* regular=nil; if(![url getResourceValue:&regular forKey:NSURLIsRegularFileKey error:&scanError]) break;
-            if(regular.boolValue) [programs addObject:[url.path substringFromIndex:root.path.length+1]];
+            if(!regular.boolValue || [GameLibrary isWindowsProgramAtURL:url]) continue;
+            NSString* relative=[GameLibrary relativePathForProgram:url inRoot:root];
+            if(relative) [programs addObject:relative];
         }
     }
     if(scanError) { [self message:[@"ゲームフォルダを読み取れません。取得状態を確認してください。\n" stringByAppendingString:scanError.localizedDescription]]; return; }
@@ -932,7 +957,14 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     [programs sortUsingSelector:@selector(localizedStandardCompare:)];
     FileChooser* chooser=[FileChooser new]; chooser.title=@"起動するプログラム"; chooser.paths=programs; chooser.explanation=explanation;
     __weak PlayerController* weak=self;
-    chooser.selected=^(NSString* selected) { PlayerSettings s=settings; s.cfg.start=hostfs::to_sjis(selected.UTF8String); [weak launchSettings:s]; };
+    chooser.selected=^(NSString* selected) {
+        PlayerController* controller=weak;
+        if(!controller) return;
+        PlayerSettings chosen=settings;
+        chosen.cfg.start=selected.UTF8String;
+        NSURL* program=[root URLByAppendingPathComponent:selected];
+        if([controller prepareLocalProgram:program root:root settings:chosen]) [controller launchSettings:chosen];
+    };
     UINavigationController* navigation=[[UINavigationController alloc] initWithRootViewController:chooser];
     [self presentViewController:navigation animated:YES completion:nil];
 }

@@ -25,6 +25,37 @@ int main() { @autoreleasepool {
             error=nil;
             check([GameLibrary gameRootAtURL:cache relativePath:path error:&error]==nil && error!=nil,"reject invalid root");
         }
+        for(NSString* folder in @[@"", @"PACK/GAME"]) {
+            NSURL* directory=folder.length ? [cache URLByAppendingPathComponent:folder] : cache;
+            NSURL* program=[directory URLByAppendingPathComponent:@"DEPTH.EXE"];
+            check([[GameLibrary launchFolderForProgram:program relativeToRoot:cache].path isEqual:cache.path],
+                  "DOS-safe folder keeps the configured root");
+        }
+        for(NSString* folder in @[@"LongArchive/GAME", @"Games Collection/Super Depth", @"作品集/ゲーム", @"PACK.2026/GAME"]) {
+            NSURL* leaf=[cache URLByAppendingPathComponent:folder];
+            NSURL* program=[leaf URLByAppendingPathComponent:@"DEPTH.EXE"];
+            check([[GameLibrary launchFolderForProgram:program relativeToRoot:cache].path isEqual:leaf.path],
+                  "host-only folder names are outside the DOS path");
+        }
+        NSURL* exe=[cache URLByAppendingPathComponent:@"PC98PLAYER.EXE"];
+        NSMutableData* header=[NSMutableData dataWithLength:128];
+        auto* bytes=static_cast<uint8_t*>(header.mutableBytes);
+        bytes[0]='M'; bytes[1]='Z'; bytes[60]=96;
+        check([header writeToURL:exe options:0 error:&error],"write DOS executable header");
+        check(![GameLibrary isWindowsProgramAtURL:exe],"DOS executable remains a launch candidate");
+        bytes[96]='P'; bytes[97]='E';
+        check([header writeToURL:exe options:0 error:&error],"write Windows executable header");
+        check([GameLibrary isWindowsProgramAtURL:exe],"Windows PE executable is excluded");
+        bytes[60]=255;
+        check([header writeToURL:exe options:0 error:&error],"write truncated PE offset");
+        check(![GameLibrary isWindowsProgramAtURL:exe],"truncated PE offset is handled safely");
+        NSURL* alias=[temp URLByAppendingPathComponent:@"alias"];
+        check([fm createSymbolicLinkAtURL:alias withDestinationURL:cache error:&error],"create root alias");
+        NSURL* cachedProgram=[cache URLByAppendingPathComponent:@"nested/DEMO.COM"];
+        check([[GameLibrary relativePathForProgram:cachedProgram inRoot:alias] isEqual:@"nested/DEMO.COM"],
+              "relative path omits the real root when the selected root is an alias");
+        check([GameLibrary relativePathForProgram:[nested URLByAppendingPathComponent:@"DEMO.COM"] inRoot:alias]==nil,
+              "program outside the resolved root is rejected");
         check([fm createSymbolicLinkAtURL:[cache URLByAppendingPathComponent:@"outside"] withDestinationURL:source error:&error],"create link");
         error=nil;
         check([GameLibrary gameRootAtURL:cache relativePath:@"outside" error:&error]==nil,"reject escaping symlink");

@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdlib.h>
 #import <CommonCrypto/CommonDigest.h>
 static NSError* cacheError(NSInteger code,NSString* message) {
     return [NSError errorWithDomain:@"PC98GameCache" code:code userInfo:@{NSLocalizedDescriptionKey:message}];
@@ -90,6 +91,47 @@ static BOOL copyIndexedFolder(NSURL* source,NSURL* destination,NSDictionary* ind
 }
 
 @implementation GameLibrary
++ (NSString*)relativePathForProgram:(NSURL*)program inRoot:(NSURL*)root {
+    // iOS can report an enumerated URL under /private/var even when the
+    // root URL uses /var. Resolve both before checking containment.
+    char* resolvedRoot=realpath(root.fileSystemRepresentation,nullptr);
+    char* resolvedProgram=realpath(program.fileSystemRepresentation,nullptr);
+    NSString* rootPath=resolvedRoot ? [NSFileManager.defaultManager stringWithFileSystemRepresentation:resolvedRoot length:strlen(resolvedRoot)] : nil;
+    NSString* programPath=resolvedProgram ? [NSFileManager.defaultManager stringWithFileSystemRepresentation:resolvedProgram length:strlen(resolvedProgram)] : nil;
+    free(resolvedRoot);
+    free(resolvedProgram);
+    if(!rootPath || !programPath) return nil;
+    NSString* prefix=[rootPath hasSuffix:@"/"] ? rootPath : [rootPath stringByAppendingString:@"/"];
+    return [programPath hasPrefix:prefix] ? [programPath substringFromIndex:prefix.length] : nil;
+}
+
++ (BOOL)isWindowsProgramAtURL:(NSURL*)url {
+    if([url.pathExtension caseInsensitiveCompare:@"exe"]!=NSOrderedSame) return NO;
+    NSFileHandle* file=[NSFileHandle fileHandleForReadingFromURL:url error:nil];
+    NSData* header=[file readDataUpToLength:64 error:nil];
+    if(header.length!=64) return NO;
+    const uint8_t* bytes=(const uint8_t*)header.bytes;
+    if(bytes[0]!='M' || bytes[1]!='Z') return NO;
+    uint32_t offset=(uint32_t)bytes[60] | (uint32_t)bytes[61]<<8 |
+        (uint32_t)bytes[62]<<16 | (uint32_t)bytes[63]<<24;
+    if(offset<64 || ![file seekToOffset:offset error:nil]) return NO;
+    NSData* signature=[file readDataUpToLength:4 error:nil];
+    return signature.length==4 && memcmp(signature.bytes,"PE\0\0",4)==0;
+}
+
++ (NSURL*)launchFolderForProgram:(NSURL*)program relativeToRoot:(NSURL*)root {
+    // DOS truncates every path component to 8.3. Keep host-only directory
+    // names outside the guest drive, while preserving existing DOS-safe paths.
+    NSArray<NSString*>* components=program.URLByDeletingLastPathComponent.pathComponents;
+    NSCharacterSet* safe=[NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"];
+    for(NSUInteger i=root.pathComponents.count;i<components.count;++i) {
+        NSString* component=components[i];
+        if(component.length>8 || [component rangeOfCharacterFromSet:safe.invertedSet].location!=NSNotFound)
+            return program.URLByDeletingLastPathComponent;
+    }
+    return root;
+}
+
 + (BOOL)isUsableCacheAtURL:(NSURL*)url {
     NSFileManager* manager=NSFileManager.defaultManager;
     NSDirectoryEnumerator* items=[manager enumeratorAtURL:url includingPropertiesForKeys:@[NSURLIsRegularFileKey,NSURLFileSizeKey] options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:nil];
