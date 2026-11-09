@@ -48,20 +48,15 @@
 <p>SuperDepth が起動しない場合は、まず <a href="#superdepth-startup">「Bad command or file name」が出るとき</a>をご覧ください。</p>
 <div class="faq">
 <details id="superdepth-startup" open><summary>SuperDepth で「Bad command or file name」が出るとき</summary>
-<p>0.2.2 では、ゲームの親フォルダを開いて起動プログラムを選ぶと、<code>DEPTH.EXE</code> があってもエラーになる場合があります。</p>
-<h3>0.2.2 で遊ぶには</h3>
+<p>0.2.2 では、親フォルダから開いたときに加え、<code>DEPTH.EXE</code> が直下にある <code>DEPTH</code> フォルダを直接開いても、このエラーが出る場合があります。INI は任意です。INI がないときは「起動するプログラム」から実行ファイルを選べます。</p>
+<h3>0.2.3 公開後に、同じ条件で再確認する</h3>
 <ol>
-<li>「ファイル」アプリで ZIP をタップして展開します。展開先にフォルダが重なっていれば、<code>DEPTH.EXE</code> と <code>DEPTH.BGM</code> などが直接入っているフォルダを探します。</li>
-<li>RetroDOS Player の「開く」で、その作品フォルダに入り、右上の「開く」を押します。たとえば <code>ゲーム集/DEPTH/DEPTH.EXE</code> なら、<code>DEPTH</code> を開きます。</li>
-<li>「起動するプログラム」が表示されたら、<code>DEPTH.EXE</code> を選びます。この手順は INI がなくても試せます。</li>
+<li><a href="https://apps.apple.com/jp/app/id6826817332">App Store の RetroDOS Player</a> で 0.2.3 に更新します。</li>
+<li>前回と同じ ZIP を「ファイル」アプリで展開します。<code>PC98PLAYER.INI</code> は追加せず、<code>DEPTH.EXE</code> と付属データが直接入っている <code>DEPTH</code> フォルダを使います。</li>
+<li>RetroDOS Player の「開く」で <code>DEPTH</code> フォルダに入り、右上の「開く」を押します。たとえば <code>ゲーム集/DEPTH/DEPTH.EXE</code> なら、<code>DEPTH</code> を開きます。</li>
+<li>「起動するプログラム」が出たら <code>DEPTH.EXE</code> を選び、SuperDepth のタイトル画面まで進むか確認します。</li>
 </ol>
-<h3>0.2.3 に更新できたら、親フォルダから再確認</h3>
-<ol>
-<li><a href="https://apps.apple.com/jp/app/id6826817332">App Store の RetroDOS Player</a> で 0.2.3 に更新します。以前使ったものと同じ ZIP を展開し、フォルダ名や INI の有無を変えずに試します。</li>
-<li>アプリの「開く」で、今度は作品フォルダのひとつ上を選びます。たとえば <code>ゲーム集/DEPTH/DEPTH.EXE</code> なら、<code>ゲーム集</code> を開きます。</li>
-<li>候補が出たら <code>DEPTH/DEPTH.EXE</code> に相当する項目を選び、SuperDepth のタイトル画面まで進むか確認します。</li>
-</ol>
-<p>エラーが続く場合は、アプリのバージョン、端末と iOS のバージョン、保存先（このiPhone内・iCloud Drive など）、選んだフォルダから <code>DEPTH.EXE</code> までの構成、INI の有無、候補に表示されたパスとエラーをお知らせください。作品フォルダを直接開くと起動するかも分かると、原因を切り分けやすくなります。</p>
+<p>エラーが続く場合は、アプリのバージョン、端末と iOS のバージョン、保存先（このiPhone内・iCloud Drive など）、候補に表示されたパスとエラーをお知らせください。</p>
 </details>
 <details><summary>NAS が表示されない・接続できない</summary><p>まずアプリを離れ、「ファイル」アプリ単体で接続できるか確認します。同じ Wi-Fi、NAS の SMB 設定、IP アドレス、共有権限、ユーザー名を見直してください。ゲスト Wi-Fi では機器同士の通信が制限される場合があります。NAS のパスワードを GitHub などに投稿しないでください。</p></details>
 <details id="game-folder"><summary>ゲームフォルダはどこに置く？</summary>
