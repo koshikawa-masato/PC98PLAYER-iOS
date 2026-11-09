@@ -47,9 +47,24 @@
 <section class="section help-bg" id="help"><div class="wrap"><p class="eyebrow">04 / NEED A HAND?</p><h2>つまずいたら、ここから。</h2>
 <div class="faq">
 <details><summary>NAS が表示されない・接続できない</summary><p>まずアプリを離れ、「ファイル」アプリ単体で接続できるか確認します。同じ Wi-Fi、NAS の SMB 設定、IP アドレス、共有権限、ユーザー名を見直してください。ゲスト Wi-Fi では機器同士の通信が制限される場合があります。NAS のパスワードを GitHub などに投稿しないでください。</p></details>
-<details><summary>ZIP や EXE を選べない</summary><p>ZIP は先に「ファイル」アプリで展開します。アプリでは作品のフォルダ全体を選びます。中のファイルが薄く表示されていても、右上の「開く」でフォルダを選べます。</p></details>
+<details id="game-folder"><summary>ゲームフォルダはどこに置く？</summary>
+<p>端末に置く場合は「ファイル」→「このiPhone内／このiPad内」→「RetroDOS Player」が見つけやすい場所です。アプリを一度起動すると表示されます。必要に応じて、その中の <code>Games</code> に1作品ずつまとめてください。「ダウンロード」、iCloud Drive、接続済みのNASに置いたフォルダも、アプリの「開く」から選べます。</p>
+<p>ZIPは先に「ファイル」で展開します。アプリの「開く」で作品のフォルダに入り、右上の「開く」を押します。起動ファイルが薄く表示されていても、フォルダを選ぶ操作はできます。展開後に同名のフォルダが重なっている場合は、まず起動ファイルとゲームデータが入っている内側の作品フォルダを選んでください。</p></details>
+<details id="game-files"><summary>ゲームフォルダには何が必要？</summary>
+<p>作品の説明書に従い、PC-98／DOS用の起動ファイル（<code>.BAT</code>、<code>.COM</code>、<code>.EXE</code>）と、画像・音楽などの付属データ一式を入れます。展開したときのファイル名とサブフォルダ構成を保ってください。Windows版の <code>PC98PLAYER.EXE</code> を一緒に転送した場合は、候補に出ても作品の起動ファイルを選んでください。</p>
+<pre><code>SuperDepth/
+  DEPTH.EXE
+  DEPTH.BGM
+  …ほかの付属データ
+  PC98PLAYER.INI  （任意）</code></pre></details>
+<details id="startup-ini"><summary>PC98PLAYER.INI がある場合と、ない場合は？</summary>
+<p>INIは任意です。選ぶフォルダの直下に <code>PC98PLAYER.INI</code> があり、<code>[PC98PLAYER]</code> に有効な <code>Start</code> が指定されていれば、そのプログラムが自動起動します。たとえば、<code>DEPTH.EXE</code> とINIを同じフォルダに置いた場合は次のように指定します。</p>
+<pre><code>[PC98PLAYER]
+Start=DEPTH.EXE</code></pre>
+<p><code>Start</code> は選んだフォルダを基準にしたパスです。<code>Root</code> を指定した場合は、選んだフォルダからの相対パスで <code>Root</code> を書き、<code>Start</code> はその <code>Root</code> を基準に書きます。たとえば親フォルダのINIに <code>Root=DEPTH</code>、<code>Start=DEPTH.EXE</code> と書くと、親フォルダ内の <code>DEPTH/DEPTH.EXE</code> を指定できます。</p>
+<p>INIがない場合や <code>Start</code> が空の場合は、「起動するプログラム」で作品の説明書にあるBAT・COM・EXEを選びます。INIが子フォルダにだけある場合は、その子フォルダを「開く」で選ぶと自動起動の設定が読み込まれます。親フォルダから選んで「Bad command or file name」が出た場合も、まず作品フォルダを直接開いてください。</p></details>
 <details><summary>ゲームが動かない・音が出ない</summary><p>必要なデータが揃っているか、説明書の起動プログラムを選んだか、対応する音源・色数かを確認します。一時停止中なら「▶︎ / Ⅱ」で再開してください。音源・色数の変更を適用すると再起動するため、先にゲーム内で保存します。ソフトごとの互換性対応が必要な場合もあります。</p></details>
-<details><summary>キャッシュを消すとセーブも消える？</summary><p>「場所 → ゲーム本体のキャッシュを消去」ではセーブは消えません。ただし、アプリを削除するとアプリ内のセーブ・状態保存も失われます。不調時の最初の対処としてアプリを削除しないでください。元のゲームフォルダをコピーするだけでは、別領域のセーブのバックアップにはなりません。</p></details>
+<details><summary>キャッシュを消すとセーブも消える？</summary><p>「一覧 → ゲーム本体のキャッシュを消去」ではセーブは消えません。ただし、アプリを削除するとアプリ内のセーブ・状態保存も失われます。不調時の最初の対処としてアプリを削除しないでください。元のゲームフォルダをコピーするだけでは、別領域のセーブのバックアップにはなりません。</p></details>
 </div>
 <p class="support">解決しない場合は、端末・アプリのバージョン・症状を添えて <a href="https://github.com/koshikawa-masato/PC98PLAYER-iOS/issues">GitHub の不具合報告へ ↗</a>。ゲーム本体や認証情報は投稿しないでください。</p></div></section>
 </main>
