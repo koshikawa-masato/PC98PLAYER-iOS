@@ -210,6 +210,7 @@ static NSString* catalogNameForFolder(NSURL* folder) {
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
 @end
 
+static NSString* const launchFullscreenKey=@"PC98LaunchFullscreen";
 static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
 
 @interface GameOptionsController : UITableViewController
@@ -217,6 +218,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
 @property NSInteger videoColors;
 @property BOOL manualDuo;
 @property BOOL bossMode;
+@property BOOL launchFullscreen;
 @property(copy) NSArray<NSNumber*>* bluetoothBindings;
 @property content_filter::Settings filterSettings;
 @property(copy) void (^willApply)(content_filter::Settings);
@@ -231,7 +233,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 6; }
-- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?3:section==3?6:section==4?1:2; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?4:section==3?6:section==4?1:2; }
 - (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数",@"表示",@"コンテンツフィルター",@"Bluetoothコントローラー",@"このアプリについて"][section]; }
 - (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section {
     if(section==1)return @"音源・色数の変更はゲームを再起動します。必要な場合は、先にゲーム内で保存してください。";
@@ -253,9 +255,19 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     } else if(index.section==2) {
         cell.textLabel.text=index.row==0?@"自動判別":index.row==1?@"Duo上下表示を固定":@"ボスがきた";
         cell.detailTextLabel.text=index.row==0?@"端末とヒンジの状態に合わせる":index.row==1?@"上にモニタ、下にキーボード":@"Duoを閉じると一時停止・アウターを非表示";
-        if(index.row==2) {
-            UISwitch* toggle=[UISwitch new];toggle.on=self.bossMode;toggle.accessibilityLabel=@"ボスがきた";
-            [toggle addTarget:self action:@selector(changeBossMode:) forControlEvents:UIControlEventValueChanged];cell.accessoryView=toggle;cell.selectionStyle=UITableViewCellSelectionStyleNone;
+        if(index.row>=2) {
+            BOOL startup=index.row==2;
+            if(startup) {
+                cell.textLabel.text=@"起動時に最大化で表示";
+                cell.detailTextLabel.text=@"次回のアプリ起動時に適用";
+            }
+            UISwitch* toggle=[UISwitch new];
+            toggle.on=startup ? self.launchFullscreen : self.bossMode;
+            toggle.accessibilityLabel=cell.textLabel.text;
+            [toggle addTarget:self action:startup ? @selector(changeLaunchFullscreen:) : @selector(changeBossMode:)
+                forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView=toggle;
+            cell.selectionStyle=UITableViewCellSelectionStyleNone;
         } else cell.accessoryType=(self.manualDuo==(index.row==1))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
     } else if(index.section==3) {
         if(index.row<2) {
@@ -309,12 +321,14 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     else if(index.section==3 && index.row>=2 && index.row<5) { auto settings=self.filterSettings;settings.effect=(content_filter::Effect)(index.row-2);self.filterSettings=settings; }
     [tableView reloadData];
 }
+- (void)changeLaunchFullscreen:(UISwitch*)sender { self.launchFullscreen=sender.on; }
 - (void)changeBossMode:(UISwitch*)sender { self.bossMode=sender.on; }
 - (void)changeFilter:(UISwitch*)sender { auto settings=self.filterSettings;if(sender.tag==0)settings.adult=sender.on;else settings.harm=sender.on;self.filterSettings=settings; }
 - (void)changeSensitivity:(UISegmentedControl*)sender { auto settings=self.filterSettings;settings.sensitivity=(int)sender.selectedSegmentIndex;self.filterSettings=settings; }
 - (void)cancel { [self dismissViewControllerAnimated:YES completion:^{if(self.cancelled)self.cancelled();}]; }
 - (void)apply {
     [NSUserDefaults.standardUserDefaults setObject:self.bluetoothBindings forKey:bluetoothBindingsKey];
+    [NSUserDefaults.standardUserDefaults setBool:self.launchFullscreen forKey:launchFullscreenKey];
     if(self.willApply)self.willApply(self.filterSettings);[self dismissViewControllerAnimated:YES completion:^{if(self.applied)self.applied(self.soundBoard,self.videoColors,self.manualDuo,self.bossMode,self.filterSettings);}]; }
 @end
 
@@ -329,7 +343,6 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         int frames;
     };
     std::deque<FPSSample> fpsHistory;
-    DuoFullscreenPresentation fullscreenPresentation;
     BOOL bossMode, hingeClosed;
     BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
     int mouseButtons;
@@ -456,6 +469,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         self.hingeInteraction=interaction;[self.view addInteraction:interaction];
     }
 #endif
+    [self setFullScreenPresentation:[defaults boolForKey:launchFullscreenKey]];
     if([NSProcessInfo.processInfo.arguments containsObject:@"--demo"]) [self demo];
 #ifdef PC98PLAYER_TESTING
     NSArray<NSString*>* arguments=NSProcessInfo.processInfo.arguments;
@@ -582,10 +596,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
 #endif
     // Use OS geometry, not device names or a guessed pixel resolution.
     BOOL verticalDivision=duo && !CGRectIsNull(division) && division.size.height>division.size.width;
-    // Book-style left/right opening and the wide, fully-open inner screen use
-    // the whole display; portrait/top-bottom and the outer screen keep controls.
-    BOOL wideDuo=duoUsesWideFullscreen(duoHardware,verticalDivision,hingeClosed,safe.size.width,safe.size.height);
-    [self setFullScreenPresentation:fullscreenPresentation.update(wideDuo)];
+    BOOL wideDuo=duoNeedsFullscreenInset(duoHardware,verticalDivision,hingeClosed,safe.size.width,safe.size.height);
     CGFloat split=duo ? CGRectGetMidY(self.view.bounds) : safe.origin.y+safe.size.height*0.53;
     if(duo && !CGRectIsNull(division) && !verticalDivision) split=CGRectGetMidY(division);
     split=std::clamp(split,safe.origin.y+100,CGRectGetMaxY(safe)-100);
@@ -656,7 +667,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
 }
 - (void)toggleFullScreen {
     if(fetching || self.presentedViewController) return;
-    [self setFullScreenPresentation:fullscreenPresentation.toggle()];
+    [self setFullScreenPresentation:!fullScreen];
     [self.view setNeedsLayout];[self.view layoutIfNeeded];
 }
 - (void)setFullScreenPresentation:(BOOL)value {
@@ -1067,6 +1078,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     options.soundBoard=player?player->m->cfg.sound_board:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98SoundBoard"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98SoundBoard"]:86);
     options.videoColors=player?player->m->cfg.video_colors:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98VideoColors"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98VideoColors"]:16);
     __weak PlayerController* weak=self;
+    options.launchFullscreen=[NSUserDefaults.standardUserDefaults boolForKey:launchFullscreenKey];
     options.manualDuo=manualDuo;options.bossMode=bossMode;options.filterSettings=self.contentFilter.settings;
     options.willApply=^(content_filter::Settings filter) {
         PlayerController* s=weak;if(s && filter.enabled()) { [s.contentFilter reset];s.monitor.image=nil; }
