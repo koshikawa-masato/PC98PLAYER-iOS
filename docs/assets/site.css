@@ -269,3 +269,14 @@ footer .credit{font-size:11px}
   .hero { padding-block: 36px 52px; }
   .hero-device img { width: min(145px, 55%); }
 }
+
+/* 操作・設定の一覧（名称 → 働き） */
+.ref { display: grid; grid-template-columns: minmax(9em, 17em) minmax(0, 1fr); margin: 16px 0 24px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.ref dt, .ref dd { margin: 0; padding: 12px clamp(12px, 2vw, 20px); border-top: 1px solid var(--line); }
+.ref dt:first-of-type, .ref dt:first-of-type + dd { border-top: 0; }
+.ref dt { font-weight: 650; background: #f0e9d6; }
+@media (max-width: 760px) {
+  .ref { grid-template-columns: 1fr; }
+  .ref dd { border-top: 0; padding-top: 4px; }
+  .ref dt { background: transparent; padding-bottom: 0; }
+}
