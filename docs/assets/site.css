@@ -151,7 +151,7 @@ video{display:block;width:100%;height:auto;aspect-ratio:16/9;background:#000}
 /* 転送 */
 .subheading{margin-top:64px}
 .screenshots .card{padding:22px;background:var(--chassis);text-align:left}
-.screenshots img{display:block;max-height:350px;width:auto;margin:0 auto 24px;border:3px solid var(--ink);border-radius:18px;background:var(--ink)}
+.screenshots img{display:block;width:min(100%,140px);height:auto;margin:0 auto 24px;border:3px solid var(--ink);border-radius:18px;background:var(--ink)}
 figcaption{font-size:13px}
 figcaption strong{display:block;font-family:var(--dot);font-weight:400;font-size:20px;margin-bottom:10px}
 
@@ -245,25 +245,28 @@ footer .credit{font-size:11px}
 .chapter-nav { grid-template-columns: repeat(5,minmax(0,1fr)); }
 .feedback-steps { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 28px; margin-top: 30px; align-items: start; }
 .feedback-steps > figure, .feedback-send { padding: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
-.feedback-steps figure img { display: block; width: min(100%,220px); margin: 0 auto 22px; border: 1px solid var(--line); border-radius: 15px; }
+.feedback-steps figure img { display: block; width: min(100%,140px); height: auto; margin: 0 auto 18px; border: 1px solid var(--line); border-radius: 15px; }
 .feedback-steps h3 { font-size: 21px; }
 .feedback-steps p, .feedback-send li { font-size: 14px; }
 .feedback-steps figcaption strong { display: inline; font: inherit; font-weight: 650; margin: 0; }
 .feedback-send ul { padding-left: 1.3em; }
 .feedback-send li { margin-bottom: 14px; }
-.feedback-images { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; max-width: 640px; margin: 24px auto; }
-.feedback-images img { display: block; width: min(100%,230px); margin-inline: auto; border: 1px solid var(--line); border-radius: 14px; }
+.feedback-images { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; max-width: 480px; margin: 24px auto; }
+.feedback-images img { display: block; width: min(100%,132px); height: auto; margin-inline: auto; border: 1px solid var(--line); border-radius: 14px; }
+.feedback-steps figure > a, .feedback-images figure > a, .screenshots .card > a { display: block; min-width: 0; cursor: zoom-in; }
 .feedback-images figcaption { font-size: 13px; margin-top: 12px; }
 @media (max-width: 760px) {
   .chapter-nav { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .feedback-steps { grid-template-columns: 1fr; }
   .feedback-steps > figure { display: grid; grid-template-columns: minmax(95px,.8fr) minmax(0,1.2fr); gap: 18px; }
-  .feedback-steps figure img { margin-bottom: 0; }
+  .feedback-steps figure img { width: min(100%,110px); margin-bottom: 0; }
   .feedback-images { gap: 14px; }
+  .feedback-images img { width: min(100%,110px); }
+  .screenshots img { width: min(100%,120px); }
 }
-@media (max-width: 400px) {
+@media (max-width: 360px) {
   .feedback-steps > figure { grid-template-columns: 1fr; }
-  .feedback-steps figure img { width: 180px; margin-bottom: 10px; }
+  .feedback-steps figure img { width: min(100%,110px); margin-bottom: 10px; }
 }
 :root {
   --paper: #f4f1e8;
@@ -280,7 +283,7 @@ footer .credit{font-size:11px}
 .hero { grid-template-columns: minmax(0, 1.3fr) minmax(0, .7fr); gap: clamp(20px, 6vw, 88px); padding-block: 48px 70px; }
 .hero h1 { text-shadow: none; }
 .hero-device { text-align: center; }
-.hero-device img { display: block; width: clamp(140px, 48%, 204px); margin-inline: auto; border: 5px solid var(--ink); border-radius: 24px; box-shadow: 10px 12px 0 #192c2320; }
+.hero-device img { display: block; width: clamp(120px, 42%, 160px); margin-inline: auto; border: 5px solid var(--ink); border-radius: 24px; box-shadow: 10px 12px 0 #192c2320; }
 .hero-device figcaption, .play-preview figcaption { color: var(--muted); font-size: .8rem; margin-top: .9rem; }
 .section { padding-block: clamp(46px, 7vw, 82px); }
 .library-guide { background: #e7ebdf; border-block: 1px solid #b9c2b4; }
@@ -294,7 +297,7 @@ footer .credit{font-size:11px}
 @media (max-width: 760px) {
   .hero, .play-preview, .guide-grid { grid-template-columns: 1fr; }
   .hero { padding-block: 36px 52px; }
-  .hero-device img { width: min(145px, 55%); }
+  .hero-device img { width: min(130px, 55%); }
 }
 
 /* 操作・設定の一覧（名称 → 働き） */
