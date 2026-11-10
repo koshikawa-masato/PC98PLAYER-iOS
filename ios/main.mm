@@ -68,6 +68,14 @@ static NSData* titleFrameDigest(const void* pixels, size_t length) {
     CC_SHA256(pixels, (CC_LONG)length, digest);
     return [NSData dataWithBytes:digest length:sizeof(digest)];
 }
+static constexpr NSInteger minimumClockMHz=5;
+static constexpr NSInteger maximumClockMHz=433;
+static constexpr NSInteger clockPresets[]={0,16,66,133};
+
+static BOOL validClockMHz(NSInteger clock) {
+    return clock>=minimumClockMHz && clock<=maximumClockMHz;
+}
+
 static NSString* gameClockKey(NSString* identifier) {
     return [@"PC98GameClockMHz." stringByAppendingString:identifier];
 }
@@ -216,13 +224,14 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
 @interface GameOptionsController : UITableViewController
 @property NSInteger soundBoard;
 @property NSInteger videoColors;
+@property NSInteger clockMHz;
 @property BOOL manualDuo;
 @property BOOL bossMode;
 @property BOOL launchFullscreen;
 @property(copy) NSArray<NSNumber*>* bluetoothBindings;
 @property content_filter::Settings filterSettings;
 @property(copy) void (^willApply)(content_filter::Settings);
-@property(copy) void (^applied)(NSInteger,NSInteger,BOOL,BOOL,content_filter::Settings);
+@property(copy) void (^applied)(NSInteger,NSInteger,NSInteger,BOOL,BOOL,content_filter::Settings);
 @property(copy) void (^cancelled)(void);
 @end
 @implementation GameOptionsController
@@ -232,11 +241,11 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"キャンセル" style:UIBarButtonItemStylePlain target:self action:@selector(cancel)];
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
-- (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 6; }
-- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?4:section==3?6:section==4?1:2; }
-- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数",@"表示",@"コンテンツフィルター",@"Bluetoothコントローラー",@"このアプリについて"][section]; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 7; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?4:section==3?6:section==4?1:section==5?(self.clockMHz<0?1:5):2; }
+- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数",@"表示",@"コンテンツフィルター",@"Bluetoothコントローラー",@"CPUクロック",@"このアプリについて"][section]; }
 - (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section {
-    if(section==1)return @"音源・色数の変更はゲームを再起動します。必要な場合は、先にゲーム内で保存してください。";
+    if(section==1 || (section==5 && self.clockMHz>=0))return @"変更を適用するとゲームが再起動します。必要な場合は、先にゲーム内で保存してください。";
     if(section==2)return @"通常は自動判別を使います。Duo上下表示を固定すると、上にモニタ、下にキーボードを配置します。表示だけの変更では再起動しません。「ボスがきた」モードはDuoを閉じると一時停止し、アウターのアプリ画面を黒くします。開き直しても自動再生せず、▶︎で再開します。端末の画面電源やシステム表示は変更しません。";
     if(section==3)return @"画像を端末内AIで判定し、推定した領域を隠します。画面を外部へ送信しません。判定中は直前の保護済み画像を保持するため、表示が遅れることがあります。誤検出・見逃しがあり、文章は判定しません。残酷描写は流血・損傷の特徴を推定する試験的な機能です。";
     return nil;
@@ -303,6 +312,21 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         [button sizeToFit];
         cell.accessoryView=button;
         cell.selectionStyle=UITableViewCellSelectionStyleNone;
+    } else if(index.section==5) {
+        if(self.clockMHz<0) {
+            cell.textLabel.text=@"ゲームを開くと設定できます";
+            cell.selectionStyle=UITableViewCellSelectionStyleNone;
+        } else if(index.row<4) {
+            NSInteger clock=clockPresets[index.row];
+            cell.textLabel.text=clock ? [NSString stringWithFormat:@"%ld MHz",(long)clock] : @"INIの設定を使用";
+            if(self.clockMHz==clock) cell.accessoryType=UITableViewCellAccessoryCheckmark;
+        } else {
+            BOOL custom=validClockMHz(self.clockMHz) && self.clockMHz!=16 && self.clockMHz!=66 && self.clockMHz!=133;
+            cell.textLabel.text=@"任意の周波数";
+            cell.detailTextLabel.text=custom ? [NSString stringWithFormat:@"%ld MHz",(long)self.clockMHz] :
+                [NSString stringWithFormat:@"%ld〜%ld MHz",(long)minimumClockMHz,(long)maximumClockMHz];
+            cell.accessoryType=custom ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryDisclosureIndicator;
+        }
     } else {
         cell.textLabel.text=index.row==0?@"プライバシーポリシー":@"ライセンス";
         cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
@@ -312,6 +336,13 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
 - (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)index {
     if(index.section==4) return;
     if(index.section==5) {
+        [tableView deselectRowAtIndexPath:index animated:YES];
+        if(self.clockMHz<0) return;
+        if(index.row==4) [self editClock];
+        else { self.clockMHz=clockPresets[index.row]; [tableView reloadData]; }
+        return;
+    }
+    if(index.section==6) {
         LegalTextController* document=[LegalTextController new];document.title=index.row==0?@"プライバシーポリシー":@"ライセンス";
         document.resource=index.row==0?@"privacy-policy.txt":@"LICENSE";[self.navigationController pushViewController:document animated:YES];return;
     }
@@ -321,6 +352,36 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     else if(index.section==3 && index.row>=2 && index.row<5) { auto settings=self.filterSettings;settings.effect=(content_filter::Effect)(index.row-2);self.filterSettings=settings; }
     [tableView reloadData];
 }
+- (void)editClock {
+    NSString* message=[NSString stringWithFormat:@"%ld〜%ld MHzの整数を入力してください。",(long)minimumClockMHz,(long)maximumClockMHz];
+    UIAlertController* alert=[UIAlertController alertControllerWithTitle:@"任意の周波数" message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField* field) {
+        field.keyboardType=UIKeyboardTypeNumberPad;
+        field.text=self.clockMHz ? [NSString stringWithFormat:@"%ld",(long)self.clockMHz] : @"";
+        field.placeholder=@"MHz";
+        field.accessibilityLabel=@"CPUクロック（MHz）";
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+    __weak UIAlertController* weakAlert=alert;
+    UIAlertAction* choose=[UIAlertAction actionWithTitle:@"設定" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+        self.clockMHz=weakAlert.textFields.firstObject.text.integerValue;
+        [self.tableView reloadData];
+    }];
+    UITextField* field=alert.textFields.firstObject;
+    __weak UIAlertAction* weakChoose=choose;
+    void (^validate)(UITextField*)=^(UITextField* input) {
+        NSString* text=input.text;
+        NSCharacterSet* invalid=[[NSCharacterSet characterSetWithCharactersInString:@"0123456789"] invertedSet];
+        weakChoose.enabled=text.length>0 && text.length<=3 &&
+            [text rangeOfCharacterFromSet:invalid].location==NSNotFound && validClockMHz(text.integerValue);
+    };
+    validate(field);
+    [field addAction:[UIAction actionWithHandler:^(__kindof UIAction* action) {
+        validate((UITextField*)action.sender);
+    }] forControlEvents:UIControlEventEditingChanged];
+    [alert addAction:choose];
+    [self presentViewController:alert animated:YES completion:nil];
+}
 - (void)changeLaunchFullscreen:(UISwitch*)sender { self.launchFullscreen=sender.on; }
 - (void)changeBossMode:(UISwitch*)sender { self.bossMode=sender.on; }
 - (void)changeFilter:(UISwitch*)sender { auto settings=self.filterSettings;if(sender.tag==0)settings.adult=sender.on;else settings.harm=sender.on;self.filterSettings=settings; }
@@ -329,7 +390,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
 - (void)apply {
     [NSUserDefaults.standardUserDefaults setObject:self.bluetoothBindings forKey:bluetoothBindingsKey];
     [NSUserDefaults.standardUserDefaults setBool:self.launchFullscreen forKey:launchFullscreenKey];
-    if(self.willApply)self.willApply(self.filterSettings);[self dismissViewControllerAnimated:YES completion:^{if(self.applied)self.applied(self.soundBoard,self.videoColors,self.manualDuo,self.bossMode,self.filterSettings);}]; }
+    if(self.willApply)self.willApply(self.filterSettings);[self dismissViewControllerAnimated:YES completion:^{if(self.applied)self.applied(self.soundBoard,self.videoColors,self.clockMHz,self.manualDuo,self.bossMode,self.filterSettings);}]; }
 @end
 
 @interface PlayerController : UIViewController <UIDocumentPickerDelegate,UIAdaptivePresentationControllerDelegate,UIGestureRecognizerDelegate> {
@@ -972,7 +1033,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     }
     PlayerSettings ps; player_settings_from_ini(ini,root.fileSystemRepresentation,&ps);
     NSInteger clock=[NSUserDefaults.standardUserDefaults integerForKey:gameClockKey(identifier)];
-    if(clock==66) ps.cfg.cpu_mhz=(int)clock;
+    if(validClockMHz(clock)) ps.cfg.cpu_mhz=(int)clock;
     NSNumber* sound=[NSUserDefaults.standardUserDefaults objectForKey:@"PC98SoundBoard"];
     NSNumber* colors=[NSUserDefaults.standardUserDefaults objectForKey:@"PC98VideoColors"];
     if(sound) ps.cfg.sound_board=sound.integerValue==26?26:86;
@@ -1077,6 +1138,10 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     GameOptionsController* options=[[GameOptionsController alloc] initWithStyle:UITableViewStyleInsetGrouped];
     options.soundBoard=player?player->m->cfg.sound_board:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98SoundBoard"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98SoundBoard"]:86);
     options.videoColors=player?player->m->cfg.video_colors:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98VideoColors"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98VideoColors"]:16);
+    NSString* clockKey=player && self.currentID.length ? gameClockKey(self.currentID) : nil;
+    NSInteger storedClock=clockKey ? [NSUserDefaults.standardUserDefaults integerForKey:clockKey] : 0;
+    NSInteger initialClock=clockKey ? (validClockMHz(storedClock) ? storedClock : 0) : -1;
+    options.clockMHz=initialClock;
     __weak PlayerController* weak=self;
     options.launchFullscreen=[NSUserDefaults.standardUserDefaults boolForKey:launchFullscreenKey];
     options.manualDuo=manualDuo;options.bossMode=bossMode;options.filterSettings=self.contentFilter.settings;
@@ -1084,9 +1149,14 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         PlayerController* s=weak;if(s && filter.enabled()) { [s.contentFilter reset];s.monitor.image=nil; }
     };
     options.cancelled=^{ PlayerController* s=weak;if(!s) return;s->paused=previousPause;if(s->player && !s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime(); };
-    options.applied=^(NSInteger sound,NSInteger colors,BOOL duo,BOOL boss,content_filter::Settings filter) {
+    options.applied=^(NSInteger sound,NSInteger colors,NSInteger clock,BOOL duo,BOOL boss,content_filter::Settings filter) {
         PlayerController* s=weak;if(!s) return;
-        BOOL restart=s->player && (s->player->m->cfg.sound_board!=sound || s->player->m->cfg.video_colors!=colors);
+        BOOL clockChanged=clockKey && clock!=initialClock;
+        if(clockChanged) {
+            if(clock) [NSUserDefaults.standardUserDefaults setInteger:clock forKey:clockKey];
+            else [NSUserDefaults.standardUserDefaults removeObjectForKey:clockKey];
+        }
+        BOOL restart=s->player && (clockChanged || s->player->m->cfg.sound_board!=sound || s->player->m->cfg.video_colors!=colors);
         [s.contentFilter configure:filter];s.monitor.image=nil;
         [NSUserDefaults.standardUserDefaults setBool:filter.adult forKey:@"PC98AdultFilter"];
         [NSUserDefaults.standardUserDefaults setBool:filter.harm forKey:@"PC98HarmFilter"];
@@ -1119,27 +1189,6 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     [alert addAction:[UIAlertAction actionWithTitle:@"リセット" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
         PlayerController* s=weak;if(s) [s openCache:s.currentCache identifier:s.currentID];
     }]];
-    [self presentViewController:alert animated:YES completion:nil];
-}
-- (void)showGameClock {
-    if(!player || !self.currentCache || !self.currentID) return;
-    NSString* identifier=self.currentID;
-    NSURL* cache=self.currentCache;
-    NSString* message=[NSString stringWithFormat:@"現在は %u MHz です。このゲームの設定を保存し、ゲームを再起動します。", player->m->cpu_hz/1000000];
-    UIAlertController* alert=[UIAlertController alertControllerWithTitle:@"CPUクロック" message:message preferredStyle:UIAlertControllerStyleAlert];
-    __weak PlayerController* weak=self;
-    void (^applyClock)(NSInteger)=^(NSInteger clock) {
-        PlayerController* s=weak;
-        if(!s || ![s.currentID isEqualToString:identifier]) return;
-        NSUserDefaults* defaults=NSUserDefaults.standardUserDefaults;
-        NSString* key=gameClockKey(identifier);
-        if(clock) [defaults setInteger:clock forKey:key];
-        else [defaults removeObjectForKey:key];
-        [s openCache:cache identifier:identifier];
-    };
-    [alert addAction:[UIAlertAction actionWithTitle:@"66 MHzに固定" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) { applyClock(66); }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"INIの設定に戻す" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) { applyClock(0); }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)addLibraryGameTo:(GameLocationsController*)menu identifier:(NSString*)identifier
@@ -1218,8 +1267,6 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     __weak PlayerController* weak=self;
     NSString* identifier=self.currentID;
     if(player && !player->m->quit && identifier.length && ![identifier isEqualToString:@"demo"]) {
-        NSString* clockTitle=[NSString stringWithFormat:@"CPUクロック（%u MHz）",player->m->cpu_hz/1000000];
-        [menu addTitle:clockTitle destructive:NO action:^{ [weak showGameClock]; }];
         UIImage* shown=self.monitor.image;
         UIImage* source=self.displayedSourceFrame;
         if(shown && source && !(bossMode && hingeClosed)) {
