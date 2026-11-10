@@ -46,6 +46,12 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
     UIImage* _pending;
     NSData* _lastSubmittedData;
     void (^_pendingCompletion)(UIImage*,NSString*);
+    NSData* _previousPixels;
+    UIImage* _previousSource;
+    std::vector<Tile> _previousTiles;
+    uint64_t _previousGeneration;
+    id<MTLTexture> _originalTexture, _blurTexture, _outputTexture, _maskTexture;
+    MPSImageGaussianBlur* _blur;
     MLModel* _adultModel;
     MLModel* _harmModel;
     id<MTLDevice> _device;
@@ -136,20 +142,40 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
         size_t x1=std::min(w,(size_t)std::ceil(std::max(0.f,r.x+r.width)*w)),y1=std::min(h,(size_t)std::ceil(std::max(0.f,r.y+r.height)*h));
         for(size_t y=y0;y<y1;++y) if(x1>x0)std::memset(mask.data()+y*w+x0,255,x1-x0);
     }
-    MTLTextureDescriptor* desc=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:w height:h mipmapped:NO];
-    desc.usage=MTLTextureUsageShaderRead|MTLTextureUsageShaderWrite;desc.storageMode=MTLStorageModeShared;
-    id<MTLTexture> original=[_device newTextureWithDescriptor:desc],blurred=[_device newTextureWithDescriptor:desc],output=[_device newTextureWithDescriptor:desc];
-    desc.pixelFormat=MTLPixelFormatR8Unorm;id<MTLTexture> maskTexture=[_device newTextureWithDescriptor:desc];
-    if(!original || !blurred || !output || !maskTexture) { CGColorSpaceRelease(colors);if(error)*error=filterError(@"Metalの保護画像を確保できません。");return nil; }
+    if (_originalTexture.width!=w || _originalTexture.height!=h || !_outputTexture || !_maskTexture) {
+        MTLTextureDescriptor* desc=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:w height:h mipmapped:NO];
+        desc.usage=MTLTextureUsageShaderRead|MTLTextureUsageShaderWrite;
+        desc.storageMode=MTLStorageModeShared;
+        _originalTexture=[_device newTextureWithDescriptor:desc];
+        _outputTexture=[_device newTextureWithDescriptor:desc];
+        _blurTexture=nil;
+        desc.pixelFormat=MTLPixelFormatR8Unorm;
+        _maskTexture=[_device newTextureWithDescriptor:desc];
+    }
+    if (effect==Effect::Blur && !_blurTexture) {
+        MTLTextureDescriptor* desc=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:w height:h mipmapped:NO];
+        desc.usage=MTLTextureUsageShaderRead|MTLTextureUsageShaderWrite;
+        desc.storageMode=MTLStorageModeShared;
+        _blurTexture=[_device newTextureWithDescriptor:desc];
+    }
+    id<MTLTexture> original=_originalTexture, output=_outputTexture, maskTexture=_maskTexture;
+    if (!original || !output || !maskTexture || (effect==Effect::Blur && !_blurTexture)) {
+        CGColorSpaceRelease(colors);
+        if(error)*error=filterError(@"Metalの保護画像を確保できません。");
+        return nil;
+    }
     [original replaceRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0 withBytes:rgba.data() bytesPerRow:w*4];
     [maskTexture replaceRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0 withBytes:mask.data() bytesPerRow:w];
     id<MTLCommandBuffer> command=[_commands commandBuffer];
     if(effect==Effect::Blur) {
-        MPSImageGaussianBlur* blur=[[MPSImageGaussianBlur alloc] initWithDevice:_device sigma:18];
-        blur.edgeMode=MPSImageEdgeModeClamp;[blur encodeToCommandBuffer:command sourceTexture:original destinationTexture:blurred];
+        if (!_blur) {
+            _blur=[[MPSImageGaussianBlur alloc] initWithDevice:_device sigma:18];
+            _blur.edgeMode=MPSImageEdgeModeClamp;
+        }
+        [_blur encodeToCommandBuffer:command sourceTexture:original destinationTexture:_blurTexture];
     }
     id<MTLComputeCommandEncoder> encoder=[command computeCommandEncoder];[encoder setComputePipelineState:_pipeline];
-    [encoder setTexture:original atIndex:0];[encoder setTexture:effect==Effect::Blur?blurred:original atIndex:1];
+    [encoder setTexture:original atIndex:0];[encoder setTexture:effect==Effect::Blur?_blurTexture:original atIndex:1];
     [encoder setTexture:maskTexture atIndex:2];[encoder setTexture:output atIndex:3];
     uint32_t mode=(uint32_t)effect;[encoder setBytes:&mode length:sizeof(mode) atIndex:0];
     [encoder dispatchThreads:MTLSizeMake(w,h,1) threadsPerThreadgroup:MTLSizeMake(16,16,1)];[encoder endEncoding];
@@ -162,16 +188,58 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
     if(result)CGImageRelease(result);CGDataProviderRelease(provider);CFRelease(data);CGColorSpaceRelease(colors);
     if(!picture && error)*error=filterError(@"保護済み画像を作成できません。");return picture;
 }
-- (UIImage*)filter:(UIImage*)image settings:(Settings)settings error:(NSError**)error {
+- (UIImage*)filter:(UIImage*)image pixels:(NSData*)pixels generation:(uint64_t)generation
+         settings:(Settings)settings error:(NSError**)error {
     if(![self prepare:settings error:error])return nil;
-    Scores full;if(![self scores:&full image:image.CGImage settings:settings error:error])return nil;
+    CGImageRef source=image.CGImage;
+    size_t w=CGImageGetWidth(source),h=CGImageGetHeight(source),stride=CGImageGetBytesPerRow(source);
+    Scores full;
+    if(![self scores:&full image:source settings:settings error:error])return nil;
+    CGImageRef previous=_previousSource.CGImage;
+    const bool canReuse=generation==_previousGeneration && previous && pixels && _previousPixels &&
+        CGImageGetWidth(previous)==w && CGImageGetHeight(previous)==h &&
+        CGImageGetBitsPerPixel(source)==32 && CGImageGetBitsPerPixel(previous)==32 &&
+        CGImageGetBytesPerRow(previous)==stride && stride>=w*4 &&
+        CGImageGetBitmapInfo(source)==CGImageGetBitmapInfo(previous) &&
+        pixels.length>=stride*h && _previousPixels.length>=stride*h;
+    const int divisions=settings.effect==Effect::Mosaic ? 3 : 2;
+    const float overlapX=divisions==3 ? .04f : .10f;
+    const float overlapY=divisions==3 ? .04f : .15f;
     std::vector<Tile> tiles;
-    for(Region r:std::vector<Region>{{0,0,.6f,.65f},{.4f,0,.6f,.65f},{0,.35f,.6f,.65f},{.4f,.35f,.6f,.65f}}) {
-        size_t w=CGImageGetWidth(image.CGImage),h=CGImageGetHeight(image.CGImage);
-        CGImageRef crop=CGImageCreateWithImageInRect(image.CGImage,CGRectMake(r.x*w,r.y*h,r.width*w,r.height*h));
-        Scores score;BOOL ok=crop && [self scores:&score image:crop settings:settings error:error];
-        if(crop)CGImageRelease(crop);if(!ok)return nil;tiles.push_back({r,score});
+    tiles.reserve(divisions*divisions);
+    for (int row=0;row<divisions;++row) {
+        for (int column=0;column<divisions;++column) {
+            float x=std::max(0.f,float(column)/divisions-overlapX);
+            float y=std::max(0.f,float(row)/divisions-overlapY);
+            float right=std::min(1.f,float(column+1)/divisions+overlapX);
+            float bottom=std::min(1.f,float(row+1)/divisions+overlapY);
+            CGRect cropRect=CGRectIntersection(CGRectMake(0,0,w,h),
+                CGRectIntegral(CGRectMake(x*w,y*h,(right-x)*w,(bottom-y)*h)));
+            Region region{float(cropRect.origin.x/w),float(cropRect.origin.y/h),
+                          float(cropRect.size.width/w),float(cropRect.size.height/h)};
+            // Reuse a result only when every pixel in the same crop is identical.
+            bool unchanged=canReuse && tiles.size()<_previousTiles.size();
+            for (size_t line=0;unchanged && line<(size_t)cropRect.size.height;++line) {
+                size_t offset=((size_t)cropRect.origin.y+line)*stride+(size_t)cropRect.origin.x*4;
+                unchanged=std::memcmp((const uint8_t*)pixels.bytes+offset,
+                    (const uint8_t*)_previousPixels.bytes+offset,(size_t)cropRect.size.width*4)==0;
+            }
+            Scores score;
+            if (unchanged) {
+                score=_previousTiles[tiles.size()].scores;
+            } else {
+                CGImageRef crop=CGImageCreateWithImageInRect(source,cropRect);
+                BOOL ok=crop && [self scores:&score image:crop settings:settings error:error];
+                if(crop)CGImageRelease(crop);
+                if(!ok)return nil;
+            }
+            tiles.push_back({region,score});
+        }
     }
+    _previousPixels=pixels;
+    _previousSource=image;
+    _previousGeneration=generation;
+    _previousTiles=tiles;
     return [self render:image regions:regions(full,tiles,settings) effect:settings.effect error:error];
 }
 - (void)submitImage:(UIImage*)image completion:(void (^)(UIImage*,NSString*))completion {
@@ -187,9 +255,10 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
     UIImage* image=_pending;void (^completion)(UIImage*,NSString*)=_pendingCompletion;
     _pending=nil;_pendingCompletion=nil;_busy=YES;
     Settings settings=_settings;Ticket ticket=_gate.issue();
+    NSData* pixels=_lastSubmittedData;
     dispatch_async(_worker,^{ @autoreleasepool {
         CFAbsoluteTime started=CFAbsoluteTimeGetCurrent();
-        NSError* error=nil;UIImage* result=[self filter:image settings:settings error:&error];
+        NSError* error=nil;UIImage* result=[self filter:image pixels:pixels generation:ticket.generation settings:settings error:&error];
         NSTimeInterval elapsed=CFAbsoluteTimeGetCurrent()-started;
         NSString* message=result?nil:(error.localizedDescription ?: @"判定できないため画像を保護しています。");
         dispatch_async(dispatch_get_main_queue(),^{
@@ -240,7 +309,11 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
         if(error)report[@"error"]=error.localizedDescription;
         dispatch_async(dispatch_get_main_queue(),^{
             if(!prepared) { completion(report,mosaic ?: source);return; }
-            Settings original=self.settings;[self configure:both];__block BOOL staleDelivered=NO,delivered=NO;
+            Settings original=self.settings;
+            Settings mosaicSettings=both;
+            mosaicSettings.effect=Effect::Mosaic;
+            [self configure:mosaicSettings];
+            __block BOOL staleDelivered=NO,delivered=NO;
             [self submitImage:source completion:^(UIImage* image,NSString* message) { staleDelivered=YES; }];
             report[@"enabledSubmitDoesNotRevealSynchronously"]=@(!staleDelivered);
             [self reset];

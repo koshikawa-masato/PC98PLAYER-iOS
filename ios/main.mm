@@ -281,6 +281,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
     int mouseButtons;
     int filterFrameHeight;
+    CFTimeInterval lastMonitorCapture;
     std::set<NSInteger> physicalKeys;
     std::set<int> touchKeys;
     std::bitset<128> controllerKeys;
@@ -752,7 +753,12 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         audio.push(player->audio); nextFrame+=seconds;
         if(player->m->quit) { paused=YES; [self releaseKeys]; audio.close(); self.status.text=player->m->quit==2 ? text(player->m->status) : @"実行が終了しました"; break; }
     }
-    if(frames) [self refreshMonitor];
+    // Keep guest timing and audio independent of the filtered presentation rate.
+    if(frames && (!self.contentFilter.settings.enabled() || player->m->quit ||
+                  filterFrameHeight!=player->fb_h || (self.titleReference && !self.titleCaptureAttempted) ||
+                  now-lastMonitorCapture>=1.0/20.0)) {
+        [self refreshMonitor];
+    }
 
     if(!fpsSampleStart) {
         fpsSampleStart=now;
@@ -779,6 +785,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
 - (void)refreshMonitor {
     if(!player)return;
     if(filterFrameHeight!=player->fb_h) { [self.contentFilter reset];self.monitor.image=nil;filterFrameHeight=player->fb_h; }
+    lastMonitorCapture=CACurrentMediaTime();
     UIImage* image=frameImage(player.get());
     NSData* reference=self.titleReference;
     BOOL matchesTitle=reference && !self.titleCaptureAttempted &&
