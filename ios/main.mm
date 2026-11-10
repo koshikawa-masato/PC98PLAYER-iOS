@@ -50,10 +50,41 @@ static NSString* text(const std::string& s) { return [NSString stringWithUTF8Str
 static NSURL* area(NSSearchPathDirectory directory,NSString* component) {
     return [[NSFileManager.defaultManager URLsForDirectory:directory inDomains:NSUserDomainMask].firstObject URLByAppendingPathComponent:component isDirectory:YES];
 }
-static NSString* gameID(NSURL* url) {
-    NSData* bytes=[url.URLByStandardizingPath.absoluteString dataUsingEncoding:NSUTF8StringEncoding];
+static NSString* gameIDForURLString(NSString* urlString) {
+    NSData* bytes=[urlString dataUsingEncoding:NSUTF8StringEncoding];
     unsigned char hash[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(bytes.bytes,(CC_LONG)bytes.length,hash);
     NSMutableString* key=[NSMutableString new]; for(unsigned char c:hash) [key appendFormat:@"%02x",c]; return key;
+}
+static NSString* gameID(NSURL* url) {
+    return gameIDForURLString(url.URLByStandardizingPath.absoluteString);
+}
+static NSString* sourceIDKey(NSURL* source) {
+    return [@"PC98LibrarySourceID." stringByAppendingString:source.path];
+}
+static NSString* registeredGameID(NSURL* original) {
+    NSString* stored=[NSUserDefaults.standardUserDefaults stringForKey:sourceIDKey(original)];
+    if(stored.length) return stored;
+    NSString* originalID=gameID(original);
+    NSString* path=original.path;
+    // Older builds hashed the picker URL. Its /var prefix can differ from
+    // the /private/var path in the saved bookmark entry.
+    NSMutableArray<NSString*>* candidates=[NSMutableArray arrayWithObject:originalID];
+    NSMutableArray<NSString*>* paths=[NSMutableArray arrayWithObject:path];
+    if([path hasPrefix:@"/private/var/"]) [paths addObject:[path substringFromIndex:8]];
+    if([path hasPrefix:@"/var/"]) [paths addObject:[@"/private" stringByAppendingString:path]];
+    for(NSString* candidate in paths) {
+        for(NSNumber* directory in @[@YES,@NO]) {
+            NSURL* url=[NSURL fileURLWithPath:candidate isDirectory:directory.boolValue];
+            [candidates addObject:gameIDForURLString(url.absoluteString)];
+        }
+    }
+    for(NSString* identifier in candidates) {
+        NSURL* cache=area(NSCachesDirectory,[@"PC98Games/" stringByAppendingString:identifier]);
+        NSURL* saves=area(NSApplicationSupportDirectory,[@"PC98Saves/" stringByAppendingString:identifier]);
+        if([NSFileManager.defaultManager fileExistsAtPath:cache.path] ||
+           [NSFileManager.defaultManager fileExistsAtPath:saves.path]) return identifier;
+    }
+    return originalID;
 }
 static UIImage* frameImage(Player* p) {
     NSData* bytes=[NSData dataWithBytes:p->fb length:640*p->fb_h*sizeof(uint32_t)];
@@ -153,7 +184,7 @@ static NSString* catalogNameForFolder(NSURL* folder) {
 @property(copy) NSString* message;
 @property(strong) NSMutableArray<NSDictionary*>* choices;
 - (void)addTitle:(NSString*)title destructive:(BOOL)destructive action:(void (^)(void))action;
-- (void)addGame:(NSString*)title identifier:(NSString*)identifier action:(void (^)(void))action
+- (void)addGame:(NSString*)title identifier:(NSString*)identifier cached:(BOOL)cached action:(void (^)(void))action
            info:(void (^)(void))info remove:(void (^)(void))remove;
 @end
 @implementation GameLocationsController
@@ -166,9 +197,9 @@ static NSString* catalogNameForFolder(NSURL* folder) {
 - (void)addTitle:(NSString*)title destructive:(BOOL)destructive action:(void (^)(void))action {
     [self.choices addObject:@{@"title":title,@"destructive":@(destructive),@"action":[action copy]}];
 }
-- (void)addGame:(NSString*)title identifier:(NSString*)identifier action:(void (^)(void))action
+- (void)addGame:(NSString*)title identifier:(NSString*)identifier cached:(BOOL)cached action:(void (^)(void))action
            info:(void (^)(void))info remove:(void (^)(void))remove {
-    [self.choices addObject:@{@"title":title,@"identifier":identifier,@"action":[action copy],
+    [self.choices addObject:@{@"title":title,@"identifier":identifier,@"cached":@(cached),@"action":[action copy],
                               @"info":[info copy],@"remove":[remove copy]}];
 }
 - (UISwipeActionsConfiguration*)tableView:(UITableView*)tableView
@@ -208,6 +239,16 @@ static NSString* catalogNameForFolder(NSURL* folder) {
     NSDictionary* choice=self.choices[index.row];cell.textLabel.text=choice[@"title"];cell.textLabel.numberOfLines=0;
     cell.textLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];cell.textLabel.adjustsFontForContentSizeCategory=YES;
     cell.textLabel.textColor=[choice[@"destructive"] boolValue]?UIColor.systemRedColor:UIColor.labelColor;
+    if([choice[@"cached"] boolValue]) {
+        NSTextAttachment* badge=[NSTextAttachment new];
+        badge.image=[[UIImage systemImageNamed:@"internaldrive.fill"
+            withConfiguration:[UIImageSymbolConfiguration configurationWithTextStyle:UIFontTextStyleBody]]
+            imageWithTintColor:UIColor.secondaryLabelColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+        NSMutableAttributedString* label=[[NSMutableAttributedString alloc] initWithString:[choice[@"title"] stringByAppendingString:@"  "]];
+        [label appendAttributedString:[NSAttributedString attributedStringWithAttachment:badge]];
+        cell.textLabel.attributedText=label;
+        cell.textLabel.accessibilityLabel=[choice[@"title"] stringByAppendingString:@"、キャッシュあり"];
+    }
     cell.accessoryType=choice[@"info"] ? UITableViewCellAccessoryDetailButton : UITableViewCellAccessoryDisclosureIndicator;
     return cell;
 }
@@ -218,6 +259,11 @@ static NSString* catalogNameForFolder(NSURL* folder) {
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
 @end
 
+static NSString* const cacheOnLaunchKey=@"PC98CacheOnLaunch";
+static BOOL usesGameCache(void) {
+    NSNumber* enabled=[NSUserDefaults.standardUserDefaults objectForKey:cacheOnLaunchKey];
+    return enabled ? enabled.boolValue : YES;
+}
 static NSString* const launchFullscreenKey=@"PC98LaunchFullscreen";
 static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
 
@@ -228,6 +274,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
 @property BOOL manualDuo;
 @property BOOL bossMode;
 @property BOOL launchFullscreen;
+@property BOOL cacheOnLaunch;
 @property(copy) NSArray<NSNumber*>* bluetoothBindings;
 @property content_filter::Settings filterSettings;
 @property(copy) void (^willApply)(content_filter::Settings);
@@ -242,7 +289,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 7; }
-- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?4:section==3?6:section==4?1:section==5?(self.clockMHz<0?1:5):2; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?5:section==3?6:section==4?1:section==5?(self.clockMHz<0?1:5):2; }
 - (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数",@"表示",@"コンテンツフィルター",@"Bluetoothコントローラー",@"CPUクロック",@"このアプリについて"][section]; }
 - (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section {
     if(section==1 || (section==5 && self.clockMHz>=0))return @"変更を適用するとゲームが再起動します。必要な場合は、先にゲーム内で保存してください。";
@@ -264,7 +311,16 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     } else if(index.section==2) {
         cell.textLabel.text=index.row==0?@"自動判別":index.row==1?@"Duo上下表示を固定":@"ボスがきた";
         cell.detailTextLabel.text=index.row==0?@"端末とヒンジの状態に合わせる":index.row==1?@"上にモニタ、下にキーボード":@"Duoを閉じると一時停止・アウターを非表示";
-        if(index.row>=2) {
+        if(index.row==4) {
+            cell.textLabel.text=@"キャッシュを作って起動";
+            cell.detailTextLabel.text=@"オフの場合は元フォルダから直接読み込み";
+            UISwitch* toggle=[UISwitch new];
+            toggle.on=self.cacheOnLaunch;
+            toggle.accessibilityLabel=cell.textLabel.text;
+            [toggle addTarget:self action:@selector(changeCacheOnLaunch:) forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView=toggle;
+            cell.selectionStyle=UITableViewCellSelectionStyleNone;
+        } else if(index.row>=2) {
             BOOL startup=index.row==2;
             if(startup) {
                 cell.textLabel.text=@"起動時に最大化で表示";
@@ -382,6 +438,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     [alert addAction:choose];
     [self presentViewController:alert animated:YES completion:nil];
 }
+- (void)changeCacheOnLaunch:(UISwitch*)sender { self.cacheOnLaunch=sender.on; }
 - (void)changeLaunchFullscreen:(UISwitch*)sender { self.launchFullscreen=sender.on; }
 - (void)changeBossMode:(UISwitch*)sender { self.bossMode=sender.on; }
 - (void)changeFilter:(UISwitch*)sender { auto settings=self.filterSettings;if(sender.tag==0)settings.adult=sender.on;else settings.harm=sender.on;self.filterSettings=settings; }
@@ -390,6 +447,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
 - (void)apply {
     [NSUserDefaults.standardUserDefaults setObject:self.bluetoothBindings forKey:bluetoothBindingsKey];
     [NSUserDefaults.standardUserDefaults setBool:self.launchFullscreen forKey:launchFullscreenKey];
+    [NSUserDefaults.standardUserDefaults setBool:self.cacheOnLaunch forKey:cacheOnLaunchKey];
     if(self.willApply)self.willApply(self.filterSettings);[self dismissViewControllerAnimated:YES completion:^{if(self.applied)self.applied(self.soundBoard,self.videoColors,self.clockMHz,self.manualDuo,self.bossMode,self.filterSettings);}]; }
 @end
 
@@ -429,6 +487,8 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
 @property CADisplayLink* displayLink;
 @property UIActivityIndicatorView* spinner;
 @property NSURL* currentCache;
+@property NSURL* scopedGameFolder;
+@property BOOL readingOriginal;
 @property NSString* currentID;
 #ifdef PC98PLAYER_TESTING
 @property AudioCaptureProbe* audioProbe;
@@ -936,6 +996,9 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     fullscreenMenuPaused=NO; paused=YES; [self releaseKeys]; audio.close();
     if(player) { player->shutdown(); player.reset(); }
     hostfs::set_overlay("","");
+    [self.scopedGameFolder stopAccessingSecurityScopedResource];
+    self.scopedGameFolder=nil;
+    self.readingOriginal=NO;
 }
 - (void)togglePause {
     if(bossMode && hingeClosed) return;
@@ -970,13 +1033,31 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     paused=pickerPreviousPause; if(player && !paused) [self startAudio]; nextFrame=CACurrentMediaTime();
 }
 - (void)documentPicker:(UIDocumentPickerViewController*)controller didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
-    if(urls.count) [self cacheSource:urls.firstObject];
+    if(urls.count) [self openSource:urls.firstObject identifier:registeredGameID(urls.firstObject)];
 }
-- (void)cacheSource:(NSURL*)source {
+- (void)openSource:(NSURL*)source identifier:(NSString*)identifier {
+    if(usesGameCache()) { [self cacheSource:source identifier:identifier]; return; }
+    if(fetching) return;
+    BOOL scoped=[source startAccessingSecurityScopedResource];
+    NSNumber* directory=nil;
+    NSError* error=nil;
+    if(![source getResourceValue:&directory forKey:NSURLIsDirectoryKey error:&error] || !directory.boolValue) {
+        if(scoped) [source stopAccessingSecurityScopedResource];
+        [self message:error.localizedDescription ?: @"ゲームフォルダを開けませんでした。"];
+        return;
+    }
+    NSString* name=catalogNameForFolder(source) ?: source.lastPathComponent;
+    if([GameLibrary rememberURL:source name:name error:nil]) {
+        [NSUserDefaults.standardUserDefaults setObject:identifier forKey:sourceIDKey(source)];
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:libraryHiddenKey(identifier)];
+    }
+    [self openGameFolder:source identifier:identifier direct:YES];
+    if(scoped) [source stopAccessingSecurityScopedResource];
+}
+- (void)cacheSource:(NSURL*)source identifier:(NSString*)identifier {
     if(fetching) return;
     fetching=YES; [self suspend]; [self.spinner startAnimating]; self.status.text=@"ゲームデータをキャッシュしています…";
     BOOL scoped=[source startAccessingSecurityScopedResource];
-    NSString* identifier=gameID(source);
     NSURL* destination=area(NSCachesDirectory,[@"PC98Games/" stringByAppendingString:identifier]);
     __weak PlayerController* weak=self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
@@ -987,8 +1068,10 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
             NSString* displayName=error ? source.lastPathComponent : catalogNameForFolder(destination) ?: source.lastPathComponent;
             dispatch_async(dispatch_get_main_queue(), ^{
                 PlayerController* s=weak;
-                if(s && !error && [GameLibrary rememberURL:source name:displayName error:nil])
+                if(s && !error && [GameLibrary rememberURL:source name:displayName error:nil]) {
+                    [NSUserDefaults.standardUserDefaults setObject:identifier forKey:sourceIDKey(source)];
                     [NSUserDefaults.standardUserDefaults removeObjectForKey:libraryHiddenKey(identifier)];
+                }
                 if(scoped) [source stopAccessingSecurityScopedResource];
                 if(!s) return;
                 s->fetching=NO; [s.spinner stopAnimating];
@@ -1015,8 +1098,16 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     return YES;
 }
 - (void)openCache:(NSURL*)cache identifier:(NSString*)identifier {
-    cache=cache.URLByStandardizingPath.URLByResolvingSymlinksInPath;
-    [self stopGame]; self.currentCache=cache; self.currentID=identifier;
+    [self openGameFolder:cache identifier:identifier direct:NO];
+}
+- (void)openGameFolder:(NSURL*)folder identifier:(NSString*)identifier direct:(BOOL)direct {
+    BOOL scoped=direct && [folder startAccessingSecurityScopedResource];
+    NSURL* cache=folder.URLByStandardizingPath.URLByResolvingSymlinksInPath;
+    [self stopGame];
+    self.scopedGameFolder=scoped ? folder : nil;
+    self.readingOriginal=direct;
+    self.currentCache=direct ? folder : cache;
+    self.currentID=identifier;
     [self.keyboard loadControllerBindingsForGame:identifier];
     NSString* saves=[@"PC98Saves/" stringByAppendingString:identifier];
     NSURL* saved=area(NSApplicationSupportDirectory,[saves stringByAppendingPathComponent:@"files"]);
@@ -1099,7 +1190,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     player=std::make_unique<Player>(); mac_install_font(settings.font_name,settings.font_shift); std::string error;
     settings.cfg.start = apple_startup::dos_start_path(settings.cfg.start);
     if(!player->init(settings,&error)) { [self stopGame]; [self message:text(error)]; return; }
-    paused=NO; nextFrame=CACurrentMediaTime(); self.status.text=@"実行中 — ゲーム本体はキャッシュ、保存データは別領域";
+    paused=NO; nextFrame=CACurrentMediaTime(); self.status.text=self.readingOriginal ? @"実行中 — 元フォルダを直接読込、保存データは別領域" : @"実行中 — ゲーム本体はキャッシュ、保存データは別領域";
 #if TARGET_OS_SIMULATOR
     NSString* nasPath=[NSUserDefaults.standardUserDefaults stringForKey:@"PC98SimulatorNASRoot"];
     if(nasPath.length && [self.currentCache.path hasPrefix:[nasPath stringByAppendingString:@"/"]])
@@ -1143,6 +1234,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     NSInteger initialClock=clockKey ? (validClockMHz(storedClock) ? storedClock : 0) : -1;
     options.clockMHz=initialClock;
     __weak PlayerController* weak=self;
+    options.cacheOnLaunch=usesGameCache();
     options.launchFullscreen=[NSUserDefaults.standardUserDefaults boolForKey:launchFullscreenKey];
     options.manualDuo=manualDuo;options.bossMode=bossMode;options.filterSettings=self.contentFilter.settings;
     options.willApply=^(content_filter::Settings filter) {
@@ -1169,7 +1261,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         [s setNeedsUpdateOfSupportedInterfaceOrientations];[s setNeedsStatusBarAppearanceUpdate];[s.view setNeedsLayout];
         [NSUserDefaults.standardUserDefaults setInteger:sound forKey:@"PC98SoundBoard"];
         [NSUserDefaults.standardUserDefaults setInteger:colors forKey:@"PC98VideoColors"];
-        if(restart && s.currentCache && s.currentID) [s openCache:s.currentCache identifier:s.currentID];
+        if(restart && s.currentCache && s.currentID) [s openGameFolder:s.currentCache identifier:s.currentID direct:s.readingOriginal];
         else if(s->player) { s->paused=previousPause;if(!s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime(); }
         else s.status.text=@"オプションを保存しました。ゲームフォルダーを選択してください。";
         [s refreshMonitor];[s updateBossShield];
@@ -1187,13 +1279,13 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         PlayerController* s=weak;if(!s) return;s->paused=previousPause;if(s->player && !s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime();
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"リセット" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
-        PlayerController* s=weak;if(s) [s openCache:s.currentCache identifier:s.currentID];
+        PlayerController* s=weak;if(s) [s openGameFolder:s.currentCache identifier:s.currentID direct:s.readingOriginal];
     }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)addLibraryGameTo:(GameLocationsController*)menu identifier:(NSString*)identifier
                  folder:(NSURL*)folder cache:(NSURL*)cache catalogName:(NSString*)catalogName
-               fallback:(NSString*)fallback suffix:(NSString*)suffix action:(void (^)(void))action {
+               fallback:(NSString*)fallback action:(void (^)(void))action {
     NSUserDefaults* defaults=NSUserDefaults.standardUserDefaults;
     NSString* hiddenKey=libraryHiddenKey(identifier);
     if([defaults boolForKey:hiddenKey]) return;
@@ -1205,7 +1297,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     void (^refresh)(void)=^{
         [weakMenu.navigationController.presentingViewController dismissViewControllerAnimated:NO completion:^{ [weak showLibrary]; }];
     };
-    [menu addGame:[display stringByAppendingString:suffix] identifier:identifier action:action info:^{
+    [menu addGame:display identifier:identifier cached:(cache && [GameLibrary isUsableCacheAtURL:cache]) action:action info:^{
         GameLocationsController* list=weakMenu;
         if(!list) return;
         BOOL cached=cache && [NSFileManager.defaultManager fileExistsAtPath:cache.path];
@@ -1308,13 +1400,21 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         }
     }
 
+    NSArray<NSDictionary*>* entries=GameLibrary.entries;
+    NSMutableSet<NSString*>* registered=[NSMutableSet new];
+    NSMutableSet<NSString*>* registeredPaths=[NSMutableSet new];
+    for(NSDictionary* entry in entries) {
+        NSURL* original=[NSURL fileURLWithPath:entry[@"path"] isDirectory:YES];
+        [registered addObject:registeredGameID(original)];
+        [registeredPaths addObject:original.URLByStandardizingPath.URLByResolvingSymlinksInPath.path];
+    }
 #if TARGET_OS_SIMULATOR
     NSString* nasPath=[NSUserDefaults.standardUserDefaults stringForKey:@"PC98SimulatorNASRoot"];
     if(nasPath.length) {
         NSError* nasError=nil;
         NSArray<NSURL*>* folders=[NSFileManager.defaultManager contentsOfDirectoryAtURL:[NSURL fileURLWithPath:nasPath isDirectory:YES]
             includingPropertiesForKeys:@[NSURLIsDirectoryKey,NSURLIsSymbolicLinkKey] options:NSDirectoryEnumerationSkipsHiddenFiles error:&nasError];
-        menu.message=nasError?@"NASに接続できません。Macで共有をマウントし直してください。":@"NASのゲームを直接読み込みます。保存データはシミュレータ内の別領域に保持し、元データは変更しません。";
+        menu.message=nasError?@"NASに接続できません。Macで共有をマウントし直してください。":@"NASのゲームを一覧から開けます。保存データは別領域に保持します。";
         for(NSURL* source in [folders sortedArrayUsingComparator:^NSComparisonResult(NSURL* a,NSURL* b) { return [a.lastPathComponent localizedStandardCompare:b.lastPathComponent]; }]) {
             NSNumber* directory=nil;NSNumber* symlink=nil;
             [source getResourceValue:&directory forKey:NSURLIsDirectoryKey error:nil];
@@ -1323,29 +1423,32 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
             if(!directory.boolValue || symlink.boolValue || ![NSFileManager.defaultManager fileExistsAtPath:iniURL.path]) continue;
             Ini ini;ini.load(iniURL.fileSystemRepresentation);
             NSString* title=text(ini.get("PC98PLAYER.TITLE"));if(!title.length) title=source.lastPathComponent;
-            [self addLibraryGameTo:menu identifier:gameID(source) folder:source cache:nil
-                catalogName:catalogNameForFolder(source) fallback:title suffix:@"（NAS直接）" action:^ {
-                // openCache installs the same copy-on-write save overlay before launching.
-                [weak openCache:source identifier:gameID(source)];
+            NSString* identifier=gameID(source);
+            if([registeredPaths containsObject:source.URLByStandardizingPath.URLByResolvingSymlinksInPath.path]) continue;
+            [registered addObject:identifier];
+            NSURL* cache=area(NSCachesDirectory,[@"PC98Games/" stringByAppendingString:identifier]);
+            [self addLibraryGameTo:menu identifier:identifier folder:source cache:cache
+                catalogName:catalogNameForFolder(source) fallback:title action:^{
+                if(usesGameCache() && [GameLibrary isUsableCacheAtURL:cache]) [weak openCache:cache identifier:identifier];
+                else [weak openSource:source identifier:identifier];
             }];
         }
     }
 #endif
-    NSMutableSet<NSString*>* registered=[NSMutableSet new];
-    for(NSDictionary* entry in GameLibrary.entries) {
+    for(NSDictionary* entry in entries) {
         NSURL* original=[NSURL fileURLWithPath:entry[@"path"] isDirectory:YES];
-        NSString* gameIdentifier=gameID(original);
+        NSString* gameIdentifier=registeredGameID(original);
         [registered addObject:gameIdentifier];
         NSURL* cached=area(NSCachesDirectory,[@"PC98Games/" stringByAppendingString:gameIdentifier]);
         NSString* catalogName=catalogNameForFolder(cached);
         if(!catalogName && ![NSFileManager.defaultManager fileExistsAtPath:cached.path] &&
            ![entry[@"name"] isEqualToString:original.lastPathComponent]) catalogName=entry[@"name"];
         [self addLibraryGameTo:menu identifier:gameIdentifier folder:original cache:cached
-            catalogName:catalogName fallback:original.lastPathComponent suffix:@"" action:^{
-            if([GameLibrary isUsableCacheAtURL:cached]) { [weak openCache:cached identifier:gameIdentifier]; return; }
+            catalogName:catalogName fallback:original.lastPathComponent action:^{
+            if(usesGameCache() && [GameLibrary isUsableCacheAtURL:cached]) { [weak openCache:cached identifier:gameIdentifier]; return; }
             NSError* error=nil;
             NSURL* source=[GameLibrary resolveEntry:entry error:&error];
-            if(source) [weak cacheSource:source];
+            if(source) [weak openSource:source identifier:gameIdentifier];
             else [weak message:@"場所へのアクセスを復元できません。「開く」で再選択してください。"];
         }];
     }
@@ -1362,8 +1465,11 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         NSString* title=text(ini.get("PC98PLAYER.TITLE"));
         if(!title.length) title=identifier;
         [self addLibraryGameTo:menu identifier:identifier folder:cache cache:cache
-            catalogName:catalogNameForFolder(cache) fallback:title suffix:@"（キャッシュ）"
-            action:^ { [weak openCache:cache identifier:identifier]; }];
+            catalogName:catalogNameForFolder(cache) fallback:title
+            action:^{
+                if(usesGameCache()) [weak openCache:cache identifier:identifier];
+                else [weak message:@"元フォルダを「開く」から選び直してください。"];
+            }];
     }
     [menu addTitle:@"オリジナルDOSデモ" destructive:NO action:^ { [weak demo]; }];
     UINavigationController* nav=[[UINavigationController alloc] initWithRootViewController:menu];
