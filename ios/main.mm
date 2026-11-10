@@ -859,9 +859,16 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
             NSError* error=nil;
             // An explicit folder selection is a request to import its current contents.
             [GameLibrary refreshCacheFromURL:source toURL:destination error:&error];
+            NSString* displayName=source.lastPathComponent;
+            if(!error) {
+                Ini ini;
+                ini.load([destination URLByAppendingPathComponent:@"PC98PLAYER.INI"].fileSystemRepresentation);
+                NSURL* root=[GameLibrary gameRootAtURL:destination relativePath:text(ini.get("PC98PLAYER.ROOT")) error:nil];
+                if(root) displayName=[GameLibrary verifiedDisplayNameAtURL:root] ?: displayName;
+            }
             dispatch_async(dispatch_get_main_queue(), ^{
                 PlayerController* s=weak;
-                if(s && !error) [GameLibrary rememberURL:source name:source.lastPathComponent error:nil];
+                if(s && !error) [GameLibrary rememberURL:source name:displayName error:nil];
                 if(scoped) [source stopAccessingSecurityScopedResource];
                 if(!s) return;
                 s->fetching=NO; [s.spinner stopAnimating];

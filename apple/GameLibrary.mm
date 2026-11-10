@@ -244,6 +244,51 @@ static BOOL copyIndexedFolder(NSURL* source,NSURL* destination,NSDictionary* ind
     return root;
 }
 
++ (NSString*)verifiedDisplayNameAtURL:(NSURL*)root {
+    static NSArray* editions;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSURL* catalog=[NSBundle.mainBundle URLForResource:@"GameTitles" withExtension:@"json"];
+        NSData* data=catalog ? [NSData dataWithContentsOfURL:catalog] : nil;
+        id decoded=data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        if([decoded isKindOfClass:NSArray.class]) editions=decoded;
+    });
+    NSString* match=nil;
+    NSMutableDictionary<NSURL*,NSString*>* hashes=[NSMutableDictionary new];
+    NSArray* keys=@[NSURLIsRegularFileKey,NSURLIsSymbolicLinkKey,NSURLFileSizeKey];
+    for(NSDictionary* edition in editions) {
+        NSArray* files=edition[@"required_files"];
+        BOOL matches=files.count>0;
+        for(NSDictionary* file in files) {
+            NSURL* url=[root URLByAppendingPathComponent:file[@"path"] isDirectory:NO];
+            NSDictionary* values=[url resourceValuesForKeys:keys error:nil];
+            if(![values[NSURLIsRegularFileKey] boolValue] || [values[NSURLIsSymbolicLinkKey] boolValue] ||
+               ![values[NSURLFileSizeKey] isEqual:file[@"size"]]) {
+                matches=NO;
+                break;
+            }
+            NSString* hash=hashes[url];
+            if(!hash) {
+                NSData* digest=fileDigest(url,nil);
+                NSMutableString* hex=[NSMutableString new];
+                const uint8_t* bytes=(const uint8_t*)digest.bytes;
+                for(NSUInteger i=0;i<digest.length;++i) [hex appendFormat:@"%02x",bytes[i]];
+                hash=hex;
+                hashes[url]=hash;
+            }
+            if(![hash isEqualToString:file[@"sha256"]]) {
+                matches=NO;
+                break;
+            }
+        }
+        if(matches) {
+            if(match) return nil;
+            match=edition[@"display_name"];
+        }
+    }
+    return match;
+}
+
 + (NSArray<NSDictionary*>*)entries {
     NSArray* entries = [NSUserDefaults.standardUserDefaults arrayForKey:@"PC98GameFolders"];
     return entries ?: @[];

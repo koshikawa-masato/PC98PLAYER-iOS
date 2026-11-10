@@ -1,0 +1,92 @@
+[
+  {
+    "id": "ambivalenz-pc98-reference-1",
+    "title_id": "ambivalenz",
+    "platform": "pc98",
+    "required_files": [
+      {
+        "path": "ACG.DAT",
+        "size": 719872,
+        "sha256": "f945321b51d274296650e48dd14eb2fe4d9bee99d6f29e8a87bd6af12ee38570"
+      },
+      {
+        "path": "ADISK.DAT",
+        "size": 4096,
+        "sha256": "bdf61511126b12174caf454ae42b42377fde598b88ad7b4ea793d091d33cd33a"
+      }
+    ],
+    "display_name": "アンビヴァレンツ －二律背反－"
+  },
+  {
+    "id": "rance-iv-pc98-reference-1",
+    "title_id": "rance-iv",
+    "platform": "pc98",
+    "required_files": [
+      {
+        "path": "ACG.DAT",
+        "size": 2058752,
+        "sha256": "9c3d4fc77b74e4a362b10a8cfc30f6676caee106d202792e23b8c264d04c61b1"
+      },
+      {
+        "path": "ADISK.DAT",
+        "size": 865280,
+        "sha256": "fa8ff972cdbb2940b9bbe21bb9b0c5893acd5e497e8cc2962c9572a890b78856"
+      }
+    ],
+    "display_name": "Rance4－教団の遺産－"
+  },
+  {
+    "id": "rance-4-1-pc98-reference-1",
+    "title_id": "rance-4-1",
+    "platform": "pc98",
+    "required_files": [
+      {
+        "path": "ACG.DAT",
+        "size": 818944,
+        "sha256": "7bd30c76a87bef892cc7b6dcc23fcd44f9c553af3e182c2099a82b4fa5b77785"
+      },
+      {
+        "path": "ADISK.DAT",
+        "size": 443904,
+        "sha256": "5a945b768f278a3fa5bbb943ccbdc78ed6e2a0725e3a1198c9bb2adcf8390b16"
+      }
+    ],
+    "display_name": "ランス4.1 ～お薬工場を救え！～"
+  },
+  {
+    "id": "rance-4-2-pc98-reference-1",
+    "title_id": "rance-4-2",
+    "platform": "pc98",
+    "required_files": [
+      {
+        "path": "ACG.DAT",
+        "size": 2088960,
+        "sha256": "8e698305cffcebaf33e4eababb4cb28622da28f9a2a0943adaad7b15b8cff85a"
+      },
+      {
+        "path": "ADISK.DAT",
+        "size": 418560,
+        "sha256": "829d385f462a98ea3ed13bff33734b815a87c60ae5578da924f9ac4ff4b05312"
+      }
+    ],
+    "display_name": "ランス4.2 ～エンジェル組～"
+  },
+  {
+    "id": "toushin-toshi-ii-pc98-reference-1",
+    "title_id": "toushin-toshi-ii",
+    "platform": "pc98",
+    "required_files": [
+      {
+        "path": "ACG.DAT",
+        "size": 1741824,
+        "sha256": "e0f541ef3c01cb5f9fd1b4491979d9286e23b51aae650cbd6e1ec8271f3d52a3"
+      },
+      {
+        "path": "ADISK.DAT",
+        "size": 1667072,
+        "sha256": "349e10749950a27df88f841354cc4dde407d99b53b5d67c56c964ca8786b32e7"
+      }
+    ],
+    "display_name": "闘神都市2"
+  }
+]
