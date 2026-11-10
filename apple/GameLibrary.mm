@@ -293,6 +293,15 @@ static BOOL copyIndexedFolder(NSURL* source,NSURL* destination,NSDictionary* ind
     NSArray* entries = [NSUserDefaults.standardUserDefaults arrayForKey:@"PC98GameFolders"];
     return entries ?: @[];
 }
++ (void)forgetURL:(NSURL*)url {
+    NSMutableArray* entries=[[self entries] mutableCopy];
+    NSIndexSet* matching=[entries indexesOfObjectsPassingTest:^BOOL(NSDictionary* entry, NSUInteger index, BOOL* stop) {
+        return [entry[@"path"] isEqualToString:url.path];
+    }];
+    if(!matching.count) return;
+    [entries removeObjectsAtIndexes:matching];
+    [NSUserDefaults.standardUserDefaults setObject:entries forKey:@"PC98GameFolders"];
+}
 + (BOOL)rememberURL:(NSURL*)url name:(NSString*)name error:(NSError**)error {
     NSURLBookmarkCreationOptions options = 0;
 #if TARGET_OS_OSX

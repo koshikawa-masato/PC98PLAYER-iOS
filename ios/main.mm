@@ -129,6 +129,10 @@ static NSString* libraryTitleKey(NSString* identifier) {
     return [@"PC98LibraryTitle." stringByAppendingString:identifier];
 }
 
+static NSString* libraryHiddenKey(NSString* identifier) {
+    return [@"PC98LibraryHidden." stringByAppendingString:identifier];
+}
+
 static NSString* catalogNameForFolder(NSURL* folder) {
     Ini ini;
     ini.load([folder URLByAppendingPathComponent:@"PC98PLAYER.INI"].fileSystemRepresentation);
@@ -141,7 +145,8 @@ static NSString* catalogNameForFolder(NSURL* folder) {
 @property(copy) NSString* message;
 @property(strong) NSMutableArray<NSDictionary*>* choices;
 - (void)addTitle:(NSString*)title destructive:(BOOL)destructive action:(void (^)(void))action;
-- (void)addGame:(NSString*)title action:(void (^)(void))action info:(void (^)(void))info;
+- (void)addGame:(NSString*)title identifier:(NSString*)identifier action:(void (^)(void))action
+           info:(void (^)(void))info remove:(void (^)(void))remove;
 @end
 @implementation GameLocationsController
 - (instancetype)init { if((self=[super initWithStyle:UITableViewStyleInsetGrouped])) self.choices=[NSMutableArray new];return self; }
@@ -153,8 +158,36 @@ static NSString* catalogNameForFolder(NSURL* folder) {
 - (void)addTitle:(NSString*)title destructive:(BOOL)destructive action:(void (^)(void))action {
     [self.choices addObject:@{@"title":title,@"destructive":@(destructive),@"action":[action copy]}];
 }
-- (void)addGame:(NSString*)title action:(void (^)(void))action info:(void (^)(void))info {
-    [self.choices addObject:@{@"title":title,@"action":[action copy],@"info":[info copy]}];
+- (void)addGame:(NSString*)title identifier:(NSString*)identifier action:(void (^)(void))action
+           info:(void (^)(void))info remove:(void (^)(void))remove {
+    [self.choices addObject:@{@"title":title,@"identifier":identifier,@"action":[action copy],
+                              @"info":[info copy],@"remove":[remove copy]}];
+}
+- (UISwipeActionsConfiguration*)tableView:(UITableView*)tableView
+ trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath*)index {
+    NSDictionary* choice=self.choices[index.row];
+    void (^remove)(void)=choice[@"remove"];
+    if(!remove) return nil;
+    NSString* identifier=choice[@"identifier"];
+    UIContextualAction* trash=[UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive
+        title:@"一覧から削除" handler:^(UIContextualAction* action, UIView* view, void (^completion)(BOOL)) {
+        remove();
+        NSIndexSet* rows=[self.choices indexesOfObjectsPassingTest:^BOOL(NSDictionary* row, NSUInteger i, BOOL* stop) {
+            return [row[@"identifier"] isEqualToString:identifier];
+        }];
+        [self.choices removeObjectsAtIndexes:rows];
+        NSMutableArray* paths=[NSMutableArray new];
+        [rows enumerateIndexesUsingBlock:^(NSUInteger row, BOOL* stop) {
+            [paths addObject:[NSIndexPath indexPathForRow:row inSection:0]];
+        }];
+        [tableView deleteRowsAtIndexPaths:paths withRowAnimation:UITableViewRowAnimationAutomatic];
+        completion(YES);
+    }];
+    trash.image=[UIImage systemImageNamed:@"trash"];
+    trash.backgroundColor=UIColor.systemRedColor;
+    UISwipeActionsConfiguration* config=[UISwipeActionsConfiguration configurationWithActions:@[trash]];
+    config.performsFirstActionWithFullSwipe=NO;
+    return config;
 }
 - (void)tableView:(UITableView*)tableView accessoryButtonTappedForRowWithIndexPath:(NSIndexPath*)index {
     void (^info)(void)=self.choices[index.row][@"info"];
@@ -882,7 +915,8 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
             NSString* displayName=error ? source.lastPathComponent : catalogNameForFolder(destination) ?: source.lastPathComponent;
             dispatch_async(dispatch_get_main_queue(), ^{
                 PlayerController* s=weak;
-                if(s && !error) [GameLibrary rememberURL:source name:displayName error:nil];
+                if(s && !error && [GameLibrary rememberURL:source name:displayName error:nil])
+                    [NSUserDefaults.standardUserDefaults removeObjectForKey:libraryHiddenKey(identifier)];
                 if(scoped) [source stopAccessingSecurityScopedResource];
                 if(!s) return;
                 s->fetching=NO; [s.spinner stopAnimating];
@@ -1100,6 +1134,8 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
                  folder:(NSURL*)folder cache:(NSURL*)cache catalogName:(NSString*)catalogName
                fallback:(NSString*)fallback suffix:(NSString*)suffix action:(void (^)(void))action {
     NSUserDefaults* defaults=NSUserDefaults.standardUserDefaults;
+    NSString* hiddenKey=libraryHiddenKey(identifier);
+    if([defaults boolForKey:hiddenKey]) return;
     NSString* key=libraryTitleKey(identifier);
     NSString* custom=[defaults stringForKey:key];
     NSString* display=custom ?: catalogName ?: fallback;
@@ -1108,7 +1144,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     void (^refresh)(void)=^{
         [weakMenu.navigationController.presentingViewController dismissViewControllerAnimated:NO completion:^{ [weak showLibrary]; }];
     };
-    [menu addGame:[display stringByAppendingString:suffix] action:action info:^{
+    [menu addGame:[display stringByAppendingString:suffix] identifier:identifier action:action info:^{
         GameLocationsController* list=weakMenu;
         if(!list) return;
         BOOL cached=cache && [NSFileManager.defaultManager fileExistsAtPath:cache.path];
@@ -1157,6 +1193,10 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         }
         [details addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
         [list presentViewController:details animated:YES completion:nil];
+    } remove:^{
+        // Keep cached files and prevent the same game reappearing as a cache-only row.
+        [defaults setBool:YES forKey:hiddenKey];
+        [GameLibrary forgetURL:folder];
     }];
 }
 - (void)showLibrary {

@@ -12,6 +12,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (nullable NSURL*)gameRootAtURL:(NSURL*)cache relativePath:(NSString*)path error:(NSError**)error;
 + (nullable NSString*)verifiedDisplayNameAtURL:(NSURL*)root;
 + (NSArray<NSDictionary*>*)entries;
++ (void)forgetURL:(NSURL*)url;
 + (BOOL)rememberURL:(NSURL*)url name:(NSString*)name error:(NSError**)error;
 + (nullable NSURL*)resolveEntry:(NSDictionary*)entry error:(NSError**)error;
 @end
