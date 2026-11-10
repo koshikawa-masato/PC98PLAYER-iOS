@@ -125,11 +125,23 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
 }
 @end
 
+static NSString* libraryTitleKey(NSString* identifier) {
+    return [@"PC98LibraryTitle." stringByAppendingString:identifier];
+}
+
+static NSString* catalogNameForFolder(NSURL* folder) {
+    Ini ini;
+    ini.load([folder URLByAppendingPathComponent:@"PC98PLAYER.INI"].fileSystemRepresentation);
+    NSURL* root=[GameLibrary gameRootAtURL:folder relativePath:text(ini.get("PC98PLAYER.ROOT")) error:nil];
+    return root ? [GameLibrary verifiedDisplayNameAtURL:root] : nil;
+}
+
 // A full-window list avoids the fold-aware alert's short, upper-panel viewport.
 @interface GameLocationsController : UITableViewController
 @property(copy) NSString* message;
 @property(strong) NSMutableArray<NSDictionary*>* choices;
 - (void)addTitle:(NSString*)title destructive:(BOOL)destructive action:(void (^)(void))action;
+- (void)addGame:(NSString*)title action:(void (^)(void))action info:(void (^)(void))info;
 @end
 @implementation GameLocationsController
 - (instancetype)init { if((self=[super initWithStyle:UITableViewStyleInsetGrouped])) self.choices=[NSMutableArray new];return self; }
@@ -141,6 +153,13 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
 - (void)addTitle:(NSString*)title destructive:(BOOL)destructive action:(void (^)(void))action {
     [self.choices addObject:@{@"title":title,@"destructive":@(destructive),@"action":[action copy]}];
 }
+- (void)addGame:(NSString*)title action:(void (^)(void))action info:(void (^)(void))info {
+    [self.choices addObject:@{@"title":title,@"action":[action copy],@"info":[info copy]}];
+}
+- (void)tableView:(UITableView*)tableView accessoryButtonTappedForRowWithIndexPath:(NSIndexPath*)index {
+    void (^info)(void)=self.choices[index.row][@"info"];
+    if(info) info();
+}
 - (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return self.choices.count; }
 - (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return self.message; }
 - (UITableViewCell*)tableView:(UITableView*)tableView cellForRowAtIndexPath:(NSIndexPath*)index {
@@ -148,7 +167,8 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
     NSDictionary* choice=self.choices[index.row];cell.textLabel.text=choice[@"title"];cell.textLabel.numberOfLines=0;
     cell.textLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];cell.textLabel.adjustsFontForContentSizeCategory=YES;
     cell.textLabel.textColor=[choice[@"destructive"] boolValue]?UIColor.systemRedColor:UIColor.labelColor;
-    cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;return cell;
+    cell.accessoryType=choice[@"info"] ? UITableViewCellAccessoryDetailButton : UITableViewCellAccessoryDisclosureIndicator;
+    return cell;
 }
 - (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)index {
     void (^action)(void)=self.choices[index.row][@"action"];
@@ -859,13 +879,7 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
             NSError* error=nil;
             // An explicit folder selection is a request to import its current contents.
             [GameLibrary refreshCacheFromURL:source toURL:destination error:&error];
-            NSString* displayName=source.lastPathComponent;
-            if(!error) {
-                Ini ini;
-                ini.load([destination URLByAppendingPathComponent:@"PC98PLAYER.INI"].fileSystemRepresentation);
-                NSURL* root=[GameLibrary gameRootAtURL:destination relativePath:text(ini.get("PC98PLAYER.ROOT")) error:nil];
-                if(root) displayName=[GameLibrary verifiedDisplayNameAtURL:root] ?: displayName;
-            }
+            NSString* displayName=error ? source.lastPathComponent : catalogNameForFolder(destination) ?: source.lastPathComponent;
             dispatch_async(dispatch_get_main_queue(), ^{
                 PlayerController* s=weak;
                 if(s && !error) [GameLibrary rememberURL:source name:displayName error:nil];
@@ -1082,6 +1096,69 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
     [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
+- (void)addLibraryGameTo:(GameLocationsController*)menu identifier:(NSString*)identifier
+                 folder:(NSURL*)folder cache:(NSURL*)cache catalogName:(NSString*)catalogName
+               fallback:(NSString*)fallback suffix:(NSString*)suffix action:(void (^)(void))action {
+    NSUserDefaults* defaults=NSUserDefaults.standardUserDefaults;
+    NSString* key=libraryTitleKey(identifier);
+    NSString* custom=[defaults stringForKey:key];
+    NSString* display=custom ?: catalogName ?: fallback;
+    __weak GameLocationsController* weakMenu=menu;
+    __weak PlayerController* weak=self;
+    void (^refresh)(void)=^{
+        [weakMenu.navigationController.presentingViewController dismissViewControllerAnimated:NO completion:^{ [weak showLibrary]; }];
+    };
+    [menu addGame:[display stringByAppendingString:suffix] action:action info:^{
+        GameLocationsController* list=weakMenu;
+        if(!list) return;
+        BOOL cached=cache && [NSFileManager.defaultManager fileExistsAtPath:cache.path];
+        NSString* info=[NSString stringWithFormat:@"ソフト名  %@\nフォルダ名  %@\nキャッシュ  %@",
+            catalogName ?: fallback,folder.lastPathComponent,cached ? @"保存済み" : @"なし"];
+        UIAlertController* details=[UIAlertController alertControllerWithTitle:display message:info preferredStyle:UIAlertControllerStyleAlert];
+        [details addAction:[UIAlertAction actionWithTitle:@"タイトル名を編集" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+            UIAlertController* edit=[UIAlertController alertControllerWithTitle:@"タイトル名を編集"
+                message:@"空欄で保存すると自動表示名に戻ります。" preferredStyle:UIAlertControllerStyleAlert];
+            [edit addTextFieldWithConfigurationHandler:^(UITextField* field) { field.text=custom; field.placeholder=catalogName ?: fallback; }];
+            [edit addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+            __weak UIAlertController* weakEdit=edit;
+            [edit addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(UIAlertAction* save) {
+                NSString* title=[weakEdit.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+                if(title.length) [defaults setObject:title forKey:key];
+                else [defaults removeObjectForKey:key];
+                refresh();
+            }]];
+            [weakMenu presentViewController:edit animated:YES completion:nil];
+        }]];
+        if(cached) {
+            [details addAction:[UIAlertAction actionWithTitle:@"このゲームのキャッシュを削除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
+                UIAlertController* confirm=[UIAlertController alertControllerWithTitle:@"キャッシュを削除しますか？"
+                    message:@"元フォルダと保存データは保持されます。" preferredStyle:UIAlertControllerStyleAlert];
+                [confirm addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+                [confirm addAction:[UIAlertAction actionWithTitle:@"削除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* deleteAction) {
+                    PlayerController* controller=weak;
+                    if([controller.currentID isEqualToString:identifier]) {
+                        [controller stopGame];
+                        controller.currentCache=nil;
+                        controller.currentID=nil;
+                    }
+                    NSError* error=nil;
+                    if([NSFileManager.defaultManager fileExistsAtPath:cache.path] &&
+                       ![NSFileManager.defaultManager removeItemAtURL:cache error:&error]) {
+                        UIAlertController* failure=[UIAlertController alertControllerWithTitle:@"キャッシュを削除できませんでした"
+                            message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+                        [failure addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
+                        [weakMenu presentViewController:failure animated:YES completion:nil];
+                        return;
+                    }
+                    refresh();
+                }]];
+                [weakMenu presentViewController:confirm animated:YES completion:nil];
+            }]];
+        }
+        [details addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
+        [list presentViewController:details animated:YES completion:nil];
+    }];
+}
 - (void)showLibrary {
     if(fetching || self.presentedViewController) return;
     GameLocationsController* menu=[GameLocationsController new];
@@ -1147,25 +1224,33 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
             if(!directory.boolValue || symlink.boolValue || ![NSFileManager.defaultManager fileExistsAtPath:iniURL.path]) continue;
             Ini ini;ini.load(iniURL.fileSystemRepresentation);
             NSString* title=text(ini.get("PC98PLAYER.TITLE"));if(!title.length) title=source.lastPathComponent;
-            [menu addTitle:[title stringByAppendingString:@"（NAS直接）"] destructive:NO action:^ {
+            [self addLibraryGameTo:menu identifier:gameID(source) folder:source cache:nil
+                catalogName:catalogNameForFolder(source) fallback:title suffix:@"（NAS直接）" action:^ {
                 // openCache installs the same copy-on-write save overlay before launching.
                 [weak openCache:source identifier:gameID(source)];
             }];
         }
     }
 #endif
-    for(NSDictionary* entry in GameLibrary.entries) [menu addTitle:entry[@"name"] destructive:NO action:^ {
-        NSURL* original=[NSURL fileURLWithPath:entry[@"path"] isDirectory:YES];
-        NSString* identifier=gameID(original);
-        NSURL* cached=area(NSCachesDirectory,[@"PC98Games/" stringByAppendingString:identifier]);
-        if([GameLibrary isUsableCacheAtURL:cached]) { [weak openCache:cached identifier:identifier]; return; }
-        NSError* error=nil; NSURL* source=[GameLibrary resolveEntry:entry error:&error];
-        if(source) [weak cacheSource:source]; else [weak message:@"場所へのアクセスを復元できません。「開く」で再選択してください。"];
-    }];
-    // Also expose complete caches staged for device testing; the originals stay on Mac/NAS.
     NSMutableSet<NSString*>* registered=[NSMutableSet new];
-    for(NSDictionary* entry in GameLibrary.entries)
-        [registered addObject:gameID([NSURL fileURLWithPath:entry[@"path"] isDirectory:YES])];
+    for(NSDictionary* entry in GameLibrary.entries) {
+        NSURL* original=[NSURL fileURLWithPath:entry[@"path"] isDirectory:YES];
+        NSString* gameIdentifier=gameID(original);
+        [registered addObject:gameIdentifier];
+        NSURL* cached=area(NSCachesDirectory,[@"PC98Games/" stringByAppendingString:gameIdentifier]);
+        NSString* catalogName=catalogNameForFolder(cached);
+        if(!catalogName && ![NSFileManager.defaultManager fileExistsAtPath:cached.path] &&
+           ![entry[@"name"] isEqualToString:original.lastPathComponent]) catalogName=entry[@"name"];
+        [self addLibraryGameTo:menu identifier:gameIdentifier folder:original cache:cached
+            catalogName:catalogName fallback:original.lastPathComponent suffix:@"" action:^{
+            if([GameLibrary isUsableCacheAtURL:cached]) { [weak openCache:cached identifier:gameIdentifier]; return; }
+            NSError* error=nil;
+            NSURL* source=[GameLibrary resolveEntry:entry error:&error];
+            if(source) [weak cacheSource:source];
+            else [weak message:@"場所へのアクセスを復元できません。「開く」で再選択してください。"];
+        }];
+    }
+    // Also expose complete caches staged for device testing.
     NSArray<NSURL*>* caches=[NSFileManager.defaultManager contentsOfDirectoryAtURL:area(NSCachesDirectory,@"PC98Games")
         includingPropertiesForKeys:@[NSURLIsDirectoryKey] options:NSDirectoryEnumerationSkipsHiddenFiles error:nil];
     for(NSURL* cache in [caches sortedArrayUsingComparator:^NSComparisonResult(NSURL* a,NSURL* b) { return [a.lastPathComponent localizedStandardCompare:b.lastPathComponent]; }]) {
@@ -1177,21 +1262,15 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         Ini ini; ini.load(iniURL.fileSystemRepresentation);
         NSString* title=text(ini.get("PC98PLAYER.TITLE"));
         if(!title.length) title=identifier;
-        [menu addTitle:[title stringByAppendingString:@"（キャッシュ）"] destructive:NO
+        [self addLibraryGameTo:menu identifier:identifier folder:cache cache:cache
+            catalogName:catalogNameForFolder(cache) fallback:title suffix:@"（キャッシュ）"
             action:^ { [weak openCache:cache identifier:identifier]; }];
     }
     [menu addTitle:@"オリジナルDOSデモ" destructive:NO action:^ { [weak demo]; }];
-    [menu addTitle:@"ゲーム本体のキャッシュを消去" destructive:YES action:^ { [weak clearCache]; }];
     UINavigationController* nav=[[UINavigationController alloc] initWithRootViewController:menu];
     // Keep the player hierarchy attached so Duo hinge notifications continue.
     nav.modalPresentationStyle=UIModalPresentationOverFullScreen;
     [self presentViewController:nav animated:YES completion:nil];
-}
-- (void)clearCache {
-    [self stopGame]; self.monitor.image=nil;
-    NSError* error=nil; NSURL* root=area(NSCachesDirectory,@"PC98Games");
-    if([NSFileManager.defaultManager fileExistsAtPath:root.path]) [NSFileManager.defaultManager removeItemAtURL:root error:&error];
-    self.status.text=error?error.localizedDescription:@"本体キャッシュを消去しました。保存データは保持しています。";
 }
 - (void)demo {
     if(fetching) return;
