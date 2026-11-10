@@ -236,3 +236,36 @@ footer .credit{font-size:11px}
   .routes a,.button,.chapter-nav a{transition:none}
   .routes a:hover{transform:none}
 }
+
+/* Guide home and task cards */
+:root {
+  --paper: #f4f1e8;
+  --panel: #fffdf6;
+  --chassis: #e1e6d9;
+  --ink: #192c23;
+  --muted: #4a5b50;
+  --blue: #235e4e;
+  --red: #8b3e30;
+  --shadow: 4px 4px 0 var(--ink);
+}
+.header nav { flex-wrap: wrap; }
+.hero-bg { background: radial-gradient(ellipse at 75% 55%, #f3f7eb, transparent 55%), var(--chassis); }
+.hero { grid-template-columns: minmax(0, 1.3fr) minmax(0, .7fr); gap: clamp(20px, 6vw, 88px); padding-block: 48px 70px; }
+.hero h1 { text-shadow: none; }
+.hero-device { text-align: center; }
+.hero-device img { display: block; width: clamp(140px, 48%, 204px); margin-inline: auto; border: 5px solid var(--ink); border-radius: 24px; box-shadow: 10px 12px 0 #192c2320; }
+.hero-device figcaption, .play-preview figcaption { color: var(--muted); font-size: .8rem; margin-top: .9rem; }
+.section { padding-block: clamp(46px, 7vw, 82px); }
+.library-guide { background: #e7ebdf; border-block: 1px solid #b9c2b4; }
+.guide-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 24px; }
+.guide-grid article { background: var(--panel); border: 1px solid #b9c2b4; border-radius: 14px; padding: clamp(16px, 2.4vw, 26px); }
+.guide-grid article p, .play-preview p:last-child { margin-bottom: 0; }
+.guide-chip, .preview-label { display: inline-block; border-radius: 5px; padding: 2px 9px; background: #e5ebdc; color: #234437; font-size: .8rem; font-weight: 650; }
+.preview-label { background: #f4e3ba; color: #584215; }
+.play-preview { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: center; gap: clamp(16px, 3vw, 38px); padding: clamp(16px, 3vw, 36px); margin-top: 24px; background: #e7ebdf; border-radius: 16px; }
+.play-preview img { display: block; border-radius: 10px; }
+@media (max-width: 760px) {
+  .hero, .play-preview, .guide-grid { grid-template-columns: 1fr; }
+  .hero { padding-block: 36px 52px; }
+  .hero-device img { width: min(145px, 55%); }
+}

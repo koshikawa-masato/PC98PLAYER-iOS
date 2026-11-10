@@ -12,25 +12,35 @@
 </head>
 <body>
 <div class="stripe" aria-hidden="true"></div>
-<header class="header"><a class="brand" href="#"><img src="assets/icon.png" width="40" height="40" alt=""><span>RetroDOS Player</span></a><nav aria-label="メイン"><a href="#start">はじめる</a><a href="#transfer">転送する</a><a href="#nas">NAS 接続</a><a href="#help">困ったとき</a></nav><span class="power" aria-hidden="true"><i></i>POWER</span></header>
+<header class="header">
+  <a class="brand" href="#"><img src="assets/icon.png" width="40" height="40" alt=""><span>RetroDOS Player</span></a>
+  <nav aria-label="メイン"><a href="#start">導入</a><a href="#library">作品一覧</a><a href="#screens">操作</a><a href="#help">FAQ</a></nav>
+</header>
 <main>
 <div class="hero-bg"><section class="hero wrap">
-  <div class="hero-copy"><p class="eyebrow">PC-98 DOS PLAYER · iPhone / iPad</p><h1>あの画面を、<br>いつもの端末で。</h1><p class="lead">レトロ DOS ソフトを手元で楽しむ。<br>パソコンから転送しても、NAS のフォルダからでも。</p><div class="actions"><a class="app-store-badge" href="https://apps.apple.com/jp/app/retrodos-player/id6826817332"><img src="https://tools.applemediaservices.com/api/badges/download-on-the-app-store/black/ja-jp?size=250x83" alt="App Storeからダウンロード" width="180" height="60"></a><a class="button" href="#start">導入ガイドを見る ↓</a></div><p class="note">ゲーム本体は同梱していません。利用する権利のある PC-98 向け DOS ソフトをご用意ください。ソフトによって互換性は異なります。</p></div>
-  <figure class="hero-screen">
-    <div class="monitor" aria-hidden="true"><div class="crt"><p>RetroDOS Player</p><p>A&gt;CD \GAMES</p><p>A&gt;DIR /W</p><p>[DEMO]&nbsp;&nbsp;[TRANSFER]&nbsp;&nbsp;[NAS]</p><p>A&gt;RETRODOS<span class="cursor">_</span></p></div><div class="bezel"><span>RETRO HARDWARE. NEW HOME.</span><i></i></div></div>
-    <img class="phone" src="tutorial/images/01-demo.png" width="1206" height="2622" alt="内蔵のオリジナル DOS デモを表示したアプリの操作例">
-    <figcaption>内蔵デモの画面例 · iPhone シミュレーター</figcaption><span class="screen-badge">DOS → iPhone / iPad</span>
+  <div class="hero-copy">
+    <p class="eyebrow">RETRODOS PLAYER / iPhone・iPad</p>
+    <h1>ゲームを入れて、<br>すぐ遊ぼう。</h1>
+    <p class="lead">PC-98向けDOSソフトを転送し、作品一覧から起動。キーボード、マウス、コントローラーで遊べます。</p>
+    <div class="actions"><a class="button primary" href="#start">導入ガイドを開く ↓</a><a class="app-store-badge" href="https://apps.apple.com/jp/app/retrodos-player/id6826817332"><img src="https://tools.applemediaservices.com/api/badges/download-on-the-app-store/black/ja-jp?size=250x83" alt="App Storeからダウンロード" width="180" height="60"></a></div>
+    <p class="note">ゲーム本体は同梱していません。利用する権利のあるPC-98向けDOSソフトをご用意ください。</p>
+  </div>
+  <figure class="hero-device">
+    <img src="tutorial/images/01-demo.png" width="1206" height="2622" alt="モニターとソフトウェアキーボードに内蔵デモを表示したiPhone">
+    <figcaption>内蔵デモ · iPhoneシミュレーター</figcaption>
   </figure>
 </section></div>
-<nav class="chapter-nav wrap" aria-label="ガイドの章"><a href="#demo"><b>f·1</b> デモを試す</a><a href="#transfer"><b>f·2</b> データを転送</a><a href="#nas"><b>f·3</b> NAS でつなぐ</a><a href="#help"><b>f·4</b> 困ったとき</a></nav>
+<nav class="chapter-nav wrap" aria-label="ガイドの章">
+  <a href="#start"><b>01</b> ゲームを入れる</a><a href="#library"><b>02</b> 一覧で管理</a><a href="#screens"><b>03</b> プレイする</a><a href="#help"><b>04</b> 困ったとき</a>
+</nav>
 <section class="wrap section" id="start"><p class="eyebrow">START YOUR JOURNEY</p><h2>まずは、ひとつ動かしてみる。</h2><p>アプリだけで試せるデモから始めて、そのあと自分に合った方法でデータを開きましょう。iPhone・iPad 共通の手順です。</p>
 <div class="cards routes">
 <a class="card" href="#demo"><span class="number">01 / お試し</span><svg class="route-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="5" y="4" width="38" height="28" rx="2"/><path d="M17 40h14M24 32v8M20 12l10 6-10 6z"/></svg><h3>まずは内蔵デモ</h3><p>転送も NAS も不要。キーを押して、画面と入力を確かめます。</p><span>デモを試す →</span></a>
 <a class="card" href="#transfer"><span class="number">02 / パソコンから</span><svg class="route-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M6 30V8h27v13M2 35h23M38 9v18m-6-6 6 6 6-6"/><rect x="29" y="32" width="15" height="12" rx="1"/></svg><h3>Mac・Windows から転送</h3><p>ゲームを ZIP にまとめ、端末の「ファイル」で展開します。</p><span>転送方法を選ぶ →</span></a>
 <a class="card dark" href="#nas"><span class="number">03 / 共有フォルダから</span><svg class="route-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="9" y="3" width="30" height="33" rx="2"/><path d="M15 12h18M15 20h18M24 36v7M10 43h28"/><circle cx="17" cy="28" r="1"/><circle cx="24" cy="28" r="1"/></svg><h3>NAS にあるゲームを開く</h3><p>家の共有フォルダを利用。接続には OS 標準の「ファイル」を使います。</p><span>NAS の接続方法 →</span></a>
 </div></section>
-<section class="section tint" id="demo"><div class="wrap split"><div><p class="eyebrow">01 / PLAY THE DEMO</p><h2>データを用意する前に、<br>操作を体験。</h2><ol class="steps"><li>RetroDOS Player を起動します。</li><li>モニター下の「場所」から「オリジナルDOSデモ」を選びます。</li><li>画面のキーボードで A・B・C などを押します。文字が出れば成功です。</li></ol></div><aside class="callout window"><p class="titlebar" aria-hidden="true">TUTORIAL.ZIP</p><h3>次は転送も練習できます</h3><p>第三者のゲームを含まない、小さなオリジナル DOS デモです。</p><a class="button primary" href="tutorial/RetroDOS-Tutorial-Demo.zip" download>練習用 ZIP をダウンロード ↓</a><p class="note">ZIP は展開後に使います。ゲームを購入・ダウンロードするためのリンクではありません。</p></aside></div></section>
-<section class="section cinema" id="video"><div class="wrap"><p class="eyebrow">VIDEO GUIDE</p><div class="cinema-heading"><h2>操作の流れを、<br>動画でたどる。</h2><p>起動から文字入力まで。画面の移り変わりを追いながら、<br>一緒に操作できるガイドへ。</p></div><div class="film-plan"><div class="film-intro"><span class="film-symbol" aria-hidden="true">▶</span><div><span class="status-pill">実操作版は収録準備中</span><h3>端末での操作を、そのまま。</h3><p>現在見られるのは下の画像ガイドです。<br>連続した操作録画は、素材の収録後に掲載します。</p></div></div><ol class="film-chapters"><li><span>SCENE 01</span><strong>デモを起動</strong><small>「場所」から開き、キーを入力</small></li><li><span>SCENE 02</span><strong>転送して開く</strong><small>ZIP 展開からフォルダ選択まで</small></li><li><span>SCENE 03</span><strong>NAS に接続</strong><small>SMB 接続から作品の起動まで</small></li></ol></div><details class="supplement"><summary>画像によるクイックガイドを見る（24秒・無音）</summary><p>既存のスクリーンショットによる補足資料です。実際のタップ操作の録画ではありません。</p><div class="video-shell"><video controls playsinline preload="none" poster="videos/transfer-poster.jpg" width="1280" height="720" aria-label="静止画像による ZIP 展開と起動の説明"><source src="videos/transfer-guide.mp4" type="video/mp4"><track kind="captions" src="videos/transfer-ja.vtt" srclang="ja" label="日本語">下の画像付き手順をご覧ください。</video></div><p class="note">画像：2026年11月5日、iPhone シミュレーターで撮影。<a href="videos/transfer-guide.mp4" download>画像ガイドを保存</a></p></details></div></section>
+<section class="section tint" id="demo"><div class="wrap split"><div><p class="eyebrow">01 / PLAY THE DEMO</p><h2>データを用意する前に、<br>操作を体験。</h2><ol class="steps"><li>RetroDOS Player を起動します。</li><li>モニター下の「一覧」から「オリジナルDOSデモ」を選びます。</li><li>画面のキーボードで A・B・C などを押します。文字が出れば成功です。</li></ol></div><aside class="callout window"><p class="titlebar" aria-hidden="true">TUTORIAL.ZIP</p><h3>次は転送も練習できます</h3><p>第三者のゲームを含まない、小さなオリジナル DOS デモです。</p><a class="button primary" href="tutorial/RetroDOS-Tutorial-Demo.zip" download>練習用 ZIP をダウンロード ↓</a><p class="note">ZIP は展開後に使います。ゲームを購入・ダウンロードするためのリンクではありません。</p></aside></div></section>
+<section class="section cinema" id="video"><div class="wrap"><p class="eyebrow">VIDEO GUIDE</p><div class="cinema-heading"><h2>操作の流れを、<br>動画でたどる。</h2><p>起動から文字入力まで。画面の移り変わりを追いながら、<br>一緒に操作できるガイドへ。</p></div><div class="film-plan"><div class="film-intro"><span class="film-symbol" aria-hidden="true">▶</span><div><span class="status-pill">実操作版は収録準備中</span><h3>端末での操作を、そのまま。</h3><p>現在見られるのは下の画像ガイドです。<br>連続した操作録画は、素材の収録後に掲載します。</p></div></div><ol class="film-chapters"><li><span>SCENE 01</span><strong>デモを起動</strong><small>「一覧」から開き、キーを入力</small></li><li><span>SCENE 02</span><strong>転送して開く</strong><small>ZIP 展開からフォルダ選択まで</small></li><li><span>SCENE 03</span><strong>NAS に接続</strong><small>SMB 接続から作品の起動まで</small></li></ol></div><details class="supplement"><summary>画像によるクイックガイドを見る（24秒・無音）</summary><p>既存のスクリーンショットによる補足資料です。実際のタップ操作の録画ではありません。</p><div class="video-shell"><video controls playsinline preload="none" poster="videos/transfer-poster.jpg" width="1280" height="720" aria-label="静止画像による ZIP 展開と起動の説明"><source src="videos/transfer-guide.mp4" type="video/mp4"><track kind="captions" src="videos/transfer-ja.vtt" srclang="ja" label="日本語">下の画像付き手順をご覧ください。</video></div><p class="note">画像：2026年11月5日、iPhone シミュレーターで撮影。<a href="videos/transfer-guide.mp4" download>画像ガイドを保存</a></p></details></div></section>
 <section class="wrap section" id="transfer"><p class="eyebrow">02 / TRANSFER YOUR FILES</p><h2>使っているパソコンを選ぶ。</h2><p>1作品を1フォルダにまとめて ZIP にします。LZH・7z は先にパソコンで展開してください。練習用 ZIP はそのまま送れます。</p>
 <div class="cards two"><article class="card window"><p class="titlebar"><span class="platform-label">FROM MAC</span></p><h3>Mac から送る</h3><details open><summary>ケーブルで転送する</summary><ol><li>端末にアプリを入れ、一度起動します。</li><li>データ通信対応ケーブルで接続し、端末をロック解除して「信頼」を確認します。</li><li>Finder のサイドバーで端末を選び、「ファイル」を開きます。</li><li>RetroDOS Player の欄に ZIP をドラッグします。</li></ol></details><details><summary>AirDrop で転送する</summary><p>Mac で ZIP を右クリックし「共有」→「AirDrop」で端末へ送ります。受信後は「ファイルに保存」を選びます。保存先が不明なら「最近使った項目」や「ダウンロード」を確認してください。</p></details></article>
 <article class="card window"><p class="titlebar"><span class="platform-label">FROM WINDOWS</span></p><h3>Windows から送る</h3><ol><li>端末にアプリを入れ、一度起動します。</li><li>Apple の「Appleデバイス」アプリを用意します。</li><li>ケーブルで接続し、ロック解除・「信頼」を確認します。</li><li>端末の「ファイル」→ RetroDOS Player →「ファイルを追加」で ZIP を送ります。</li></ol><p class="note">音楽や写真を一括同期する操作は不要です。</p></article></div>
@@ -41,9 +51,34 @@
 <section class="section nas" id="nas"><div class="wrap"><p class="eyebrow">03 / CONNECT YOUR LIBRARY</p><h2>NAS にまとめたゲームも、<br>「ファイル」から開けます。</h2><p class="lead">パソコンと共有しているフォルダから、遊ぶ作品を選ぶ。<br>作品ごとに ZIP を転送する以外の選択肢です。</p><div class="flow" aria-label="NAS からアプリへのデータの流れ"><span><svg class="route-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="9" y="3" width="30" height="33" rx="2"/><path d="M15 12h18M15 20h18M24 36v7M10 43h28"/><circle cx="17" cy="28" r="1"/><circle cx="24" cy="28" r="1"/></svg><strong>NAS</strong><small>作品をまとめて保管</small></span><b aria-hidden="true">▶</b><span><svg class="route-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M6 30V8h27v13M2 35h23M38 9v18m-6-6 6 6 6-6"/><rect x="29" y="32" width="15" height="12" rx="1"/></svg><strong>「ファイル」</strong><small>SMB で共有に接続</small></span><b aria-hidden="true">▶</b><span><svg class="route-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="5" y="4" width="38" height="28" rx="2"/><path d="M17 40h14M24 32v8M20 12l10 6-10 6z"/></svg><strong>RetroDOS Player</strong><small>端末へ取得してプレイ</small></span></div>
 <div class="cards two"><article class="card window"><p class="titlebar" aria-hidden="true">CHECKLIST</p><h3>接続前の準備</h3><ul><li>NAS 側で SMB のファイル共有を有効にします。</li><li>端末を NAS に到達できるネットワークへ接続します。まずは同じ家庭内 Wi-Fi で試してください。</li><li>サーバ名または IP アドレス、共有名、NAS のユーザー名・パスワードを確認します。</li><li>1作品を1フォルダにまとめ、必要なサブフォルダも残します。ZIP は先に展開します。</li></ul><p class="note">NAS の管理画面や設定名はメーカーごとに異なります。接続のためにルーターで SMB ポートをインターネットへ公開する必要はありません。</p></article>
 <article class="card window"><p class="titlebar" aria-hidden="true">CONNECT</p><h3>「ファイル」で接続する</h3><ol class="steps"><li>ホーム画面から、青いフォルダの<strong>「ファイル」アプリ</strong>を開きます。</li><li>「ブラウズ」の「…」→<strong>「サーバへ接続」</strong>を選びます。iPad はサイドバーのメニューも確認してください。</li><li>サーバ欄に <code>smb://NASの名前</code> または <code>smb://192.168.1.10</code> のように入力します。これは例です。自分の NAS のアドレスに置き換えます。</li><li>「登録ユーザ」を選び、NAS のユーザー名・パスワードで接続します。ゲスト接続は NAS 側で許可している場合だけ使えます。</li><li>共有フォルダを開き、ゲームのフォルダが見えることを確認します。</li></ol></article></div>
-<article class="callout"><h3>接続したら、RetroDOS Player へ</h3><p>アプリの<strong>「開く」→「ブラウズ」→接続したサーバ→共有フォルダ→作品のフォルダ→右上の「開く」</strong>と進みます。初回は端末へのコピーが終わるまで待ってください。次回は「場所」から登録した作品を選べます。</p><p>アプリ内の選択画面に「編集」しか表示されない場合は、ホーム画面の「ファイル」アプリへ戻って接続してください。接続・認証は OS の「ファイル」が扱います。</p></article>
-<div class="cards two facts"><article><h3>取得したあとは端末で実行</h3><p>ゲーム本体は端末のキャッシュへコピーします。取得済みキャッシュがあれば NAS に接続せず起動できます。キャッシュが消えた場合は元フォルダへの再接続が必要です。作品をコピーできる空き容量をご用意ください。</p></article><article><h3>セーブは端末に保存</h3><p>元の NAS データは変更しません。セーブと状態保存はアプリ内の別領域に保持し、NAS へ自動同期しません。NAS 側の更新を反映するにはキャッシュを消去し、再取得します。保存済みの変更ファイルが優先されます。</p></article></div><p class="note">この NAS 手順は OS の SMB 接続とアプリのフォルダ取得方式の案内です。各メーカーの NAS での実接続・操作録画は未検証です。</p></div></section>
-<section class="wrap section" id="screens"><p class="eyebrow">DISPLAY GUIDE</p><h2>端末と向きに合わせて。</h2><div class="cards two"><article class="card window"><p class="titlebar" aria-hidden="true">IPHONE</p><h3>iPhone</h3><p><strong>縦画面・横画面に対応</strong><br>端末を回転して切り替えられます。マウス中心のゲームでは、ダブルタップの全画面表示も使えます。</p></article><article class="card window"><p class="titlebar" aria-hidden="true">IPAD</p><h3>iPad</h3><p><strong>縦画面・横画面に対応</strong><br>端末の向きに合わせて使えます。ゲーム画面の縦横比は保持します。</p></article></div><article class="callout mouse" id="mouse-fullscreen"><p class="eyebrow">MOUSE PLAY</p><h3>マウス中心のゲームは、全画面で。</h3><p>画面内のボタンやメニューをマウスで選ぶゲームでは、<strong>全画面表示にするとゲーム画面が大きくなり、操作しやすくなります。</strong></p><ol><li>モニターを<strong>ダブルタップ</strong>して全画面表示にします。</li><li>画面をドラッグしてマウスを移動し、1本指タップで左クリック、2本指タップで右クリックします。</li><li>キーボードを使いたいときは、<strong>もう一度ダブルタップ</strong>して通常表示に戻します。</li></ol></article><p class="note">掲載画像は iPhone の操作例です。iPad・横画面の比較画像は、対象バージョンで撮影したものを確認後に追加します。</p></section>
+<article class="callout"><h3>接続したら、RetroDOS Player へ</h3><p>アプリの<strong>「開く」→「ブラウズ」→接続したサーバ→共有フォルダ→作品のフォルダ→右上の「開く」</strong>と進みます。初回は端末へのコピーが終わるまで待ってください。次回は「一覧」から登録した作品を選べます。</p><p>アプリ内の選択画面に「編集」しか表示されない場合は、ホーム画面の「ファイル」アプリへ戻って接続してください。接続・認証は OS の「ファイル」が扱います。</p></article>
+<div class="cards two facts"><article><h3>取得したあとは端末で実行</h3><p>キャッシュを利用する設定では、ゲーム本体を端末にコピーします。取得済みキャッシュがあれば NAS に接続せず起動できます。キャッシュが消えた場合は元フォルダへの再接続が必要です。作品をコピーできる空き容量をご用意ください。</p></article><article><h3>セーブは端末に保存</h3><p>元の NAS データは変更しません。セーブと状態保存はアプリ内の別領域に保持し、NAS へ自動同期しません。NAS 側の更新を反映するにはキャッシュを消去し、再取得します。保存済みの変更ファイルが優先されます。</p></article></div><p class="note">この NAS 手順は OS の SMB 接続とアプリのフォルダ取得方式の案内です。各メーカーの NAS での実接続・操作録画は未検証です。</p></div></section>
+<section class="section library-guide" id="library">
+  <div class="wrap">
+    <p class="eyebrow">02 / LIBRARY</p>
+    <h2>作品一覧にまとめる</h2>
+    <p>「開く」で作品のフォルダを選んで起動すると、「一覧」から次回も選べます。</p>
+    <p class="preview-label">開発版プレビュー</p>
+    <div class="guide-grid">
+      <article><span class="guide-chip">一覧</span><h3>リストとサムネイル</h3><p>作品名と画像が並ぶリストと、画像を並べたサムネイル表示を切り替えます。どちらも作品をタップして起動できます。</p></article>
+      <article><span class="guide-chip">ⓘ</span><h3>作品ごとの設定</h3><p>作品のⓘから、タイトル名の編集、CPUクロックの個別設定、キャッシュの削除ができます。キャッシュがある作品にはドライブのマークが付きます。</p></article>
+      <article><span class="guide-chip">長押し</span><h3>タイトル画像を登録</h3><p>ゲームのタイトル画面でモニターを長押しし、「タイトル画面として登録」を選びます。次に一覧を開くと、その画像がサムネイルに表示されます。</p></article>
+    </div>
+  </div>
+</section>
+<section class="wrap section" id="screens">
+  <p class="eyebrow">03 / PLAY</p>
+  <h2>ゲームに合わせて操作する</h2>
+  <div class="guide-grid">
+    <article><span class="guide-chip">キーボード</span><h3>キーで操作</h3><p>画面下のキーボードで入力します。キーボードを左へスワイプするとタッチコントローラーに切り替わります。コントローラー上部の「キー設定」から割り当てを変更できます。</p></article>
+    <article id="mouse-fullscreen"><span class="guide-chip">マウス</span><h3>画面を直接操作</h3><p>モニターをダブルタップすると全画面になります。画面をドラッグでカーソル移動、1本指タップで左クリック、2本指タップで右クリックです。もう一度ダブルタップすると通常表示に戻ります。</p></article>
+    <article><span class="guide-chip">Bluetooth</span><h3>外部コントローラー</h3><p>端末のBluetooth設定でコントローラーを接続します。アプリの「オプション」からBluetooth用のキー割り当てを設定できます。</p></article>
+  </div>
+  <div class="play-preview">
+    <figure><img src="images/duo-fullscreen-controller.jpg" loading="lazy" alt="Duoの横向き全画面。左に十字キー、右にA・B、その上に一時停止ボタン"><figcaption>開発版ビルド42 · Duoシミュレーター · 見開き横画面</figcaption></figure>
+    <div><p class="preview-label">開発版プレビュー</p><h3>全画面でもコントローラーを使う</h3><p>左の十字キー、右のA・B、その上の一時停止・再生を使って操作します。画面のボタンがない場所を長押しすると、コントローラーの表示を切り替えられます。</p><p>横向きの既定表示は「オプション → 表示 → 横画面の全画面でコントローラーを表示」で変更できます。</p></div>
+  </div>
+</section>
 <section class="section help-bg" id="help"><div class="wrap"><p class="eyebrow">04 / NEED A HAND?</p><h2>つまずいたら、ここから。</h2>
 <p>SuperDepth が起動しない場合は、まず <a href="#superdepth-startup">「Bad command or file name」が出るとき</a>をご覧ください。</p>
 <div class="faq">
