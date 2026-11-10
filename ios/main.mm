@@ -180,10 +180,13 @@ static NSString* catalogNameForFolder(NSURL* folder) {
     return root ? [GameLibrary verifiedDisplayNameInFolder:root] : nil;
 }
 
+static NSString* const libraryThumbnailModeKey=@"PC98LibraryThumbnailMode";
+
 // A full-window list avoids the fold-aware alert's short, upper-panel viewport.
 @interface GameLocationsController : UITableViewController
 @property(copy) NSString* message;
 @property(strong) NSMutableArray<NSDictionary*>* choices;
+@property BOOL showsThumbnails;
 - (void)addTitle:(NSString*)title destructive:(BOOL)destructive action:(void (^)(void))action;
 - (void)addGame:(NSString*)title identifier:(NSString*)identifier cached:(BOOL)cached action:(void (^)(void))action
            info:(void (^)(void))info remove:(void (^)(void))remove;
@@ -193,7 +196,18 @@ static NSString* catalogNameForFolder(NSURL* folder) {
 - (void)viewDidLoad {
     [super viewDidLoad];self.title=@"ゲーム一覧";
     self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"閉じる" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
+    self.showsThumbnails=[NSUserDefaults.standardUserDefaults boolForKey:libraryThumbnailModeKey];
+    UISegmentedControl* mode=[[UISegmentedControl alloc] initWithItems:@[@"リスト",@"サムネイル"]];
+    mode.selectedSegmentIndex=self.showsThumbnails ? 1 : 0;
+    mode.accessibilityLabel=@"ゲーム一覧の表示形式";
+    [mode addTarget:self action:@selector(changeLibraryMode:) forControlEvents:UIControlEventValueChanged];
+    self.navigationItem.titleView=mode;
     self.tableView.rowHeight=UITableViewAutomaticDimension;self.tableView.estimatedRowHeight=60;
+}
+- (void)changeLibraryMode:(UISegmentedControl*)control {
+    self.showsThumbnails=control.selectedSegmentIndex==1;
+    [NSUserDefaults.standardUserDefaults setBool:self.showsThumbnails forKey:libraryThumbnailModeKey];
+    [self.tableView reloadData];
 }
 - (void)addTitle:(NSString*)title destructive:(BOOL)destructive action:(void (^)(void))action {
     [self.choices addObject:@{@"title":title,@"destructive":@(destructive),@"action":[action copy]}];
@@ -249,6 +263,21 @@ static NSString* catalogNameForFolder(NSURL* folder) {
         [label appendAttributedString:[NSAttributedString attributedStringWithAttachment:badge]];
         cell.textLabel.attributedText=label;
         cell.textLabel.accessibilityLabel=[choice[@"title"] stringByAppendingString:@"、キャッシュあり"];
+    }
+    NSString* identifier=choice[@"identifier"];
+    if(self.showsThumbnails && identifier.length) {
+        UIListContentConfiguration* content=[UIListContentConfiguration cellConfiguration];
+        if([choice[@"cached"] boolValue]) content.attributedText=cell.textLabel.attributedText;
+        else content.text=choice[@"title"];
+        content.textProperties.numberOfLines=0;
+        content.image=[UIImage imageWithContentsOfFile:titleScreenshotURL(identifier).path]
+            ?: [UIImage systemImageNamed:@"photo"];
+        content.imageProperties.maximumSize=CGSizeMake(128,80);
+        content.imageProperties.reservedLayoutSize=CGSizeMake(128,80);
+        content.imageProperties.cornerRadius=6;
+        content.imageProperties.tintColor=UIColor.tertiaryLabelColor;
+        cell.contentConfiguration=content;
+        cell.accessibilityLabel=[choice[@"cached"] boolValue] ? [choice[@"title"] stringByAppendingString:@"、キャッシュあり"] : choice[@"title"];
     }
     cell.accessoryType=choice[@"info"] ? UITableViewCellAccessoryDetailButton : UITableViewCellAccessoryDisclosureIndicator;
     return cell;
@@ -874,7 +903,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 }
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer*)gesture {
     if([gesture isKindOfClass:UILongPressGestureRecognizer.class])
-        return fullScreen && player && !fetching && !player->m->quit && !self.presentedViewController;
+        return player && !fetching && !player->m->quit && !self.presentedViewController &&
+            !(bossMode && hingeClosed) && (fullScreen || [self canRegisterTitleFrame]);
     return YES;
 }
 - (void)pauseFromFullscreenMenu {
@@ -883,16 +913,44 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     fullscreenMenuPaused=YES;
     self.status.text=@"一時停止 — 画面をタップして再開";
 }
+- (BOOL)canRegisterTitleFrame {
+    return self.currentID.length && ![self.currentID isEqualToString:@"demo"] &&
+        self.monitor.image && self.displayedSourceFrame && !(bossMode && hingeClosed);
+}
+- (void)registerTitleImage:(UIImage*)shown source:(UIImage*)source identifier:(NSString*)identifier {
+    if(![identifier isEqualToString:self.currentID] || (bossMode && hingeClosed)) return;
+    CGDataProviderRef provider=source.CGImage ? CGImageGetDataProvider(source.CGImage) : nullptr;
+    NSData* pixels=provider ? CFBridgingRelease(CGDataProviderCopyData(provider)) : nil;
+    if(!pixels.length || !writeTitleScreenshot(shown,identifier)) {
+        [self message:@"タイトル画面を保存できませんでした。"];
+        return;
+    }
+    NSData* digest=titleFrameDigest(pixels.bytes,pixels.length);
+    [NSUserDefaults.standardUserDefaults setObject:digest forKey:titleReferenceKey(identifier)];
+    self.titleReference=digest;
+    self.titleCaptureAttempted=YES;
+    self.status.text=@"タイトル画面を登録しました";
+}
 - (UIAlertController*)fullscreenMenu {
     UIAlertController* menu=[UIAlertController alertControllerWithTitle:@"操作" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
     __weak PlayerController* weak=self;
-    [menu addAction:[UIAlertAction actionWithTitle:@"一時停止" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
-        [weak pauseFromFullscreenMenu];
-    }]];
-    [menu addAction:[UIAlertAction actionWithTitle:@"リセット" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
-        PlayerController* s=weak;if(!s) return;
-        [s dismissViewControllerAnimated:YES completion:^{ [weak resetGame]; }];
-    }]];
+    if(fullScreen) {
+        [menu addAction:[UIAlertAction actionWithTitle:@"一時停止" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+            [weak pauseFromFullscreenMenu];
+        }]];
+        [menu addAction:[UIAlertAction actionWithTitle:@"リセット" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
+            PlayerController* s=weak;if(!s) return;
+            [s dismissViewControllerAnimated:YES completion:^{ [weak resetGame]; }];
+        }]];
+    }
+    if([self canRegisterTitleFrame]) {
+        UIImage* shown=self.monitor.image;
+        UIImage* source=self.displayedSourceFrame;
+        NSString* identifier=self.currentID;
+        [menu addAction:[UIAlertAction actionWithTitle:@"タイトル画面として登録" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+            [weak registerTitleImage:shown source:source identifier:identifier];
+        }]];
+    }
     [menu addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
     return menu;
 }
@@ -1384,22 +1442,9 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     if(player && !player->m->quit && identifier.length && ![identifier isEqualToString:@"demo"]) {
         UIImage* shown=self.monitor.image;
         UIImage* source=self.displayedSourceFrame;
-        if(shown && source && !(bossMode && hingeClosed)) {
-            menu.message=@"タイトル画面で「今の画面を登録」を選ぶと、次回から同じ画面が出たときに自動でPNGを保存します。";
+        if([self canRegisterTitleFrame]) {
             [menu addTitle:@"今の画面をタイトル画面として登録" destructive:NO action:^{
-                PlayerController* s=weak;
-                if(!s || ![identifier isEqualToString:s.currentID] || (s->bossMode && s->hingeClosed)) return;
-                CGDataProviderRef provider=CGImageGetDataProvider(source.CGImage);
-                NSData* pixels=provider ? CFBridgingRelease(CGDataProviderCopyData(provider)) : nil;
-                if(!pixels.length || !writeTitleScreenshot(shown,identifier)) {
-                    [s message:@"タイトル画面を保存できませんでした。"];
-                    return;
-                }
-                NSData* digest=titleFrameDigest(pixels.bytes,pixels.length);
-                [NSUserDefaults.standardUserDefaults setObject:digest forKey:titleReferenceKey(identifier)];
-                s.titleReference=digest;
-                s.titleCaptureAttempted=YES;
-                s.status.text=@"タイトル画面を登録しました";
+                [weak registerTitleImage:shown source:source identifier:identifier];
             }];
         }
         NSURL* screenshot=titleScreenshotURL(identifier);
