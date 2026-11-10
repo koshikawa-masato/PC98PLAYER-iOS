@@ -13,6 +13,8 @@ typedef NS_ENUM(NSInteger, PC98PlaybackState) {
 @property(nonatomic) PC98PlaybackState playbackState;
 @property(nonatomic) BOOL expandedDisplay;
 @property(nonatomic) BOOL separateControls;
+@property(nonatomic) BOOL framelessDisplay;
+@property(nonatomic) CGFloat screenAspectRatio;
 - (CGRect)screenFrame;
 - (CGRect)controlsFrame;
 - (CGRect)statusFrame;

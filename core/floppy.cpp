@@ -30,8 +30,19 @@ static bool read_file(const std::string& path, std::vector<uint8_t>& out) {
     void* h = hostfs::open(path, 0, false, false);
     if (!h) return false;
     int64_t n = hostfs::seek(h, 0, 2);
+    constexpr int64_t normalLimit = 64 * 1024 * 1024;
+    constexpr int64_t scpLimit = 128 * 1024 * 1024;
     hostfs::seek(h, 0, 0);
-    if (n < 0 || n > 64 * 1024 * 1024) { hostfs::close(h); return false; }
+    if (n < 0 || n > scpLimit) { hostfs::close(h); return false; }
+    if (n > normalLimit) {
+        char signature[3];
+        if (hostfs::read(h, signature, sizeof signature) != sizeof signature ||
+            memcmp(signature, "SCP", sizeof signature) != 0) {
+            hostfs::close(h);
+            return false;
+        }
+        hostfs::seek(h, 0, 0);
+    }
     out.resize((size_t)n);
     int r = n ? hostfs::read(h, out.data(), (int)n) : 0;
     hostfs::close(h);

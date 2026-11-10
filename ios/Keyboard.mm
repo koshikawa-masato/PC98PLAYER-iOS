@@ -56,6 +56,7 @@ static std::vector<HardwareKey> hardwareKeys() {
 @property BOOL alignedLegend;
 @property CGFloat detailScale;
 @property BOOL expandedLegends;
+@property BOOL outlinesOnly;
 @property NSString* kana;
 @end
 @implementation PC98KeyButton
@@ -101,6 +102,16 @@ static std::vector<HardwareKey> hardwareKeys() {
 - (void)drawRect:(CGRect)rect {
     CGFloat detail=self.detailScale;
     CGRect r=CGRectInset(self.bounds,.5*detail,.5*detail);
+    if(self.outlinesOnly) {
+        UIBezierPath* outline=[self capPath:r];
+        [[UIColor colorWithWhite:0 alpha:.7] setStroke];
+        outline.lineWidth=3;
+        [outline stroke];
+        [[UIColor colorWithWhite:1 alpha:self.retroPressed?1:.65] setStroke];
+        outline.lineWidth=self.retroPressed?2:1;
+        [outline stroke];
+        return;
+    }
     [[UIColor colorWithWhite:.20 alpha:1] setFill]; [[self capPath:r] fill];
     CGContextRef context=UIGraphicsGetCurrentContext(); CGContextSaveGState(context);
     [[self capPath:r] addClip];
@@ -151,6 +162,33 @@ static std::vector<HardwareKey> hardwareKeys() {
 @property BOOL switchingInputMode;
 @end
 @implementation PC98Keyboard
+@synthesize controllerMode=_controllerMode;
+
+- (BOOL)controllerMode { return _controllerMode || self.outlinesOnly; }
+- (void)setLandscapeEdgeControls:(BOOL)value {
+    if(_landscapeEdgeControls==value) return;
+    _landscapeEdgeControls=value;
+    [self setNeedsLayout];
+}
+- (void)setOutlinesOnly:(BOOL)value {
+    if(_outlinesOnly==value) return;
+    if(value && !self.controllerKeys) [self buildController];
+    _outlinesOnly=value;
+    self.layer.shadowOpacity=value?0:.3;
+    self.controllerPause.backgroundColor=value?UIColor.clearColor:PC98Plastic(.96);
+    self.controllerPause.layer.borderWidth=value?1:0;
+    self.controllerPause.layer.borderColor=[UIColor colorWithWhite:1 alpha:.65].CGColor;
+    [self.controllerPause setTitleColor:value?UIColor.whiteColor:nil forState:UIControlStateNormal];
+    self.stickKnob.backgroundColor=value?UIColor.clearColor:PC98Plastic(.55);
+    self.stickKnob.layer.borderColor=(value?[UIColor colorWithWhite:1 alpha:.65]:PC98Plastic(.40)).CGColor;
+    for(PC98KeyButton* key in self.controllerKeys) {
+        key.outlinesOnly=value;
+        key.titleLabel.alpha=value?0:1;
+        [key setNeedsDisplay];
+    }
+    [self setNeedsLayout];
+    [self setNeedsDisplay];
+}
 - (instancetype)initWithFrame:(CGRect)frame {
     if((self=[super initWithFrame:frame])) {
         self.multipleTouchEnabled=YES; self.backgroundColor=UIColor.clearColor; self.opaque=NO; self.contentMode=UIViewContentModeRedraw;
@@ -197,7 +235,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     CGPoint point=[swipe locationInView:self.superview];
     CGPoint movement=CGPointMake(point.x-panelSwipeOrigin.x,point.y-panelSwipeOrigin.y);
     if(CGPointEqualToPoint(movement,CGPointZero)) movement=[swipe velocityInView:self.superview];
-    return !self.switchingInputMode && std::abs(movement.x)>=std::abs(movement.y)*1.4 &&
+    return !self.outlinesOnly && !self.switchingInputMode && std::abs(movement.x)>=std::abs(movement.y)*1.4 &&
            (self.controllerMode ? movement.x>=0 : movement.x<=0);
 }
 - (void)swipeInputPanel:(UIPanGestureRecognizer*)gesture {
@@ -227,6 +265,11 @@ static std::vector<HardwareKey> hardwareKeys() {
             self.transform=CGAffineTransformMakeTranslation(direction*distance,0);
         }
     } completion:^(BOOL finished) {
+        if(self.outlinesOnly) {
+            self.transform=CGAffineTransformIdentity;
+            self.switchingInputMode=NO;
+            return;
+        }
         [self releaseAll];
         self.controllerMode=!self.controllerMode;
         if(self.controllerMode && !self.controllerKeys) [self buildController];
@@ -301,7 +344,8 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (void)updateControllerPause:(BOOL)paused enabled:(BOOL)enabled {
     if(!self.controllerPause) return;
-    NSString* title=paused ? @"▶ 再開" : @"Ⅱ ポーズ";
+    self.controllerPause.accessibilityLabel=paused?@"再開":@"一時停止";
+    NSString* title=self.outlinesOnly ? (paused?@"▶":@"Ⅱ") : (paused?@"▶ 再開":@"Ⅱ ポーズ");
     if(![self.controllerPause.currentTitle isEqualToString:title])
         [self.controllerPause setTitle:title forState:UIControlStateNormal];
     self.controllerPause.enabled=enabled;
@@ -335,9 +379,10 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (void)layoutController {
     CGFloat width=self.bounds.size.width, height=self.bounds.size.height;
-    CGFloat unit=MAX(1,MIN(74,MIN((height-12)/3,(width-30)/6)));
-    CGFloat left=MAX(6,(width*.28-1.5*unit));
-    CGFloat top=(height-3*unit)/2;
+    CGFloat controlsTop=self.landscapeEdgeControls ? 44 : 0;
+    CGFloat unit=MAX(1,MIN(74,MIN((height-controlsTop-12)/3,(width-30)/6)));
+    CGFloat left=self.landscapeEdgeControls ? 6 : MAX(6,(width*.28-1.5*unit));
+    CGFloat top=controlsTop+(height-controlsTop-3*unit)/2;
     stickFrame=CGRectMake(left,top,3*unit,3*unit);
     CGFloat knob=unit*.63;
     self.stickKnob.bounds=CGRectMake(0,0,knob,knob);
@@ -346,7 +391,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     const int cols[]={1,0,2,1}, lines[]={0,1,1,2};
     for(int i=0;i<4;++i)
         self.controllerKeys[i].frame=CGRectInset(CGRectMake(left+cols[i]*unit,top+lines[i]*unit,unit,unit),2,2);
-    CGFloat right=width-MAX(8,width*.09);
+    CGFloat right=width-(self.landscapeEdgeControls ? 6 : MAX(8,width*.09));
     self.controllerKeys[4].frame=CGRectInset(CGRectMake(right-2*unit,top+1.5*unit,unit,unit),2,2);
     self.controllerKeys[5].frame=CGRectInset(CGRectMake(right-unit,top+.8*unit,unit,unit),2,2);
     CGRect a=self.controllerKeys[4].frame, b=self.controllerKeys[5].frame;
@@ -456,6 +501,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     }
 }
 - (void)drawRect:(CGRect)rect {
+    if(self.outlinesOnly) return;
     if(self.controllerMode) {
         PC98Gradient(CGRectInset(self.bounds,1,1),PC98Plastic(.91),PC98Plastic(.69),10);
         [PC98Plastic(.61) setFill];
@@ -492,7 +538,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     [super layoutSubviews];
     CGRect caseFrame=self.controllerMode || !self.hardwareLayout ? CGRectInset(self.bounds,1,1) : [self hardwareFrame];
     self.layer.shadowPath=[UIBezierPath bezierPathWithRoundedRect:caseFrame cornerRadius:10].CGPath;
-    self.controllerSettings.hidden=!self.controllerMode;
+    self.controllerSettings.hidden=!self.controllerMode || self.outlinesOnly;
     self.controllerPause.hidden=!self.controllerMode;
     self.stickKnob.hidden=!self.controllerMode;
     for(PC98KeyButton* key in self.controllerKeys) {
@@ -629,6 +675,10 @@ static std::vector<HardwareKey> hardwareKeys() {
     }
     return nearest;
 }
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent*)event {
+    return [super pointInside:point withEvent:event] && (!self.outlinesOnly || CGRectContainsPoint(stickFrame,point) || [self actionButtonsAt:point]!=0 ||
+        (!self.controllerPause.hidden && CGRectContainsPoint(self.controllerPause.frame,point)));
+}
 - (void)touchesBegan:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
     NSMutableArray* pressed=[NSMutableArray new];
     for(UITouch* t in set) {
@@ -699,7 +749,8 @@ static std::vector<HardwareKey> hardwareKeys() {
 - (BOOL)controllerChordForTesting:(BOOL (^)(int scan))isDown {
     PC98Keyboard* controller=[[PC98Keyboard alloc] initWithFrame:self.bounds];
     controller.keyChanged=self.keyChanged;
-    [controller buildController];
+    controller.outlinesOnly=self.outlinesOnly;
+    if(!controller.controllerKeys) [controller buildController];
     [controller layoutController];
     for(NSUInteger index=0;index<controller.controllerKeys.count;++index)
         controller.controllerKeys[index].tag=controllerDefaultScans[index];

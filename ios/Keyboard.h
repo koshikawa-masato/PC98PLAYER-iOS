@@ -2,6 +2,8 @@
 #import <UIKit/UIKit.h>
 @interface PC98Keyboard : UIView
 @property(nonatomic) BOOL hardwareLayout;
+@property(nonatomic) BOOL outlinesOnly;
+@property(nonatomic) BOOL landscapeEdgeControls;
 @property(copy) void (^pauseChanged)(void);
 @property(copy) void (^controllerSettingsOpening)(void);
 - (void)loadControllerBindingsForGame:(NSString*)identifier;

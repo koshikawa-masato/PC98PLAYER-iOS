@@ -77,25 +77,45 @@ static UIImage* playbackLampImage(BOOL illuminated,BOOL red) {
     if(_separateControls==value) return;
     _separateControls=value;[self setNeedsDisplay];[self setNeedsLayout];
 }
+- (CGFloat)screenAspectRatio {
+    return _screenAspectRatio>0 ? _screenAspectRatio : 640.0/400.0;
+}
+@synthesize screenAspectRatio=_screenAspectRatio;
+
 - (CGRect)cabinetFrame {
+    CGFloat ratio=self.screenAspectRatio;
     if(self.expandedDisplay) {
-        CGFloat screenHeight=MAX(1,MIN(self.bounds.size.height-(self.separateControls?20:71),(self.bounds.size.width-(self.separateControls?28:36))/1.6));
+        CGFloat screenHeight=MAX(1,MIN(self.bounds.size.height-(self.separateControls?20:71),(self.bounds.size.width-(self.separateControls?28:36))/ratio));
         if(self.separateControls) screenHeight*=.96; // Keep the bezel clear of the display’s rounded corners.
-        CGFloat width=screenHeight*1.6+(self.separateControls?16:24), height=screenHeight+(self.separateControls?16:67);
+        CGFloat width=screenHeight*ratio+(self.separateControls?16:24), height=screenHeight+(self.separateControls?16:67);
         return CGRectMake((self.bounds.size.width-width)/2,(self.bounds.size.height-height)/2,width,height);
     }
     CGFloat width=MAX(1,MIN(self.bounds.size.width-12,(self.bounds.size.height-42)*1.31));
-    CGFloat height=(width-44)/1.6+92;
+    if(ratio<640.0/400.0)
+        width=MAX(1,MIN(width,44+MAX(1,self.bounds.size.height-122)*ratio));
+    CGFloat height=MAX(1,width-44)/ratio+92;
     return CGRectMake((self.bounds.size.width-width)/2,MAX(0,(self.bounds.size.height-height-30)/2),width,height);
 }
 - (CGRect)screenFrame {
+    CGFloat ratio=self.screenAspectRatio;
+    if(self.framelessDisplay) {
+        CGFloat availableHeight=MAX(1,CGRectGetHeight(self.bounds)-(self.separateControls?0:52));
+        CGFloat width=MIN(CGRectGetWidth(self.bounds),availableHeight*ratio);
+        CGFloat height=width/ratio;
+        return CGRectMake((CGRectGetWidth(self.bounds)-width)/2,(availableHeight-height)/2,width,height);
+    }
     CGRect r=[self cabinetFrame];
     CGFloat side=self.expandedDisplay?(self.separateControls?8:12):22, top=self.expandedDisplay?(self.separateControls?8:10):22;
-    return CGRectMake(r.origin.x+side,r.origin.y+top,MAX(1,r.size.width-side*2),MAX(1,(r.size.width-side*2)/1.6));
+    return CGRectMake(r.origin.x+side,r.origin.y+top,MAX(1,r.size.width-side*2),MAX(1,(r.size.width-side*2)/ratio));
 }
-- (CGRect)controlsFrame { CGRect r=[self cabinetFrame],s=[self screenFrame]; return CGRectMake(r.origin.x+15,CGRectGetMaxY(s)+(self.expandedDisplay?10:13),r.size.width-30,self.expandedDisplay?28:30); }
-- (CGRect)statusFrame { CGRect r=[self cabinetFrame]; return CGRectMake(r.origin.x+31,CGRectGetMaxY(r)-(self.expandedDisplay?15:20),r.size.width-53,self.expandedDisplay?10:12); }
+- (CGRect)controlsFrame {
+    if(self.framelessDisplay) return CGRectMake(10,CGRectGetMaxY([self screenFrame])+5,MAX(1,CGRectGetWidth(self.bounds)-20),30);
+    CGRect r=[self cabinetFrame],s=[self screenFrame]; return CGRectMake(r.origin.x+15,CGRectGetMaxY(s)+(self.expandedDisplay?10:13),r.size.width-30,self.expandedDisplay?28:30); }
+- (CGRect)statusFrame {
+    if(self.framelessDisplay) return CGRectMake(12,CGRectGetMaxY([self controlsFrame])+4,MAX(1,CGRectGetWidth(self.bounds)-24),12);
+    CGRect r=[self cabinetFrame]; return CGRectMake(r.origin.x+31,CGRectGetMaxY(r)-(self.expandedDisplay?15:20),r.size.width-53,self.expandedDisplay?10:12); }
 - (void)drawRect:(CGRect)rect {
+    if(self.framelessDisplay) return;
     CGRect r=[self cabinetFrame],screen=[self screenFrame];
     CGContextRef c=UIGraphicsGetCurrentContext();
     // Low circular foot and short neck, like a desktop CRT swivel stand.

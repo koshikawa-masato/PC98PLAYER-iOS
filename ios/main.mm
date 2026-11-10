@@ -10,6 +10,7 @@
 #import "RetroHardware.h"
 #include "AudioOut.h"
 #include "font.h"
+#include "floppy.h"
 #include "player.h"
 #include "StartupPath.h"
 #include "GraphicsSettings.h"
@@ -24,8 +25,8 @@
 #import "AudioCaptureProbe.h"
 #endif
 
-// Keep the largest 8:5 display area clear of an OS camera or system occlusion.
-static CGRect monitorAvoiding(CGRect panel,CGRect obstacle) {
+// Keep the largest display area clear of an OS camera or system occlusion.
+static CGRect monitorAvoiding(CGRect panel,CGRect obstacle,CGFloat ratio=640.0/400.0) {
     CGRect cut=CGRectIntersection(panel,obstacle);
     if(CGRectIsNull(cut) || CGRectIsEmpty(cut)) return panel;
     CGRect candidates[]={
@@ -35,7 +36,7 @@ static CGRect monitorAvoiding(CGRect panel,CGRect obstacle) {
         CGRectMake(CGRectGetMaxX(cut),panel.origin.y,CGRectGetMaxX(panel)-CGRectGetMaxX(cut),panel.size.height)};
     CGRect best=CGRectZero; CGFloat bestHeight=-1;
     for(CGRect r:candidates) {
-        CGFloat height=MIN(r.size.height,r.size.width/1.6);
+        CGFloat height=MIN(r.size.height,r.size.width/ratio);
         if(height>bestHeight) { best=r; bestHeight=height; }
     }
     return best;
@@ -182,35 +183,175 @@ static NSString* catalogNameForFolder(NSURL* folder) {
 
 static NSString* const libraryThumbnailModeKey=@"PC98LibraryThumbnailMode";
 
-// A full-window list avoids the fold-aware alert's short, upper-panel viewport.
-@interface GameLocationsController : UITableViewController
+@interface GameThumbnailCell : UICollectionViewCell
+@property(strong) UIImageView* screenshot;
+@property(strong) UIImageView* cacheBadge;
+@property(strong) UIButton* infoButton;
+@property(strong) UIButton* gameButton;
+@property(copy) void (^showInfo)(void);
+@property(copy) void (^launchGame)(void);
+@end
+
+@implementation GameThumbnailCell
+- (instancetype)initWithFrame:(CGRect)frame {
+    if(!(self=[super initWithFrame:frame])) return nil;
+    self.contentView.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;
+    self.contentView.layer.cornerRadius=8;
+    self.contentView.clipsToBounds=YES;
+
+    self.screenshot=[UIImageView new];
+    self.screenshot.contentMode=UIViewContentModeScaleAspectFit;
+    self.screenshot.tintColor=UIColor.secondaryLabelColor;
+    self.gameButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    [self.gameButton addTarget:self action:@selector(openGame) forControlEvents:UIControlEventTouchUpInside];
+    self.cacheBadge=[[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"internaldrive.fill"]];
+    self.cacheBadge.contentMode=UIViewContentModeCenter;
+    self.cacheBadge.tintColor=UIColor.whiteColor;
+    self.cacheBadge.backgroundColor=[UIColor.blackColor colorWithAlphaComponent:0.75];
+    self.cacheBadge.layer.cornerRadius=13;
+
+    self.infoButton=[UIButton buttonWithType:UIButtonTypeSystem];
+    [self.infoButton setImage:[UIImage systemImageNamed:@"info.circle.fill"] forState:UIControlStateNormal];
+    self.infoButton.tintColor=UIColor.whiteColor;
+    self.infoButton.accessibilityLabel=@"作品情報";
+    [self.infoButton addTarget:self action:@selector(openInfo) forControlEvents:UIControlEventTouchUpInside];
+    UIView* infoBackground=[UIView new];
+    infoBackground.userInteractionEnabled=NO;
+    infoBackground.backgroundColor=[UIColor.blackColor colorWithAlphaComponent:0.75];
+    infoBackground.layer.cornerRadius=14;
+    for(UIView* item in @[self.screenshot,self.cacheBadge,self.gameButton,infoBackground,self.infoButton]) {
+        item.translatesAutoresizingMaskIntoConstraints=NO;
+        [self.contentView addSubview:item];
+    }
+    [NSLayoutConstraint activateConstraints:@[
+        [self.screenshot.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor],
+        [self.screenshot.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
+        [self.screenshot.topAnchor constraintEqualToAnchor:self.contentView.topAnchor],
+        [self.screenshot.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor],
+        [self.gameButton.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor],
+        [self.gameButton.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
+        [self.gameButton.topAnchor constraintEqualToAnchor:self.contentView.topAnchor],
+        [self.gameButton.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor],
+        [self.cacheBadge.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:8],
+        [self.cacheBadge.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:8],
+        [self.cacheBadge.widthAnchor constraintEqualToConstant:26],
+        [self.cacheBadge.heightAnchor constraintEqualToConstant:26],
+        [self.infoButton.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
+        [self.infoButton.topAnchor constraintEqualToAnchor:self.contentView.topAnchor],
+        [self.infoButton.widthAnchor constraintEqualToConstant:44],
+        [self.infoButton.heightAnchor constraintEqualToConstant:44],
+        [infoBackground.centerXAnchor constraintEqualToAnchor:self.infoButton.centerXAnchor],
+        [infoBackground.centerYAnchor constraintEqualToAnchor:self.infoButton.centerYAnchor],
+        [infoBackground.widthAnchor constraintEqualToConstant:28],
+        [infoBackground.heightAnchor constraintEqualToConstant:28],
+    ]];
+    return self;
+}
+- (void)openInfo { if(self.showInfo) self.showInfo(); }
+- (void)openGame { if(self.launchGame) self.launchGame(); }
+@end
+
+@interface GameLocationsController : UIViewController <UITableViewDataSource,UITableViewDelegate,UICollectionViewDataSource,UICollectionViewDelegateFlowLayout>
 @property(copy) NSString* message;
+@property(copy) void (^demoAction)(void);
 @property(strong) NSMutableArray<NSDictionary*>* choices;
+@property(strong) UITableView* tableView;
+@property(strong) UICollectionView* grid;
+@property(strong) UILabel* emptyGrid;
 @property BOOL showsThumbnails;
-- (void)addTitle:(NSString*)title destructive:(BOOL)destructive action:(void (^)(void))action;
 - (void)addGame:(NSString*)title identifier:(NSString*)identifier cached:(BOOL)cached action:(void (^)(void))action
            info:(void (^)(void))info remove:(void (^)(void))remove;
 @end
 @implementation GameLocationsController
-- (instancetype)init { if((self=[super initWithStyle:UITableViewStyleInsetGrouped])) self.choices=[NSMutableArray new];return self; }
+- (instancetype)init { if((self=[super init])) self.choices=[NSMutableArray new];return self; }
 - (void)viewDidLoad {
     [super viewDidLoad];self.title=@"ゲーム一覧";
+    self.view.backgroundColor=UIColor.systemGroupedBackgroundColor;
     self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"閉じる" style:UIBarButtonItemStylePlain target:self action:@selector(close)];
+    self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"デモ" style:UIBarButtonItemStylePlain target:self action:@selector(openDemo)];
     self.showsThumbnails=[NSUserDefaults.standardUserDefaults boolForKey:libraryThumbnailModeKey];
     UISegmentedControl* mode=[[UISegmentedControl alloc] initWithItems:@[@"リスト",@"サムネイル"]];
     mode.selectedSegmentIndex=self.showsThumbnails ? 1 : 0;
     mode.accessibilityLabel=@"ゲーム一覧の表示形式";
     [mode addTarget:self action:@selector(changeLibraryMode:) forControlEvents:UIControlEventValueChanged];
     self.navigationItem.titleView=mode;
-    self.tableView.rowHeight=UITableViewAutomaticDimension;self.tableView.estimatedRowHeight=60;
+
+    self.tableView=[[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
+    self.tableView.dataSource=self;self.tableView.delegate=self;
+    self.tableView.rowHeight=UITableViewAutomaticDimension;self.tableView.estimatedRowHeight=72;
+
+    UICollectionViewFlowLayout* layout=[UICollectionViewFlowLayout new];
+    layout.minimumInteritemSpacing=8;
+    layout.minimumLineSpacing=8;
+    layout.sectionInset=UIEdgeInsetsMake(8,8,8,8);
+    self.grid=[[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:layout];
+    self.grid.backgroundColor=UIColor.clearColor;
+    self.grid.dataSource=self;self.grid.delegate=self;
+    [self.grid registerClass:GameThumbnailCell.class forCellWithReuseIdentifier:@"GameThumbnail"];
+    self.emptyGrid=[UILabel new];
+    self.emptyGrid.text=self.message ?: @"ゲームが登録されていません。";
+    self.emptyGrid.textColor=UIColor.secondaryLabelColor;
+    self.emptyGrid.textAlignment=NSTextAlignmentCenter;
+    self.emptyGrid.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+    self.emptyGrid.adjustsFontForContentSizeCategory=YES;
+    self.emptyGrid.numberOfLines=0;
+    self.grid.backgroundView=self.emptyGrid;
+
+    UILayoutGuide* safe=self.view.safeAreaLayoutGuide;
+    for(UIScrollView* scroll in @[self.tableView,self.grid]) {
+        scroll.translatesAutoresizingMaskIntoConstraints=NO;
+        [self.view addSubview:scroll];
+        [NSLayoutConstraint activateConstraints:@[
+            [scroll.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
+            [scroll.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
+            [scroll.topAnchor constraintEqualToAnchor:safe.topAnchor],
+            [scroll.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor],
+        ]];
+    }
+    [self updateLibraryMode];
+}
+- (void)updateLibraryMode {
+    self.tableView.hidden=self.showsThumbnails;
+    self.grid.hidden=!self.showsThumbnails;
+    self.emptyGrid.hidden=self.choices.count>0;
 }
 - (void)changeLibraryMode:(UISegmentedControl*)control {
     self.showsThumbnails=control.selectedSegmentIndex==1;
     [NSUserDefaults.standardUserDefaults setBool:self.showsThumbnails forKey:libraryThumbnailModeKey];
-    [self.tableView reloadData];
+    [self updateLibraryMode];
 }
-- (void)addTitle:(NSString*)title destructive:(BOOL)destructive action:(void (^)(void))action {
-    [self.choices addObject:@{@"title":title,@"destructive":@(destructive),@"action":[action copy]}];
+- (void)openDemo { [self dismissViewControllerAnimated:YES completion:self.demoAction]; }
+- (NSInteger)collectionView:(UICollectionView*)view numberOfItemsInSection:(NSInteger)section {
+    return self.choices.count;
+}
+- (CGSize)collectionView:(UICollectionView*)view layout:(UICollectionViewLayout*)layout sizeForItemAtIndexPath:(NSIndexPath*)index {
+    CGFloat available=MAX(1,view.bounds.size.width-16);
+    NSInteger columns=MAX(2,(NSInteger)floor((available+8)/168));
+    CGFloat width=MAX(1,floor((available-(columns-1)*8)/columns));
+    return CGSizeMake(width,floor(width*400/640));
+}
+- (UICollectionViewCell*)collectionView:(UICollectionView*)view cellForItemAtIndexPath:(NSIndexPath*)index {
+    GameThumbnailCell* cell=[view dequeueReusableCellWithReuseIdentifier:@"GameThumbnail" forIndexPath:index];
+    NSDictionary* choice=self.choices[index.item];
+    UIImage* screenshot=[UIImage imageWithContentsOfFile:titleScreenshotURL(choice[@"identifier"]).path];
+    cell.screenshot.image=screenshot ?: [UIImage systemImageNamed:@"photo"];
+    cell.screenshot.contentMode=screenshot ? UIViewContentModeScaleAspectFit : UIViewContentModeCenter;
+    BOOL cached=[choice[@"cached"] boolValue];
+    cell.cacheBadge.hidden=!cached;
+    cell.gameButton.accessibilityLabel=cached ? [choice[@"title"] stringByAppendingString:@"、キャッシュあり"] : choice[@"title"];
+    cell.infoButton.accessibilityLabel=[choice[@"title"] stringByAppendingString:@"の作品情報"];
+    cell.showInfo=choice[@"info"];
+    __weak GameLocationsController* weak=self;
+    void (^action)(void)=choice[@"action"];
+    cell.launchGame=^{ [weak dismissViewControllerAnimated:YES completion:action]; };
+    return cell;
+}
+- (void)collectionView:(UICollectionView*)view didSelectItemAtIndexPath:(NSIndexPath*)index {
+    [self openChoice:index.item];
+}
+- (void)openChoice:(NSInteger)index {
+    void (^action)(void)=self.choices[index][@"action"];
+    [self dismissViewControllerAnimated:YES completion:action];
 }
 - (void)addGame:(NSString*)title identifier:(NSString*)identifier cached:(BOOL)cached action:(void (^)(void))action
            info:(void (^)(void))info remove:(void (^)(void))remove {
@@ -235,6 +376,8 @@ static NSString* const libraryThumbnailModeKey=@"PC98LibraryThumbnailMode";
             [paths addObject:[NSIndexPath indexPathForRow:row inSection:0]];
         }];
         [tableView deleteRowsAtIndexPaths:paths withRowAnimation:UITableViewRowAnimationAutomatic];
+        [self.grid reloadData];
+        [self updateLibraryMode];
         completion(YES);
     }];
     trash.image=[UIImage systemImageNamed:@"trash"];
@@ -265,15 +408,15 @@ static NSString* const libraryThumbnailModeKey=@"PC98LibraryThumbnailMode";
         cell.textLabel.accessibilityLabel=[choice[@"title"] stringByAppendingString:@"、キャッシュあり"];
     }
     NSString* identifier=choice[@"identifier"];
-    if(self.showsThumbnails && identifier.length) {
+    if(identifier.length) {
         UIListContentConfiguration* content=[UIListContentConfiguration cellConfiguration];
         if([choice[@"cached"] boolValue]) content.attributedText=cell.textLabel.attributedText;
         else content.text=choice[@"title"];
         content.textProperties.numberOfLines=0;
         content.image=[UIImage imageWithContentsOfFile:titleScreenshotURL(identifier).path]
             ?: [UIImage systemImageNamed:@"photo"];
-        content.imageProperties.maximumSize=CGSizeMake(128,80);
-        content.imageProperties.reservedLayoutSize=CGSizeMake(128,80);
+        content.imageProperties.maximumSize=CGSizeMake(88,55);
+        content.imageProperties.reservedLayoutSize=CGSizeMake(88,55);
         content.imageProperties.cornerRadius=6;
         content.imageProperties.tintColor=UIColor.tertiaryLabelColor;
         cell.contentConfiguration=content;
@@ -283,8 +426,7 @@ static NSString* const libraryThumbnailModeKey=@"PC98LibraryThumbnailMode";
     return cell;
 }
 - (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)index {
-    void (^action)(void)=self.choices[index.row][@"action"];
-    [self dismissViewControllerAnimated:YES completion:action];
+    [self openChoice:index.row];
 }
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
 @end
@@ -292,6 +434,16 @@ static NSString* const libraryThumbnailModeKey=@"PC98LibraryThumbnailMode";
 static NSString* const cacheOnLaunchKey=@"PC98CacheOnLaunch";
 static BOOL usesGameCache(void) {
     NSNumber* enabled=[NSUserDefaults.standardUserDefaults objectForKey:cacheOnLaunchKey];
+    return enabled ? enabled.boolValue : YES;
+}
+static NSString* const portraitEdgeToEdgeKey=@"PC98PortraitEdgeToEdge";
+static BOOL usesPortraitEdgeToEdge(void) {
+    NSNumber* enabled=[NSUserDefaults.standardUserDefaults objectForKey:portraitEdgeToEdgeKey];
+    return enabled ? enabled.boolValue : YES;
+}
+static NSString* const landscapeControllerDefaultKey=@"PC98LandscapeControllerDefault";
+static BOOL showsLandscapeControllerByDefault(void) {
+    NSNumber* enabled=[NSUserDefaults.standardUserDefaults objectForKey:landscapeControllerDefaultKey];
     return enabled ? enabled.boolValue : YES;
 }
 static NSString* const launchFullscreenKey=@"PC98LaunchFullscreen";
@@ -335,6 +487,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 @property BOOL manualDuo;
 @property BOOL bossMode;
 @property BOOL launchFullscreen;
+@property BOOL landscapeControllerDefault;
+@property BOOL portraitEdgeToEdge;
 @property BOOL cacheOnLaunch;
 @property(copy) NSArray<NSNumber*>* bluetoothBindings;
 @property content_filter::Settings filterSettings;
@@ -350,7 +504,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 7; }
-- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?5:section==3?6:section==4?1:section==5?5:2; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?7:section==3?6:section==4?1:section==5?5:2; }
 - (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数",@"表示",@"コンテンツフィルター",@"Bluetoothコントローラー",@"CPUクロックのデフォルト",@"このアプリについて"][section]; }
 - (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section {
     if(section==1)return @"変更を適用するとゲームが再起動します。必要な場合は、先にゲーム内で保存してください。";
@@ -373,7 +527,26 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     } else if(index.section==2) {
         cell.textLabel.text=index.row==0?@"自動判別":index.row==1?@"Duo上下表示を固定":@"ボスがきた";
         cell.detailTextLabel.text=index.row==0?@"端末とヒンジの状態に合わせる":index.row==1?@"上にモニタ、下にキーボード":@"Duoを閉じると一時停止・アウターを非表示";
-        if(index.row==4) {
+        if(index.row==6) {
+            cell.textLabel.text=@"横画面の全画面でコントローラーを表示";
+            cell.textLabel.numberOfLines=0;
+            cell.detailTextLabel.text=@"プレイ中は長押しメニューで切り替え";
+            UISwitch* toggle=[UISwitch new];
+            toggle.on=self.landscapeControllerDefault;
+            toggle.accessibilityLabel=cell.textLabel.text;
+            [toggle addTarget:self action:@selector(changeLandscapeControllerDefault:) forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView=toggle;
+            cell.selectionStyle=UITableViewCellSelectionStyleNone;
+        } else if(index.row==5) {
+            cell.textLabel.text=@"縦画面で横幅いっぱいに表示";
+            cell.detailTextLabel.text=@"iPhoneの縦画面でモニターの枠を外す";
+            UISwitch* toggle=[UISwitch new];
+            toggle.on=self.portraitEdgeToEdge;
+            toggle.accessibilityLabel=cell.textLabel.text;
+            [toggle addTarget:self action:@selector(changePortraitEdgeToEdge:) forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView=toggle;
+            cell.selectionStyle=UITableViewCellSelectionStyleNone;
+        } else if(index.row==4) {
             cell.textLabel.text=@"キャッシュを作って起動";
             cell.detailTextLabel.text=@"オフの場合は元フォルダから直接読み込み";
             UISwitch* toggle=[UISwitch new];
@@ -474,6 +647,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     });
 }
 - (void)changeCacheOnLaunch:(UISwitch*)sender { self.cacheOnLaunch=sender.on; }
+- (void)changePortraitEdgeToEdge:(UISwitch*)sender { self.portraitEdgeToEdge=sender.on; }
+- (void)changeLandscapeControllerDefault:(UISwitch*)sender { self.landscapeControllerDefault=sender.on; }
 - (void)changeLaunchFullscreen:(UISwitch*)sender { self.launchFullscreen=sender.on; }
 - (void)changeBossMode:(UISwitch*)sender { self.bossMode=sender.on; }
 - (void)changeFilter:(UISwitch*)sender { auto settings=self.filterSettings;if(sender.tag==0)settings.adult=sender.on;else settings.harm=sender.on;self.filterSettings=settings; }
@@ -481,7 +656,9 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 - (void)cancel { [self dismissViewControllerAnimated:YES completion:^{if(self.cancelled)self.cancelled();}]; }
 - (void)apply {
     [NSUserDefaults.standardUserDefaults setObject:self.bluetoothBindings forKey:bluetoothBindingsKey];
+    [NSUserDefaults.standardUserDefaults setBool:self.landscapeControllerDefault forKey:landscapeControllerDefaultKey];
     [NSUserDefaults.standardUserDefaults setBool:self.launchFullscreen forKey:launchFullscreenKey];
+    [NSUserDefaults.standardUserDefaults setBool:self.portraitEdgeToEdge forKey:portraitEdgeToEdgeKey];
     [NSUserDefaults.standardUserDefaults setBool:self.cacheOnLaunch forKey:cacheOnLaunchKey];
     [NSUserDefaults.standardUserDefaults setInteger:self.clockMHz forKey:defaultClockKey];
     if(self.willApply)self.willApply(self.filterSettings);[self dismissViewControllerAnimated:YES completion:^{if(self.applied)self.applied(self.soundBoard,self.videoColors,self.manualDuo,self.bossMode,self.filterSettings);}]; }
@@ -507,6 +684,9 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     std::bitset<128> controllerKeys;
 }
 @property UIView* bossShield;
+@property(nonatomic,weak) UIDocumentPickerViewController* floppyPicker;
+@property(nonatomic) int floppyPickerUnit;
+@property(nonatomic,strong) NSNumber* fullscreenControllerOverride;
 @property id<UIInteraction> hingeInteraction;
 @property UIImageView* monitor;
 @property UIImage* displayedSourceFrame;
@@ -558,7 +738,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     pan.maximumNumberOfTouches=1;[self.monitor addGestureRecognizer:pan];
     UILongPressGestureRecognizer* hold=[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(fullscreenLongPress:)];
     hold.minimumPressDuration=.5;hold.numberOfTouchesRequired=1;hold.delegate=self;
-    [self.monitor addGestureRecognizer:hold];
+    [self.view addGestureRecognizer:hold];
     UITapGestureRecognizer* twoFingerTap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(rightClick)];
     twoFingerTap.numberOfTouchesRequired=2;[self.monitor addGestureRecognizer:twoFingerTap];
     UITapGestureRecognizer* doubleTap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(toggleFullScreen)];
@@ -576,8 +756,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.statusRow.spacing=4;
     [self.view addSubview:self.statusRow];
     self.toolbar=[UIStackView new]; self.toolbar.axis=UILayoutConstraintAxisHorizontal; self.toolbar.distribution=UIStackViewDistributionFillEqually; self.toolbar.spacing=3;
-    NSArray* titles=@[@"オプション",@"開く",@"一覧",@"▶︎ / Ⅱ",@"保存",@"読込",@"リセット",@"右クリック"];
-    SEL actions[]={@selector(showOptions),@selector(openFolder),@selector(showLibrary),@selector(togglePause),@selector(saveSlot),@selector(loadSlot),@selector(resetGame),@selector(rightClick)};
+    NSArray* titles=@[@"オプション",@"開く",@"一覧",@"▶︎ / Ⅱ",@"保存",@"読込",@"リセット",@"FDD",@"右クリック"];
+    SEL actions[]={@selector(showOptions),@selector(openFolder),@selector(showLibrary),@selector(togglePause),@selector(saveSlot),@selector(loadSlot),@selector(resetGame),@selector(showFloppyDrives),@selector(rightClick)};
     for(NSUInteger i=0;i<titles.count;++i) { UIButton* b=[UIButton buttonWithType:UIButtonTypeSystem]; [b setTitle:titles[i] forState:UIControlStateNormal]; b.titleLabel.font=[UIFont systemFontOfSize:10 weight:UIFontWeightMedium]; [b setTitleColor:[UIColor colorWithWhite:.18 alpha:1] forState:UIControlStateNormal]; [b setTitleColor:UIColor.grayColor forState:UIControlStateHighlighted]; b.backgroundColor=PC98Plastic(.87); b.layer.cornerRadius=2; b.layer.borderWidth=1; b.layer.borderColor=PC98Plastic(.55).CGColor; b.layer.shadowColor=UIColor.blackColor.CGColor; b.layer.shadowOffset=CGSizeMake(0,1); b.layer.shadowOpacity=.25; b.layer.shadowRadius=0; b.titleLabel.adjustsFontSizeToFitWidth=YES; [b addTarget:self action:actions[i] forControlEvents:UIControlEventTouchUpInside]; [self.toolbar addArrangedSubview:b]; }
     [self.view addSubview:self.toolbar];
     self.keyboard=[PC98Keyboard new]; __weak PlayerController* weak=self;
@@ -738,6 +918,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect safe=UIEdgeInsetsInsetRect(self.view.bounds,self.view.safeAreaInsets);
+    CGFloat screenRatio=640.0/(player ? player->fb_h : 400);
+    self.topPanel.screenAspectRatio=screenRatio;
     BOOL duo=manualDuo || hingeDuo;
     self.keyboard.hardwareLayout=duo || duoHardware;
     self.topPanel.expandedDisplay=duo || duoHardware;
@@ -779,8 +961,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         for(UIViewReservedRegion* region in [self.view reservedRegionsOfKind:UIViewReservedRegionKind.occlusionRegionKind options:UIViewReservedRegionQueryOptionsIncludeInactive]) {
             [occlusions addObject:@{@"frame":@[@(region.frame.origin.x),@(region.frame.origin.y),@(region.frame.size.width),@(region.frame.size.height)],@"active":@(region.isActive)}];
             if(!region.isActive) continue;
-            self.topPanel.frame=monitorAvoiding(self.topPanel.frame,region.frame);
-            fullscreenAvailable=monitorAvoiding(fullscreenAvailable,region.frame);
+            self.topPanel.frame=monitorAvoiding(self.topPanel.frame,region.frame,screenRatio);
+            fullscreenAvailable=monitorAvoiding(fullscreenAvailable,region.frame,screenRatio);
         }
     }
 #endif
@@ -789,6 +971,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     CGFloat keyboardSlack=(self.keyboard.bounds.size.height-MIN(self.keyboard.bounds.size.height-8,(self.keyboard.bounds.size.width-4)*.44))/2;
     BOOL separateControls=duo && !verticalDivision && keyboardSlack>=54;
     self.topPanel.separateControls=separateControls;
+    BOOL phonePortrait=self.traitCollection.userInterfaceIdiom==UIUserInterfaceIdiomPhone &&
+        self.view.bounds.size.width<self.view.bounds.size.height;
+    self.topPanel.framelessDisplay=phonePortrait && !verticalDivision && usesPortraitEdgeToEdge();
+    self.monitor.layer.cornerRadius=(fullScreen || self.topPanel.framelessDisplay)?0:4;
     if(separateControls) {
         CGRect lower=self.keyboard.frame;
         self.toolbar.frame=CGRectMake(lower.origin.x+12,lower.origin.y+4,lower.size.width-24,32);
@@ -799,9 +985,25 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     }
     [self.view bringSubviewToFront:self.toolbar];
     [self.view bringSubviewToFront:self.statusRow];
+    BOOL landscape=self.view.bounds.size.width>self.view.bounds.size.height;
+    self.keyboard.hidden=fullScreen && !(self.fullscreenControllerOverride
+        ? self.fullscreenControllerOverride.boolValue
+        : (!landscape || showsLandscapeControllerByDefault()));
+    BOOL duoLandscape=landscape && (duo || duoHardware) && !hingeClosed;
+    self.keyboard.landscapeEdgeControls=duoLandscape || (fullScreen && phoneLandscape);
     if(fullScreen) {
-        CGFloat width=MAX(1,MIN(fullscreenAvailable.size.width,fullscreenAvailable.size.height*1.6));
-        self.monitor.frame=CGRectMake(CGRectGetMidX(fullscreenAvailable)-width/2,CGRectGetMidY(fullscreenAvailable)-width/3.2,width,width/1.6);
+        // On the open Duo, keep the normal controller frame so the overlay
+        // changes appearance without moving any touch targets.
+        if(!duoLandscape) {
+            CGFloat availableWidth=CGRectGetWidth(safe)-12;
+            CGFloat keyboardWidth=MAX(1,self.keyboard.landscapeEdgeControls?availableWidth:MIN(availableWidth,760));
+            CGFloat keyboardHeight=MIN(200,MIN(keyboardWidth*.48,CGRectGetHeight(safe)*.42));
+            self.keyboard.frame=CGRectMake(CGRectGetMidX(safe)-keyboardWidth/2,
+                CGRectGetMaxY(safe)-keyboardHeight-4,keyboardWidth,keyboardHeight);
+        }
+        CGFloat width=MAX(1,MIN(fullscreenAvailable.size.width,fullscreenAvailable.size.height*screenRatio));
+        CGFloat height=width/screenRatio;
+        self.monitor.frame=CGRectMake(CGRectGetMidX(fullscreenAvailable)-width/2,CGRectGetMidY(fullscreenAvailable)-height/2,width,height);
     } else self.monitor.frame=[self.topPanel screenFrame];
     self.spinner.center=CGPointMake(w/2,h/2);
     [self.topPanel setNeedsDisplay];
@@ -834,12 +1036,15 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 #ifdef PC98PLAYER_TESTING
     [self.audioProbe event:fullScreen?@"fullscreen-enter":@"fullscreen-exit"];
 #endif
-    self.topPanel.hidden=fullScreen;self.keyboard.hidden=fullScreen;
+    self.topPanel.hidden=fullScreen;
+    self.keyboard.outlinesOnly=fullScreen;
     self.toolbar.hidden=fullScreen;self.statusRow.hidden=fullScreen;
     self.view.backgroundColor=fullScreen?UIColor.blackColor:PC98Plastic(.84);
     self.monitor.layer.cornerRadius=fullScreen?0:4;
     [self.monitor removeFromSuperview];
-    if(fullScreen) [self.view addSubview:self.monitor];else [self.topPanel addSubview:self.monitor];
+    if(fullScreen) {
+        [self.view insertSubview:self.monitor belowSubview:self.keyboard];
+    } else [self.topPanel addSubview:self.monitor];
     [self setNeedsStatusBarAppearanceUpdate];[self setNeedsUpdateOfHomeIndicatorAutoHidden];
 }
 - (void)message:(NSString*)message {
@@ -901,10 +1106,15 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     __weak PlayerController* weak=self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,60*NSEC_PER_MSEC),dispatch_get_main_queue(),^{ PlayerController* s=weak; if(s && s->player) machine_mouse(s->player->m,0,0,0); });
 }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer*)gesture shouldReceiveTouch:(UITouch*)touch {
+    if(![gesture isKindOfClass:UILongPressGestureRecognizer.class]) return YES;
+    if(!fullScreen) return touch.view==self.monitor;
+    return ![touch.view isDescendantOfView:self.keyboard];
+}
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer*)gesture {
     if([gesture isKindOfClass:UILongPressGestureRecognizer.class])
         return player && !fetching && !player->m->quit && !self.presentedViewController &&
-            !(bossMode && hingeClosed) && (fullScreen || [self canRegisterTitleFrame]);
+            !(bossMode && hingeClosed) && (fullScreen || [self.currentID isEqualToString:@"demo"] || [self canRegisterTitleFrame]);
     return YES;
 }
 - (void)pauseFromFullscreenMenu {
@@ -935,12 +1145,31 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     UIAlertController* menu=[UIAlertController alertControllerWithTitle:@"操作" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
     __weak PlayerController* weak=self;
     if(fullScreen) {
+        BOOL showController=self.keyboard.hidden;
+        NSString* controllerTitle=showController?@"コントローラーを表示":@"コントローラーを非表示";
         [menu addAction:[UIAlertAction actionWithTitle:@"一時停止" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
             [weak pauseFromFullscreenMenu];
         }]];
         [menu addAction:[UIAlertAction actionWithTitle:@"リセット" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
             PlayerController* s=weak;if(!s) return;
             [s dismissViewControllerAnimated:YES completion:^{ [weak resetGame]; }];
+        }]];
+        [menu addAction:[UIAlertAction actionWithTitle:controllerTitle style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+            PlayerController* s=weak;
+            if(!s) return;
+            [s releaseKeys];
+            s.fullscreenControllerOverride=@(showController);
+            [s.view setNeedsLayout];
+        }]];
+        [menu addAction:[UIAlertAction actionWithTitle:@"FDD" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+            [weak dismissViewControllerAnimated:YES completion:^{ [weak showFloppyDrives]; }];
+        }]];
+    }
+    if([self.currentID isEqualToString:@"demo"]) {
+        BOOL use480Lines=player && player->ps.cfg.start!="DEMO480.COM";
+        NSString* title=use480Lines?@"640×480（PEGC・31 kHz）に切り替え":@"640×400（標準）に切り替え";
+        [menu addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+            [weak dismissViewControllerAnimated:YES completion:^{ [weak demoWith480Lines:use480Lines]; }];
         }]];
     }
     if([self canRegisterTitleFrame]) {
@@ -959,8 +1188,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     [self releaseKeys];
     UIAlertController* menu=[self fullscreenMenu];
     if(menu.popoverPresentationController) {
-        CGPoint point=[gesture locationInView:self.monitor];
-        menu.popoverPresentationController.sourceView=self.monitor;
+        CGPoint point=[gesture locationInView:self.view];
+        menu.popoverPresentationController.sourceView=self.view;
         menu.popoverPresentationController.sourceRect=CGRectMake(point.x,point.y,1,1);
     }
     [self presentViewController:menu animated:YES completion:nil];
@@ -1028,7 +1257,12 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 }
 - (void)refreshMonitor {
     if(!player)return;
-    if(filterFrameHeight!=player->fb_h) { [self.contentFilter reset];self.monitor.image=nil;filterFrameHeight=player->fb_h; }
+    if(filterFrameHeight!=player->fb_h) {
+        [self.contentFilter reset];
+        self.monitor.image=nil;
+        filterFrameHeight=player->fb_h;
+        [self.view setNeedsLayout];
+    }
     UIImage* image=frameImage(player.get());
     NSData* reference=self.titleReference;
     BOOL matchesTitle=reference && !self.titleCaptureAttempted &&
@@ -1059,7 +1293,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.titleCaptureAttempted=NO;
     [self.contentFilter reset];self.monitor.image=nil;filterFrameHeight=0;
     fullscreenMenuPaused=NO; paused=YES; [self releaseKeys]; audio.close();
-    if(player) { player->shutdown(); player.reset(); }
+    if(player) { player->shutdown(); player.reset(); [self.view setNeedsLayout]; }
     hostfs::set_overlay("","");
     [self.scopedGameFolder stopAccessingSecurityScopedResource];
     self.scopedGameFolder=nil;
@@ -1086,6 +1320,71 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     [self releaseKeys]; paused=YES; audio.pause();
     self.status.text=@"一時停止 — ▶︎で再開";
 }
+- (void)showFloppyDrives {
+    if(fetching || self.presentedViewController) return;
+    if(!player || player->m->quit) {
+        [self message:@"ゲームまたはインストーラーを起動してから、ディスクをセットしてください。"];
+        return;
+    }
+    UIAlertController* drives=[UIAlertController alertControllerWithTitle:@"フロッピードライブ"
+        message:nil preferredStyle:UIAlertControllerStyleAlert];
+    __weak PlayerController* weak=self;
+    for(int unit=0;unit<2;++unit) {
+        char letter=floppy::drive_letter_unit(unit);
+        NSString* drive=letter ? [NSString stringWithFormat:@"%c:",letter] : [NSString stringWithFormat:@"FDD %d",unit+1];
+        NSString* mounted=text(floppy::current_path_unit(unit)).lastPathComponent;
+        NSString* insert=[NSString stringWithFormat:@"%@ にディスクをセット…",drive];
+        [drives addAction:[UIAlertAction actionWithTitle:insert style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+            [weak pickFloppyForUnit:unit];
+        }]];
+        if(mounted.length) {
+            NSString* eject=[NSString stringWithFormat:@"%@ から %@ を取り出す",drive,mounted];
+            [drives addAction:[UIAlertAction actionWithTitle:eject style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
+                PlayerController* s=weak;
+                if(!s || !s->player) return;
+                floppy::eject_unit(unit);
+                s.status.text=[NSString stringWithFormat:@"%@ のディスクを取り出しました",drive];
+            }]];
+        }
+    }
+    [drives addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:drives animated:YES completion:nil];
+}
+- (void)pickFloppyForUnit:(int)unit {
+    UIDocumentPickerViewController* picker=[[UIDocumentPickerViewController alloc]
+        initForOpeningContentTypes:@[UTTypeData] asCopy:YES];
+    picker.delegate=self;
+    picker.allowsMultipleSelection=NO;
+    picker.directoryURL=area(NSDocumentDirectory,@"Games");
+    self.floppyPicker=picker;
+    self.floppyPickerUnit=unit;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+- (void)mountFloppyAtURL:(NSURL*)source unit:(int)unit {
+    if(!player || player->m->quit || fetching) return;
+    NSArray* supported=@[@"d88",@"d68",@"88d",@"d98",@"fdi",@"nfd",@"hdm",@"xdf",@"dup",@"tfd",@"2hd",@"img",@"scp",@"hfe"];
+    if(![supported containsObject:source.pathExtension.lowercaseString]) {
+        [self message:@"D88、FDI、HFEなどのフロッピーイメージを選んでください。"];
+        return;
+    }
+    NSURL* directory=area(NSCachesDirectory,[@"PC98Floppies/" stringByAppendingString:NSUUID.UUID.UUIDString]);
+    NSURL* disk=[directory URLByAppendingPathComponent:source.lastPathComponent];
+    NSFileManager* manager=NSFileManager.defaultManager;
+    NSError* error=nil;
+    if(![manager createDirectoryAtURL:directory withIntermediateDirectories:YES attributes:nil error:&error] ||
+       ![manager copyItemAtURL:source toURL:disk error:&error]) {
+        [manager removeItemAtURL:directory error:nil];
+        [self message:error.localizedDescription];
+        return;
+    }
+    std::string reason;
+    if(!floppy::insert_unit(unit,disk.fileSystemRepresentation,&reason)) {
+        [manager removeItemAtURL:directory error:nil];
+        [self message:[@"ディスクをセットできませんでした。 " stringByAppendingString:text(reason)]];
+        return;
+    }
+    self.status.text=[disk.lastPathComponent stringByAppendingString:@" をセットしました"];
+}
 - (void)openFolder {
     if(fetching) return;
     pickerPreviousPause=paused; [self suspend];
@@ -1095,9 +1394,15 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     [self presentViewController:picker animated:YES completion:nil];
 }
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController*)controller {
+    if(controller==self.floppyPicker) { self.floppyPicker=nil; return; }
     paused=pickerPreviousPause; if(player && !paused) [self startAudio]; nextFrame=CACurrentMediaTime();
 }
 - (void)documentPicker:(UIDocumentPickerViewController*)controller didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
+    if(controller==self.floppyPicker) {
+        self.floppyPicker=nil;
+        if(urls.count) [self mountFloppyAtURL:urls.firstObject unit:self.floppyPickerUnit];
+        return;
+    }
     if(urls.count) [self openSource:urls.firstObject identifier:registeredGameID(urls.firstObject)];
 }
 - (void)openSource:(NSURL*)source identifier:(NSString*)identifier {
@@ -1199,6 +1504,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         // The existing 16/256-color option is authoritative on iOS; no blocking prompt.
         apple_set_video_colors(ps.cfg,ps.cfg.pc9821 || ps.cfg.video_colors==256 ? 256 : 16);
     }
+    if([identifier isEqualToString:@"demo"])
+        apple_set_video_colors(ps.cfg,ps.cfg.start=="DEMO480.COM" ? 256 : 16);
     ps.cfg.midi=0; ps.cfg.trace=0; ps.sample_rate=std::clamp(ps.sample_rate,8000,192000);
     if(ps.cfg.start.empty() && !ps.cfg.boot_fd) {
         NSString* explanation;
@@ -1299,14 +1606,18 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     options.clockMHz=validClockMHz(defaultClock) ? defaultClock : 0;
     __weak PlayerController* weak=self;
     options.cacheOnLaunch=usesGameCache();
+    options.portraitEdgeToEdge=usesPortraitEdgeToEdge();
+    options.landscapeControllerDefault=showsLandscapeControllerByDefault();
     options.launchFullscreen=[NSUserDefaults.standardUserDefaults boolForKey:launchFullscreenKey];
     options.manualDuo=manualDuo;options.bossMode=bossMode;options.filterSettings=self.contentFilter.settings;
+    BOOL previousLandscapeControllerDefault=options.landscapeControllerDefault;
     options.willApply=^(content_filter::Settings filter) {
         PlayerController* s=weak;if(s && filter.enabled()) { [s.contentFilter reset];s.monitor.image=nil; }
     };
     options.cancelled=^{ PlayerController* s=weak;if(!s) return;s->paused=previousPause;if(s->player && !s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime(); };
     options.applied=^(NSInteger sound,NSInteger colors,BOOL duo,BOOL boss,content_filter::Settings filter) {
         PlayerController* s=weak;if(!s) return;
+        if(previousLandscapeControllerDefault!=showsLandscapeControllerByDefault()) s.fullscreenControllerOverride=nil;
         BOOL restart=s->player && (s->player->m->cfg.sound_board!=sound || s->player->m->cfg.video_colors!=colors);
         [s.contentFilter configure:filter];s.monitor.image=nil;
         [NSUserDefaults.standardUserDefaults setBool:filter.adult forKey:@"PC98AdultFilter"];
@@ -1355,6 +1666,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     __weak PlayerController* weak=self;
     void (^refresh)(void)=^{
         [weakMenu.navigationController.presentingViewController dismissViewControllerAnimated:NO completion:^{ [weak showLibrary]; }];
+    };
+    void (^removeGame)(void)=^{
+        [defaults setBool:YES forKey:hiddenKey];
+        [GameLibrary forgetURL:folder];
     };
     [menu addGame:display identifier:identifier cached:(cache && [GameLibrary isUsableCacheAtURL:cache]) action:action info:^{
         GameLocationsController* list=weakMenu;
@@ -1425,49 +1740,43 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
                 [weakMenu presentViewController:confirm animated:YES completion:nil];
             }]];
         }
+        PlayerController* controller=weak;
+        if(controller && [identifier isEqualToString:controller.currentID] && [controller canRegisterTitleFrame]) {
+            UIImage* shown=controller.monitor.image;
+            UIImage* source=controller.displayedSourceFrame;
+            [details addAction:[UIAlertAction actionWithTitle:@"今の画面をタイトル画面として登録"
+                style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+                [weak registerTitleImage:shown source:source identifier:identifier];
+                refresh();
+            }]];
+        }
+        if([defaults objectForKey:titleReferenceKey(identifier)]) {
+            [details addAction:[UIAlertAction actionWithTitle:@"タイトル画面の自動保存を解除"
+                style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+                [defaults removeObjectForKey:titleReferenceKey(identifier)];
+                PlayerController* current=weak;
+                if([identifier isEqualToString:current.currentID]) current.titleReference=nil;
+            }]];
+        }
+        [details addAction:[UIAlertAction actionWithTitle:@"一覧から削除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
+            UIAlertController* confirm=[UIAlertController alertControllerWithTitle:@"一覧から削除しますか？"
+                message:display preferredStyle:UIAlertControllerStyleAlert];
+            [confirm addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+            [confirm addAction:[UIAlertAction actionWithTitle:@"削除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
+                removeGame();
+                refresh();
+            }]];
+            [weakMenu presentViewController:confirm animated:YES completion:nil];
+        }]];
         [details addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
         [list presentViewController:details animated:YES completion:nil];
-    } remove:^{
-        // Keep cached files and prevent the same game reappearing as a cache-only row.
-        [defaults setBool:YES forKey:hiddenKey];
-        [GameLibrary forgetURL:folder];
-    }];
+    } remove:removeGame];
 }
 - (void)showLibrary {
     if(fetching || self.presentedViewController) return;
     GameLocationsController* menu=[GameLocationsController new];
     menu.message=@"「開く」から、このiPhone内／ファイルで接続したNASのフォルダを選べます。元データは書き換えません。";
     __weak PlayerController* weak=self;
-    NSString* identifier=self.currentID;
-    if(player && !player->m->quit && identifier.length && ![identifier isEqualToString:@"demo"]) {
-        UIImage* shown=self.monitor.image;
-        UIImage* source=self.displayedSourceFrame;
-        if([self canRegisterTitleFrame]) {
-            [menu addTitle:@"今の画面をタイトル画面として登録" destructive:NO action:^{
-                [weak registerTitleImage:shown source:source identifier:identifier];
-            }];
-        }
-        NSURL* screenshot=titleScreenshotURL(identifier);
-        if([NSFileManager.defaultManager fileExistsAtPath:screenshot.path]) {
-            [menu addTitle:@"保存したタイトル画面を共有" destructive:NO action:^{
-                PlayerController* s=weak;
-                if(!s || (s->bossMode && s->hingeClosed)) return;
-                UIActivityViewController* share=[[UIActivityViewController alloc]
-                    initWithActivityItems:@[screenshot] applicationActivities:nil];
-                share.popoverPresentationController.sourceView=s.toolbar;
-                share.popoverPresentationController.sourceRect=s.toolbar.bounds;
-                [s presentViewController:share animated:YES completion:nil];
-            }];
-        }
-        if(self.titleReference) {
-            [menu addTitle:@"タイトル画面の自動保存を解除" destructive:NO action:^{
-                [NSUserDefaults.standardUserDefaults removeObjectForKey:titleReferenceKey(identifier)];
-                PlayerController* s=weak;
-                if([identifier isEqualToString:s.currentID]) s.titleReference=nil;
-            }];
-        }
-    }
-
     NSArray<NSDictionary*>* entries=GameLibrary.entries;
     NSMutableSet<NSString*>* registered=[NSMutableSet new];
     NSMutableSet<NSString*>* registeredPaths=[NSMutableSet new];
@@ -1539,21 +1848,45 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
                 else [weak message:@"元フォルダを「開く」から選び直してください。"];
             }];
     }
-    [menu addTitle:@"オリジナルDOSデモ" destructive:NO action:^ { [weak demo]; }];
+    menu.demoAction=^{ [weak demo]; };
     UINavigationController* nav=[[UINavigationController alloc] initWithRootViewController:menu];
     // Keep the player hierarchy attached so Duo hinge notifications continue.
     nav.modalPresentationStyle=UIModalPresentationOverFullScreen;
     [self presentViewController:nav animated:YES completion:nil];
 }
-- (void)demo {
+- (void)demo { [self demoWith480Lines:NO]; }
+- (void)demoWith480Lines:(BOOL)use480Lines {
     if(fetching) return;
     NSURL* root=area(NSCachesDirectory,@"PC98Games/demo");
     [NSFileManager.defaultManager createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:nil];
-    const uint8_t code[]={0xBA,0x13,0x01,0xB4,0x09,0xCD,0x21,0xB4,0x08,0xCD,0x21,0xB4,0x02,0x88,0xC2,0xCD,0x21,0xEB,0xF4};
-    NSMutableData* com=[NSMutableData dataWithBytes:code length:sizeof(code)];
-    std::string message=hostfs::to_sjis("RetroDOS Player\r\n\r\n日本語 / レトロキーボード\r\n\r\nTouch keys below. SHIFT / CTRL / GRPH latch.\r\n$");
-    [com appendBytes:message.data() length:message.size()]; [com writeToURL:[root URLByAppendingPathComponent:@"DEMO.COM"] atomically:YES];
-    [@"[PC98PLAYER]\nStart=DEMO.COM\nMIDI=0\nRhythmROM=0\n" writeToURL:[root URLByAppendingPathComponent:@"PC98PLAYER.INI"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    // Guest program: INT 18h requests 31 kHz / 480 lines, then the PEGC
+    // palette and VRAM ports draw a pattern across the 256 KiB boundary.
+    const uint8_t pattern[]={
+        0xb8,0x0c,0x30,0xb7,0x31,0xcd,0x18,0xb4,0x40,0xcd,0x18,0xb0,0x69,0xe6,0x6a,
+        0x31,0xdb,0x88,0xd8,0xe6,0xa8,0x30,0xc0,0xe6,0xaa,0x88,0xd8,0xe6,0xac,0xf6,0xd0,
+        0xe6,0xae,0xfe,0xc3,0x75,0xec,0xb8,0x00,0xe0,0x8e,0xd8,0xb8,0x00,0xa8,0x8e,0xc0,
+        0x31,0xdb,0xfc,0x89,0x1e,0x04,0x00,0x31,0xff,0xb9,0x00,0x80,0x88,0xd8,0xc0,0xe0,
+        0x04,0x04,0x20,0xf3,0xaa,0x43,0x83,0xfb,0x0a,0x72,0xe8,
+        // Mark the entire last scanline red.
+        0xc7,0x06,0x04,0x00,0x09,0x00,0xbf,0x80,0x2d,0xb9,0x80,0x02,0xb0,0xff,0xf3,0xaa,
+        0xf4,0xeb,0xfd
+    };
+    const uint8_t keyboardDemo[]={0xBA,0x13,0x01,0xB4,0x09,0xCD,0x21,0xB4,0x08,0xCD,0x21,0xB4,0x02,0x88,0xC2,0xCD,0x21,0xEB,0xF4};
+    NSString* program=use480Lines?@"DEMO480.COM":@"DEMO.COM";
+    NSMutableData* com;
+    if(use480Lines) com=[NSMutableData dataWithBytes:pattern length:sizeof(pattern)];
+    else {
+        com=[NSMutableData dataWithBytes:keyboardDemo length:sizeof(keyboardDemo)];
+        std::string message=hostfs::to_sjis("RetroDOS Player / 640x400\r\n\r\n日本語 / レトロキーボード\r\n\r\nTouch keys below. SHIFT / CTRL / GRPH latch.\r\n$");
+        [com appendBytes:message.data() length:message.size()];
+    }
+    NSError* error=nil;
+    NSString* ini=[NSString stringWithFormat:@"[PC98PLAYER]\nStart=%@\nMIDI=0\nRhythmROM=0\n",program];
+    if(![com writeToURL:[root URLByAppendingPathComponent:program] options:NSDataWritingAtomic error:&error] ||
+       ![ini writeToURL:[root URLByAppendingPathComponent:@"PC98PLAYER.INI"] atomically:YES encoding:NSUTF8StringEncoding error:&error]) {
+        [self message:error.localizedDescription];
+        return;
+    }
     [self openCache:root identifier:@"demo"];
 }
 #ifdef PC98PLAYER_TESTING
@@ -1765,20 +2098,24 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     result[@"monitorTwoFingerGesture"]=@(self.monitor.multipleTouchEnabled && hasTwoFingerTap && hasSingleFingerDoubleTap);
     [self rightClick];result[@"monitorRightClick"]=@(player->m->mouse.buttons==2);[self releaseKeys];
     UILongPressGestureRecognizer* hold=nil;
-    for(UIGestureRecognizer* gesture in self.monitor.gestureRecognizers)
+    for(UIGestureRecognizer* gesture in self.view.gestureRecognizers)
         if([gesture isKindOfClass:UILongPressGestureRecognizer.class]) hold=(UILongPressGestureRecognizer*)gesture;
-    result[@"normalViewRejectsLongPress"]=@(hold && ![self gestureRecognizerShouldBegin:hold]);
+    result[@"demoAllowsLongPress"]=@(hold && [self gestureRecognizerShouldBegin:hold] && [[[self fullscreenMenu].actions firstObject].title containsString:@"640×480"]);
     CGRect previousMonitor=self.monitor.frame;
     [self.keyboard pressScansForTesting:@[@0x70,@29]];
     [self toggleFullScreen];
-    result[@"fullscreenHidesControls"]=@(fullScreen && self.topPanel.hidden && self.keyboard.hidden && self.toolbar.hidden && self.statusRow.hidden && self.monitor.superview==self.view && self.prefersStatusBarHidden);
+    result[@"fullscreenShowsControllerOutlines"]=@(fullScreen && self.topPanel.hidden && !self.keyboard.hidden && self.keyboard.outlinesOnly && self.toolbar.hidden && self.statusRow.hidden && self.monitor.superview==self.view && self.prefersStatusBarHidden);
     CGRect fullscreenSafe=UIEdgeInsetsInsetRect(self.view.bounds,self.view.safeAreaInsets);
     result[@"fullscreenAspectFit"]=@(CGRectContainsRect(fullscreenSafe,self.monitor.frame) && fabs(self.monitor.frame.size.width/self.monitor.frame.size.height-1.6)<.001);
     result[@"fullscreenReleasesKeys"]=@(!player->m->kb_down[0x70] && !player->m->kb_down[29]);
+    result[@"fullscreenControllerChord"]=@([self.keyboard controllerChordForTesting:^BOOL(int scan) {
+        return player->m->kb_down[scan];
+    }]);
+    [self releaseKeys];
     [self rightClick];result[@"fullscreenRightClick"]=@(player->m->mouse.buttons==2);[self releaseKeys];
     result[@"fullscreenAcceptsLongPress"]=@(hold && [self gestureRecognizerShouldBegin:hold]);
     UIAlertController* menu=[self fullscreenMenu];
-    result[@"fullscreenMenuActions"]=@(menu.actions.count==3 && [menu.actions[0].title isEqualToString:@"一時停止"] && [menu.actions[1].title isEqualToString:@"リセット"]);
+    result[@"fullscreenMenuActions"]=@(menu.actions.count==6 && [menu.actions[3].title isEqualToString:@"FDD"] && [menu.actions[2].title isEqualToString:@"コントローラーを非表示"] && [menu.actions[0].title isEqualToString:@"一時停止"] && [menu.actions[1].title isEqualToString:@"リセット"]);
     [self pauseFromFullscreenMenu];
     result[@"fullscreenMenuPauses"]=@(paused && fullscreenMenuPaused && audio.paused);
     [self rightClick];
@@ -1816,6 +2153,14 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     UIGraphicsImageRenderer* renderer=[[UIGraphicsImageRenderer alloc] initWithBounds:self.view.bounds];
     UIImage* image=[renderer imageWithActions:^(UIGraphicsImageRendererContext* context) { [self.view.layer renderInContext:context.CGContext]; }];
     [UIImagePNGRepresentation(image) writeToURL:area(NSDocumentDirectory,@"duo-smoke.png") atomically:YES];
+    [self demoWith480Lines:YES];
+    if(player) for(int i=0;i<8;++i) player->run_frame(true,false);
+    result[@"demo480LastLine"]=@(player && player->m->pegc.on && player->m->pegc.crt31 &&
+        player->fb_h==480 && player->fb[479*640]==0xffff0000 && player->fb[480*640-1]==0xffff0000);
+    result[@"demo480OffersReturn"]=@([[[self fullscreenMenu].actions firstObject].title containsString:@"640×400"]);
+    [self demoWith480Lines:NO];
+    if(player) player->run_frame(true,false);
+    result[@"demoReturnsTo400"]=@(player && !player->m->pegc.on && player->fb_h==400);
     bool success=true; for(NSNumber* value in result.allValues) if(!value.boolValue) success=false;
     result[@"passed"]=@(success);
     NSData* report=[NSJSONSerialization dataWithJSONObject:result options:NSJSONWritingPrettyPrinted error:nil];
