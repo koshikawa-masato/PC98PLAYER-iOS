@@ -1,5 +1,13 @@
 # 利用者向けサイト / GitHub Pages
 
+## 2026年11月10日 フィードバック案内
+
+トップの呼びかけと `#feedback` の3ステップ、FAQ `#feedback-faq` / `#feedback-screenshot` にアプリ内報告の手順を追加しました。`tutorial/images/feedback-*.png` の4枚は0.2.4（ビルド50）のiPhoneシミュレーターをDevice Hubで撮影した実画面です。報告本文は記入例、添付候補はオリジナルDOSデモで、説明用の報告は送信していません。
+
+匿名・Xは開発者メール、GitHubは公開Issue、GitHubの画像は自動公開しない点を分けて説明しています。0.2.4公開前はTestFlightの操作例として案内し、App Store利用者には更新後の手順であることを明記します。公開を確認した時点で `feedback-version` の案内を更新してください。
+
+リンク・画像の存在とページ内アンカー、スマートフォン幅での表示を確認してから公開します。アプリの送信経路は `docs/feedback-vps.md`、プライバシーは `docs/privacy-policy.txt` と同じ内容に保ちます。
+
 `docs/index.html` が入口です。サイトのビルドは不要です。App Store の入手バッジには Apple 公式の日本語画像（tools.applemediaservices.com）を使用します。画像・動画・ZIP は相対パスのため、GitHub Pages のプロジェクトサイトのサブパスでも動作します。
 
 ## デザイン

@@ -14,7 +14,7 @@
 <div class="stripe" aria-hidden="true"></div>
 <header class="header">
   <a class="brand" href="#"><img src="assets/icon.png" width="40" height="40" alt=""><span>RetroDOS Player</span></a>
-  <nav aria-label="メイン"><a href="#start">導入</a><a href="#library">作品一覧</a><a href="#screens">操作</a><a href="#options">設定</a><a href="#help">FAQ</a></nav>
+  <nav aria-label="メイン"><a href="#start">導入</a><a href="#library">作品一覧</a><a href="#screens">操作</a><a href="#options">設定</a><a href="#feedback">報告する</a><a href="#help">FAQ</a></nav>
 </header>
 <main>
 <div class="hero-bg"><section class="hero wrap">
@@ -24,6 +24,7 @@
     <p class="lead">PC-98向けDOSソフトを転送し、作品一覧から起動。キーボード、マウス、コントローラーで遊べます。</p>
     <div class="actions"><a class="button primary" href="#start">導入ガイドを開く ↓</a><a class="app-store-badge" href="https://apps.apple.com/jp/app/retrodos-player/id6826817332"><img src="https://tools.applemediaservices.com/api/badges/download-on-the-app-store/black/ja-jp?size=250x83" alt="App Storeからダウンロード" width="180" height="60"></a></div>
     <p class="note">ゲーム本体は同梱していません。利用する権利のあるPC-98向けDOSソフトをご用意ください。</p>
+    <p class="feedback-invite"><strong>困ったことがあったら、教えてください。</strong><br>起動できない、操作が分からない、画面がおかしい。小さな気付きも改善につながります。<br><a href="#feedback">アプリから報告する方法を見る ↓</a></p>
   </div>
   <figure class="hero-device">
     <img src="tutorial/images/01-demo.png" width="1206" height="2622" alt="モニターとソフトウェアキーボードに内蔵デモを表示したiPhone">
@@ -33,6 +34,18 @@
 <nav class="chapter-nav wrap" aria-label="ガイドの章">
   <a href="#start"><b>01</b> ゲームを入れる</a><a href="#library"><b>02</b> 一覧で管理</a><a href="#screens"><b>03</b> プレイする</a><a href="#options"><b>04</b> 設定する</a><a href="#help"><b>05</b> 困ったとき</a>
 </nav>
+<section class="wrap section feedback-guide" id="feedback" aria-labelledby="feedback-heading">
+  <p class="eyebrow">FEEDBACK / 一緒に使いやすく</p>
+  <h2 id="feedback-heading">困ったときは、アプリから。</h2>
+  <p class="lead">アカウントがなくても報告できます。分かる範囲の説明で大丈夫です。</p>
+  <p class="feedback-version"><strong>0.2.4（ビルド50）の操作例です。</strong> 現在はTestFlightで利用できます。App Store版は0.2.4への更新後にお使いください。まだこの画面がない場合は、<a href="https://github.com/koshikawa-masato/PC98PLAYER-iOS/issues">GitHubの報告窓口</a>も利用できます。</p>
+  <div class="feedback-steps">
+    <figure><a href="tutorial/images/feedback-options.png" aria-label="オプションのバージョン欄の画像を拡大"><img src="tutorial/images/feedback-options.png" width="1206" height="2622" loading="lazy" alt="オプションの下部にある「バージョン 0.2.4（ビルド50）・不具合を報告」の行"></a><figcaption><span class="guide-chip">STEP 1</span><h3>「バージョン」をタップ</h3><p>「オプション」を開いて下へスクロール。「このアプリについて」の<strong>「バージョン」</strong>を押します。ゲームが起動できなくても使えます。</p></figcaption></figure>
+    <figure><a href="tutorial/images/feedback-form.png" aria-label="不具合報告の記入例を拡大"><img src="tutorial/images/feedback-form.png" width="1206" height="2622" loading="lazy" alt="件名、症状・再現手順を記入し、匿名を選んだ報告フォームの例"></a><figcaption><span class="guide-chip">STEP 2</span><h3>起きたことを書く</h3><p><strong>件名</strong>と<strong>症状・再現手順</strong>を入力します。「何を押すと、どうなったか」「本来どうなるはずだったか」を書くと調べやすくなります。</p></figcaption></figure>
+    <article class="feedback-send"><span class="guide-chip">STEP 3</span><h3>送り方を選んで送信</h3><p>迷ったら<strong>「匿名」→「メールで送信」</strong>。画面に従って確認を完了し、アプリへ戻ります。</p><ul><li><strong>匿名：</strong>ログイン不要。開発者に非公開のメールで届きます。</li><li><strong>X：</strong>Xで本人確認し、ユーザー名を付けたメールで開発者に届きます。Xへ投稿しません。</li><li><strong>GitHub：</strong>本人確認と公開確認のあと、本文・環境情報・ユーザー名が公開Issueになります。</li></ul><p><strong>受付番号が表示されたら完了です。</strong> 後から問い合わせるときのために控えてください。GitHubの場合はIssueのURLも確認できます。</p><a href="#feedback-faq">送信・画像添付のFAQを見る ↓</a></article>
+  </div>
+  <p class="note">2026年11月10日、iPhoneシミュレーターで撮影。本文は説明用の記入例です。画像をタップすると拡大できます。端末やOSにより配置は異なります。</p>
+</section>
 <section class="wrap section" id="start"><p class="eyebrow">01 / START YOUR JOURNEY</p><h2>まずは、ひとつ動かしてみる。</h2><p>アプリだけで試せるデモから始めて、そのあと自分に合った方法でデータを開きましょう。iPhone・iPad 共通の手順です。</p>
 <div class="cards routes">
 <a class="card" href="#demo"><span class="number">01 / お試し</span><svg class="route-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="5" y="4" width="38" height="28" rx="2"/><path d="M17 40h14M24 32v8M20 12l10 6-10 6z"/></svg><h3>まずは内蔵デモ</h3><p>転送も NAS も不要。キーを押して、画面と入力を確かめます。</p><span>デモを試す →</span></a>
@@ -147,6 +160,31 @@
 <section class="section help-bg" id="help"><div class="wrap"><p class="eyebrow">05 / NEED A HAND?</p><h2>つまずいたら、ここから。</h2>
 <p>SuperDepth が起動しない場合は、まず <a href="#superdepth-startup">「Bad command or file name」が出るとき</a>をご覧ください。</p>
 <div class="faq">
+<details id="feedback-faq" open><summary>困ったことを報告したい。どこから送ればよい？</summary>
+<p><strong>「オプション」→いちばん下の「バージョン」</strong>で報告フォームを開きます。件名と症状を書き、匿名・GitHub・Xから選んで送信してください。<a href="#feedback">上の画像付き3ステップ</a>でも確認できます。アプリ内フォームは0.2.4（ビルド50）からの機能です。</p>
+<p>アプリとOSのバージョンは自動で添えられます。作品名、端末の機種、保存先の種類（このiPhone内・iCloud・NASなど）、操作手順、エラーの文字、毎回か時々かを分かる範囲で書いてください。ゲーム本体・セーブデータ・操作履歴は自動添付しません。</p>
+<p>入力中のキーボードが邪魔なときは<strong>「キーボードを閉じる」</strong>を押せます。報告画面の外を触っても閉じません。中止する場合は左上の戻るボタン、または「閉じる」を使います。</p>
+</details>
+<details id="feedback-screenshot" open><summary>ゲーム画面のスクリーンショットも添付できる？</summary>
+<p><strong>ゲームのモニター部分を長押し→「フィードバックする」</strong>を選びます。報告フォームに画像の候補が表示されるので、内容を確認して<strong>「ゲーム画面を添付」をオン</strong>にしてください。初期状態はオフです。オプションのバージョンから開いた場合は画像が付きません。</p>
+<div class="feedback-images">
+<figure><a href="tutorial/images/feedback-menu.png"><img src="tutorial/images/feedback-menu.png" width="1206" height="2622" loading="lazy" alt="内蔵デモのモニターを長押しし「フィードバックする」が表示されたメニュー"></a><figcaption>1. モニターを長押しして「フィードバックする」。画像は内蔵デモでの例です。</figcaption></figure>
+<figure><a href="tutorial/images/feedback-attachment.png"><img src="tutorial/images/feedback-attachment.png" width="1206" height="2622" loading="lazy" alt="報告フォームで「ゲーム画面を添付」をオンにし、内蔵デモのプレビューを表示した画面"></a><figcaption>2. プレビューを確認し「ゲーム画面を添付」をオン。そのあと件名・症状を書いて送信します。</figcaption></figure>
+</div>
+<p>添付するのはゲーム表示領域です。匿名・Xの画像は開発者へのメールに添付されます。<strong>GitHubを選んでも、画像は公開Issueへ自動添付されません。</strong> 受付側で非公開に保管されます。個人情報やパスワードが写っていないか確認してください。</p>
+</details>
+<details id="feedback-identity"><summary>匿名・X・GitHubの違いは？ 返信はもらえる？</summary>
+<p>匿名とXは開発者へのメール受付です。公開Issueには自動登録しません。GitHubは公開Issueになり、GitHub上で経過を確認できます。GitHubの投稿前には公開内容の確認画面が出ます。</p>
+<p><strong>匿名の場合、メールアドレスは自動取得しません。</strong> そのため個別返信ができない場合があります。Xはユーザー名を添えて受け付けますが、DMや返信を自動送信する機能はありません。いずれも、回答・修正時期をお約束するものではありません。</p>
+<p>認証は各サービスの画面で行います。本アプリや受付サーバーにGitHub／Xのパスワードを入力する必要はありません。報告しなくても、アプリの通常機能を利用できます。</p>
+</details>
+<details id="feedback-send-error"><summary>送れない・認証で戻ってしまう・受付できたか分からない</summary>
+<ol><li>件名と症状を両方記入し、インターネット接続を確認します。</li><li>匿名の確認画面、またはGitHub／Xの認証画面を最後まで進め、アプリに戻ります。認証をキャンセルした場合は送信されません。</li><li>完了画面の受付番号、GitHubの場合はIssueのURLを確認します。受付番号は報告を識別する番号で、進捗を閲覧するページではありません。</li><li>エラー時は表示された文言を控えてください。短時間に何度も送信せず、少し時間を置いて確認します。</li></ol>
+<p>フォーム自体が使えない場合は<a href="https://github.com/koshikawa-masato/PC98PLAYER-iOS/issues">GitHubの報告窓口</a>へ。GitHubアカウントが必要で、投稿は公開されます。解決のためにアプリを削除する必要はありません。</p>
+</details>
+<details><summary>報告した情報はどこに保存される？</summary>
+<p>報告はCloudflareの受付サーバーを経由します。受付データ・画像・認証したユーザー情報は30日で削除します。開発者へ届いたメールと公開Issueは、問い合わせ対応と修正のため別に保持します。削除の相談は受付番号を添えてください。詳しくは<a href="privacy-policy.txt">プライバシーポリシー</a>をご覧ください。</p>
+</details>
 <details id="superdepth-startup" open><summary>SuperDepth で「Bad command or file name」が出るとき</summary>
 <p><strong>0.2.3 を公開しました。</strong> SuperDepth の起動時にアプリ内部の識別子がパスに混ざり、「Bad command or file name」が出る不具合を修正しました。</p>
 <p>0.2.2 では、親フォルダから開いたときに加え、<code>DEPTH.EXE</code> が直下にある <code>DEPTH</code> フォルダを直接開いても、このエラーが出る場合があります。INI は任意です。INI がないときは「起動するプログラム」から実行ファイルを選べます。</p>
@@ -180,7 +218,7 @@ Start=DEPTH.EXE</code></pre>
 <details><summary>画面が出ない・「保護フィルター」と表示される</summary><p>コンテンツフィルターが有効なときは、判定が終わるまで画像を表示しません。状態表示が「保護フィルター: 判定中…」のままなら少し待ってください。エラーが表示された場合は、「オプション → コンテンツフィルター」で設定を確認します。フィルターを使わない場合は両方オフにして「適用」を押します。</p></details>
 <details><summary>キャッシュを消すとセーブも消える？</summary><p>一覧のⓘにある「このゲームのキャッシュを削除」では、セーブは消えません。「一覧から削除」も一覧から外すだけです。ただし、アプリを削除するとアプリ内のセーブ・状態保存も失われます。不調時の最初の対処としてアプリを削除しないでください。元のゲームフォルダをコピーするだけでは、別領域のセーブのバックアップにはなりません。</p></details>
 </div>
-<p class="support">解決しない場合は、端末・アプリのバージョン・症状を添えて <a href="https://github.com/koshikawa-masato/PC98PLAYER-iOS/issues">GitHub の不具合報告へ ↗</a>。ゲーム本体や認証情報は投稿しないでください。</p></div></section>
+<p class="support">解決しない場合は、<a href="#feedback">アプリからフィードバック</a>をお寄せください。アカウントなしでも報告できます。ゲーム本体や認証情報は送らないでください。</p></div></section>
 </main>
 <footer><div class="wrap"><span>RetroDOS Player</span><a href="https://github.com/koshikawa-masato/PC98PLAYER-iOS">開発情報 / GitHub ↗</a><a href="https://support.apple.com/ja-jp/guide/iphone/iph8d8f0f1a0/ios">Apple のファイル接続ガイド ↗</a><p>操作画像は iPhone シミュレーターの撮影例です。実機の見え方・メニュー名は OS やバージョンによって異なります。</p><p class="credit">見出しフォント：DotGothic16（SIL Open Font License 1.1）<a href="assets/fonts/OFL.txt">ライセンス</a></p></div></footer>
 <div class="stripe" aria-hidden="true"></div>
