@@ -289,6 +289,27 @@ static BOOL copyIndexedFolder(NSURL* source,NSURL* destination,NSDictionary* ind
     return match;
 }
 
++ (NSString*)verifiedDisplayNameInFolder:(NSURL*)root {
+    NSString* match=[self verifiedDisplayNameAtURL:root];
+    if(match) return match;
+    NSArray* keys=@[NSURLIsDirectoryKey, NSURLIsSymbolicLinkKey];
+    NSDirectoryEnumerator<NSURL*>* directories=[NSFileManager.defaultManager enumeratorAtURL:root
+        includingPropertiesForKeys:keys options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:nil];
+    NSUInteger checked=0;
+    for(NSURL* item in directories) {
+        NSDictionary* values=[item resourceValuesForKeys:keys error:nil];
+        if([values[NSURLIsSymbolicLinkKey] boolValue] || directories.level>=5) [directories skipDescendants];
+        if(![values[NSURLIsDirectoryKey] boolValue] || [values[NSURLIsSymbolicLinkKey] boolValue]) continue;
+        if(++checked>128) return nil;
+        NSString* candidate=[self verifiedDisplayNameAtURL:item];
+        if(!candidate) continue;
+        if(match && ![candidate isEqualToString:match]) return nil;
+        match=candidate;
+        [directories skipDescendants];
+    }
+    return match;
+}
+
 + (NSArray<NSDictionary*>*)entries {
     NSArray* entries = [NSUserDefaults.standardUserDefaults arrayForKey:@"PC98GameFolders"];
     return entries ?: @[];

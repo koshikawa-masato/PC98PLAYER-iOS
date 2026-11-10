@@ -88,5 +88,59 @@
       }
     ],
     "display_name": "闘神都市2"
+  },
+  {
+    "id": "super-depth-pc98-reference-1",
+    "title_id": "super-depth",
+    "platform": "pc98",
+    "required_files": [
+      {
+        "path": "DEPTH.EXE",
+        "size": 70731,
+        "sha256": "4135229327953551e25f045eb18883bc7fb46ecef231192c18009a689e06a72a"
+      },
+      {
+        "path": "DEPTH.BGM",
+        "size": 18127,
+        "sha256": "cbecd3c52789d9abf67c4a9cb1f6f3ec7162abee7ccdf3fddca790996a877b9b"
+      }
+    ],
+    "display_name": "SuperDepth"
+  },
+  {
+    "id": "puyo-puyo-2-pc98-reference-1",
+    "title_id": "puyo-puyo-2",
+    "platform": "pc98",
+    "required_files": [
+      {
+        "path": "PUYO.CNS",
+        "size": 72473,
+        "sha256": "3afe4628359a2d70925950e601c72a83006160fd918555d76d52e1413bf2d6ec"
+      },
+      {
+        "path": "PUYOV.CNS",
+        "size": 46001,
+        "sha256": "603dba4a499aaa4ad96e6e5fa647d3f158dbec7ae16d6883d52e940784ed8386"
+      }
+    ],
+    "display_name": "ぷよぷよ通"
+  },
+  {
+    "id": "rance-3-pc98-reference-1",
+    "title_id": "rance-3",
+    "platform": "pc98",
+    "required_files": [
+      {
+        "path": "ACG.DAT",
+        "size": 927232,
+        "sha256": "d16c905e4f4134a1045d96a88faa6d412550cdfd7598c47afbd1ee11fa472d73"
+      },
+      {
+        "path": "ADISK.DAT",
+        "size": 77568,
+        "sha256": "6ab91831055711fe12048611c940876a151200e66dab9bd7ea7faf4a878c0ad2"
+      }
+    ],
+    "display_name": "Rance3－リーザス陥落－"
   }
 ]

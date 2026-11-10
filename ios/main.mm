@@ -137,7 +137,7 @@ static NSString* catalogNameForFolder(NSURL* folder) {
     Ini ini;
     ini.load([folder URLByAppendingPathComponent:@"PC98PLAYER.INI"].fileSystemRepresentation);
     NSURL* root=[GameLibrary gameRootAtURL:folder relativePath:text(ini.get("PC98PLAYER.ROOT")) error:nil];
-    return root ? [GameLibrary verifiedDisplayNameAtURL:root] : nil;
+    return root ? [GameLibrary verifiedDisplayNameInFolder:root] : nil;
 }
 
 // A full-window list avoids the fold-aware alert's short, upper-panel viewport.
@@ -1148,8 +1148,8 @@ static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
         GameLocationsController* list=weakMenu;
         if(!list) return;
         BOOL cached=cache && [NSFileManager.defaultManager fileExistsAtPath:cache.path];
-        NSString* info=[NSString stringWithFormat:@"ソフト名  %@\nフォルダ名  %@\nキャッシュ  %@",
-            catalogName ?: fallback,folder.lastPathComponent,cached ? @"保存済み" : @"なし"];
+        NSString* info=[NSString stringWithFormat:@"ソフト名  %@\nフォルダ名  %@\n作品DB  %@\nキャッシュ  %@",
+            catalogName ?: fallback,folder.lastPathComponent,catalogName ? @"照合済み" : @"未確認",cached ? @"保存済み" : @"なし"];
         UIAlertController* details=[UIAlertController alertControllerWithTitle:display message:info preferredStyle:UIAlertControllerStyleAlert];
         [details addAction:[UIAlertAction actionWithTitle:@"タイトル名を編集" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
             UIAlertController* edit=[UIAlertController alertControllerWithTitle:@"タイトル名を編集"
