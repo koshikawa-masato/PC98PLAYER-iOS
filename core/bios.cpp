@@ -505,6 +505,7 @@ static void int18(Machine* m) {
         int g = (bh >> 4) & 3;
         bool hi = (al & 0x04) != 0;
         bool ok = (al & 0xF8) == 0x08 && !(bh & 0xCC) && (bh & 3) != 3 && (g != 3 || hi);
+        if (m->cfg.crt_mode == 2 && g == 3) ok = false;   // 画面モード 24kHz: 480 ラインは引数の誤りとして断る
         if (!ok) { SETAH(m, 0); SETAL(m, 1); SETBH(m, 1); return; }
         m->pegc.crt31 = (g == 3) ? 1 : 0;
         if (g == 3) { m->pegc.on = 1; m->ram[0x54D] |= 0x80; }      // 480 ラインは 256 色の拡張モードで出る

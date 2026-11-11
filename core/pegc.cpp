@@ -23,6 +23,7 @@ void pegc_clear(Machine* m) {
     m->pegc_vram.assign(VRAM_SIZE, 0);
     m->pegc_planar = PegcPlanar();
     m->pegc.mmio[0x10C] = m->pegc.mmio[0x10D] = 0xFF;   // ビットマスク: 全部書く
+    if (m->cfg.crt_mode == 1) { m->pegc.crt31 = 1; m->s31_rate = 1; }   // 画面モード 31kHz: 480 ラインで始める
 }
 
 static inline uint32_t bank_base(Machine* m, int w) {
@@ -45,7 +46,7 @@ bool pegc_io_out(Machine* m, uint16_t port, uint8_t v) {
         if (v == 0x68 || v == 0x69) { p.single = v & 1; return true; }
         return false;
     case 0x9A0: pc9821_probe(m, "09A0h"); if (!is_pc9821(m)) return false; p.ff_sel = v; p.ff_selected = 1; return true;
-    case 0x9A8: p.crt31 = v & 1; return true;
+    case 0x9A8: if (m->cfg.crt_mode == 2) return true; p.crt31 = v & 1; return true;   // 画面モード 24kHz: 31kHz にさせない
     case 0xA8: if (!p.on) return false; p.palidx = v; return true;
     case 0xAA: if (!p.on) return false; p.pal[p.palidx][0] = v; return true;
     case 0xAC: if (!p.on) return false; p.pal[p.palidx][1] = v; return true;
@@ -77,7 +78,7 @@ bool pegc_io_in(Machine* m, uint16_t port, uint8_t* v) {
         default: break;
         }
         *v = b; return true; }
-    case 0x9A8: *v = p.crt31; return true;
+    case 0x9A8: *v = m->cfg.crt_mode == 2 ? 0 : p.crt31; return true;
     case 0xA8: if (!p.on) return false; *v = p.palidx; return true;
     case 0xAA: if (!p.on) return false; *v = p.pal[p.palidx][0]; return true;
     case 0xAC: if (!p.on) return false; *v = p.pal[p.palidx][1]; return true;

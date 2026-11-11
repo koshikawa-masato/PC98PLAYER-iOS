@@ -275,6 +275,7 @@ struct PcmSample { uint64_t tick; int16_t l, r; };
     bool     pc9821 = false;         // PC-9821 として見せる（BIOS の 045Ch bit6 = 256 色あり。PC9821=）
     bool     pc9821_ask = false;
     int      video_colors = 16;      // VideoColors=256 は PC9821=1 と同じ（256 色の PR の書き方）     // INI に PC9821= が無い: PC-9821 らしいアクセスがあったら尋ねる
+    int      crt_mode = 0;           // 画面モード（0 = 自動、1 = 31kHz・480 ラインで始める、2 = 24kHz・400 ラインに固定）
     bool     ems_from_config = false;  // CONFIG.SYS の /NOEMS を見て EMS を出さないことにした
     int      xms_kb = 8192;          // HIMEM.SYS 相当（XMS 3.0）。0 で無し
     int      ext_kb = 8192;          // 拡張メモリ（1MB より上の RAM。BIOS の 0401h に見せ、自前で保護モードに入るソフトが使う）。0 で無し

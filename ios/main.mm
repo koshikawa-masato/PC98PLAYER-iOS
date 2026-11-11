@@ -114,6 +114,17 @@ static BOOL validClockMHz(NSInteger clock) {
 static NSString* gameClockKey(NSString* identifier) {
     return [@"PC98GameClockMHz." stringByAppendingString:identifier];
 }
+// 画面モード（0 = 自動、1 = 31kHz、2 = 24kHz）。ゲームごとの値が無ければデフォルトを使う
+static NSString* const displayModeKey=@"PC98DisplayMode";
+static NSString* gameDisplayModeKey(NSString* identifier) {
+    return [@"PC98GameDisplayMode." stringByAppendingString:identifier];
+}
+static NSInteger displayModeForGame(NSString* identifier) {
+    NSNumber* game=identifier.length ? [NSUserDefaults.standardUserDefaults objectForKey:gameDisplayModeKey(identifier)] : nil;
+    NSInteger mode=game ? game.integerValue : [NSUserDefaults.standardUserDefaults integerForKey:displayModeKey];
+    return mode==1 || mode==2 ? mode : 0;
+}
+static NSString* const displayModeLabels[]={@"自動",@"31kHz（640×480）",@"24kHz（640×400）"};
 static NSString* titleReferenceKey(NSString* identifier) {
     return [@"PC98TitleFrame." stringByAppendingString:identifier];
 }
@@ -487,6 +498,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 @property(nonatomic, copy) NSDictionary* issueDiagnostics;
 @property NSInteger soundBoard;
 @property NSInteger videoColors;
+@property NSInteger displayMode;
 @property NSInteger clockMHz;
 @property BOOL manualDuo;
 @property BOOL bossMode;
@@ -497,7 +509,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 @property(copy) NSArray<NSNumber*>* bluetoothBindings;
 @property content_filter::Settings filterSettings;
 @property(copy) void (^willApply)(content_filter::Settings);
-@property(copy) void (^applied)(NSInteger,NSInteger,BOOL,BOOL,content_filter::Settings);
+@property(copy) void (^applied)(NSInteger,NSInteger,NSInteger,BOOL,BOOL,content_filter::Settings);
 @property(copy) void (^cancelled)(void);
 @end
 @implementation GameOptionsController
@@ -508,8 +520,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 7; }
-- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?7:section==3?6:section==4?1:section==5?5:section==6?3:2; }
-- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数",@"表示",@"コンテンツフィルター",@"Bluetoothコントローラー",@"CPUクロックのデフォルト",@"このアプリについて"][section]; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?7:section==3?6:section==4?1:section==5?5:section==6?3:section==1?5:2; }
+- (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数・画面モード",@"表示",@"コンテンツフィルター",@"Bluetoothコントローラー",@"CPUクロックのデフォルト",@"このアプリについて"][section]; }
 - (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section {
     if(section==1)return @"変更を適用するとゲームが再起動します。必要な場合は、先にゲーム内で保存してください。";
     if(section==2)return @"通常は自動判別を使います。Duo上下表示を固定すると、上にモニタ、下にキーボードを配置します。表示だけの変更では再起動しません。「ボスがきた」モードはDuoを閉じると一時停止し、アウターのアプリ画面を黒くします。開き直しても自動再生せず、▶︎で再開します。端末の画面電源やシステム表示は変更しません。";
@@ -528,6 +540,11 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         cell.textLabel.text=index.row==0?@"16色":@"256色";
         cell.detailTextLabel.text=index.row==0?@"標準グラフィック":@"拡張グラフィック";
         cell.accessoryType=(self.videoColors==(index.row==0?16:256))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
+        if(index.row>=2) {   // 画面モード
+            cell.textLabel.text=displayModeLabels[index.row-2];
+            cell.detailTextLabel.text=index.row==2?@"画面モード: ソフトに合わせる":index.row==3?@"画面モード: 480 ラインで始める":@"画面モード: 400 ラインに固定";
+            cell.accessoryType=self.displayMode==index.row-2?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
+        }
     } else if(index.section==2) {
         cell.textLabel.text=index.row==0?@"自動判別":index.row==1?@"Duo上下表示を固定":@"ボスがきた";
         cell.detailTextLabel.text=index.row==0?@"端末とヒンジの状態に合わせる":index.row==1?@"上にモニタ、下にキーボード":@"Duoを閉じると一時停止・アウターを非表示";
@@ -647,6 +664,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         document.resource=index.row==0?@"privacy-policy.txt":@"LICENSE";[self.navigationController pushViewController:document animated:YES];return;
     }
     if(index.section==0)self.soundBoard=index.row==0?26:86;
+    else if(index.section==1 && index.row>=2)self.displayMode=index.row-2;
     else if(index.section==1)self.videoColors=index.row==0?16:256;
     else if(index.section==2 && index.row<2)self.manualDuo=index.row==1;
     else if(index.section==3 && index.row>=2 && index.row<5) { auto settings=self.filterSettings;settings.effect=(content_filter::Effect)(index.row-2);self.filterSettings=settings; }
@@ -678,7 +696,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     [NSUserDefaults.standardUserDefaults setBool:self.portraitEdgeToEdge forKey:portraitEdgeToEdgeKey];
     [NSUserDefaults.standardUserDefaults setBool:self.cacheOnLaunch forKey:cacheOnLaunchKey];
     [NSUserDefaults.standardUserDefaults setInteger:self.clockMHz forKey:defaultClockKey];
-    if(self.willApply)self.willApply(self.filterSettings);[self dismissViewControllerAnimated:YES completion:^{if(self.applied)self.applied(self.soundBoard,self.videoColors,self.manualDuo,self.bossMode,self.filterSettings);}]; }
+    if(self.willApply)self.willApply(self.filterSettings);[self dismissViewControllerAnimated:YES completion:^{if(self.applied)self.applied(self.soundBoard,self.videoColors,self.displayMode,self.manualDuo,self.bossMode,self.filterSettings);}]; }
 @end
 
 @interface PlayerController : UIViewController <UIDocumentPickerDelegate,UIAdaptivePresentationControllerDelegate,UIGestureRecognizerDelegate> {
@@ -877,7 +895,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
             size_t buffered=0;uint64_t underrun=0;{ std::lock_guard<std::mutex> lock(s->audio.mutex);buffered=s->audio.samples.size();underrun=s->audio.underrunFrames; }
             AudioQueueParameterValue ramp=0;if(s->audio.queue) AudioQueueGetParameter(s->audio.queue,kAudioQueueParam_VolumeRampTime,&ramp);
             NSDictionary* report=@{@"game":s.currentID ?: @"",@"running":@(!s->paused),@"guestQuit":@(m->quit),
-                @"videoColors":@(m->cfg.video_colors),@"pegcActive":@(m->pegc.on),@"screenColorCount":@(colors.size()),@"framebufferHeight":@(s->player->fb_h),
+                @"videoColors":@(m->cfg.video_colors),@"pegcActive":@(m->pegc.on),@"crtMode":@(m->cfg.crt_mode),@"crt31":@(m->pegc.crt31),@"screenColorCount":@(colors.size()),@"framebufferHeight":@(s->player->fb_h),
                 @"soundBoard":@(m->cfg.sound_board),@"audioPeak":@(peak),@"frame":@(m->frame_count),
                 @"audioUnderrunFrames":@(underrun),@"audioVolumeRampSeconds":@(ramp),@"audioQueueGeneration":@(s->audio.generation),@"audioStarted":@(s->audio.started),@"audioPaused":@(s->audio.paused),@"audioQueuedSamples":@(buffered)};
             [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil]
@@ -1698,6 +1716,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     }
     if([identifier isEqualToString:@"demo"])
         apple_set_video_colors(ps.cfg,ps.cfg.start=="DEMO480.COM" ? 256 : 16);
+    apple_apply_crt_mode(ps.cfg,(int)displayModeForGame(identifier));   // 色数のあとに画面モード
     ps.cfg.midi=0; ps.cfg.trace=0; ps.sample_rate=std::clamp(ps.sample_rate,8000,192000);
     if(ps.cfg.start.empty() && !ps.cfg.boot_fd) {
         NSString* explanation;
@@ -1804,6 +1823,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     if(self.displayedSourceFrame && !(bossMode && hingeClosed)) options.issueScreenshot=self.monitor.image;
     options.soundBoard=player?player->m->cfg.sound_board:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98SoundBoard"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98SoundBoard"]:86);
     options.videoColors=player?player->m->cfg.video_colors:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98VideoColors"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98VideoColors"]:16);
+    options.displayMode=[NSUserDefaults.standardUserDefaults integerForKey:displayModeKey];
     NSInteger defaultClock=[NSUserDefaults.standardUserDefaults integerForKey:defaultClockKey];
     options.clockMHz=validClockMHz(defaultClock) ? defaultClock : 0;
     __weak PlayerController* weak=self;
@@ -1817,10 +1837,12 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         PlayerController* s=weak;if(s && filter.enabled()) { [s.contentFilter reset];s.monitor.image=nil; }
     };
     options.cancelled=^{ PlayerController* s=weak;if(!s) return;s->paused=previousPause;if(s->player && !s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime(); };
-    options.applied=^(NSInteger sound,NSInteger colors,BOOL duo,BOOL boss,content_filter::Settings filter) {
+    options.applied=^(NSInteger sound,NSInteger colors,NSInteger display,BOOL duo,BOOL boss,content_filter::Settings filter) {
         PlayerController* s=weak;if(!s) return;
         if(previousLandscapeControllerDefault!=showsLandscapeControllerByDefault()) s.fullscreenControllerOverride=nil;
-        BOOL restart=s->player && (s->player->m->cfg.sound_board!=sound || s->player->m->cfg.video_colors!=colors);
+        [NSUserDefaults.standardUserDefaults setInteger:display forKey:displayModeKey];
+        BOOL restart=s->player && (s->player->m->cfg.sound_board!=sound || s->player->m->cfg.video_colors!=colors ||
+            s->player->m->cfg.crt_mode!=displayModeForGame(s.currentID));
         [s.contentFilter configure:filter];s.monitor.image=nil;
         [NSUserDefaults.standardUserDefaults setBool:filter.adult forKey:@"PC98AdultFilter"];
         [NSUserDefaults.standardUserDefaults setBool:filter.harm forKey:@"PC98HarmFilter"];
@@ -1880,8 +1902,11 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         NSString* clockKey=gameClockKey(identifier);
         NSInteger clock=[defaults integerForKey:clockKey];
         NSString* clockLabel=validClockMHz(clock) ? [NSString stringWithFormat:@"%ld MHz",(long)clock] : @"デフォルト";
-        NSString* info=[NSString stringWithFormat:@"ソフト名  %@\nフォルダ名  %@\n作品DB  %@\nキャッシュ  %@\nCPUクロック  %@",
-            catalogName ?: fallback,folder.lastPathComponent,catalogName ? @"照合済み" : @"未確認",cached ? @"保存済み" : @"なし",clockLabel];
+        NSString* displayKey=gameDisplayModeKey(identifier);
+        NSNumber* gameMode=[defaults objectForKey:displayKey];
+        NSString* displayLabel=gameMode ? displayModeLabels[displayModeForGame(identifier)] : @"デフォルト";
+        NSString* info=[NSString stringWithFormat:@"ソフト名  %@\nフォルダ名  %@\n作品DB  %@\nキャッシュ  %@\nCPUクロック  %@\n画面モード  %@",
+            catalogName ?: fallback,folder.lastPathComponent,catalogName ? @"照合済み" : @"未確認",cached ? @"保存済み" : @"なし",clockLabel,displayLabel];
         UIAlertController* details=[UIAlertController alertControllerWithTitle:display message:info preferredStyle:UIAlertControllerStyleAlert];
         [details addAction:[UIAlertAction actionWithTitle:@"CPUクロックを設定" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
             UIAlertController* clocks=[UIAlertController alertControllerWithTitle:@"このゲームのCPUクロック"
@@ -1901,6 +1926,19 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
             }]];
             [clocks addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
             [weakMenu presentViewController:clocks animated:YES completion:nil];
+        }]];
+        [details addAction:[UIAlertAction actionWithTitle:@"画面モードを設定" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+            UIAlertController* modes=[UIAlertController alertControllerWithTitle:@"このゲームの画面モード"
+                message:@"選んだ設定は次回のゲーム起動から適用します。" preferredStyle:UIAlertControllerStyleAlert];
+            [modes addAction:[UIAlertAction actionWithTitle:@"デフォルトを使用" style:UIAlertActionStyleDefault handler:^(UIAlertAction* selected) {
+                [defaults removeObjectForKey:displayKey];
+            }]];
+            for(NSInteger value=0;value<3;++value)
+                [modes addAction:[UIAlertAction actionWithTitle:displayModeLabels[value] style:UIAlertActionStyleDefault handler:^(UIAlertAction* selected) {
+                    [defaults setInteger:value forKey:displayKey];
+                }]];
+            [modes addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+            [weakMenu presentViewController:modes animated:YES completion:nil];
         }]];
         [details addAction:[UIAlertAction actionWithTitle:@"タイトル名を編集" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
             UIAlertController* edit=[UIAlertController alertControllerWithTitle:@"タイトル名を編集"
@@ -2136,6 +2174,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         int imageHeight=s.monitor.image.CGImage? (int)CGImageGetHeight(s.monitor.image.CGImage):0;
         NSDictionary* report=@{@"game":s.currentID ?: @"",@"frames":@(frame),@"requestedFrames":@(total),@"guestQuit":@(m->quit),
             @"videoColors":@(m->cfg.video_colors),@"pc9821":@(m->cfg.pc9821),@"pegcActive":@(m->pegc.on),
+            @"crtMode":@(m->cfg.crt_mode),@"crt31":@(m->pegc.crt31),
             @"screenColorCount":@(colors.size()),@"framebufferHeight":@(s->player->fb_h),@"imageHeight":@(imageHeight),@"audioPeak":@(peak)};
         NSData* json=[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil];
         [json writeToURL:[area(NSDocumentDirectory,@"") URLByAppendingPathComponent:@"compatibility-result.json"] atomically:YES];
