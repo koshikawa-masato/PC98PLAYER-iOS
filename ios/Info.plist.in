@@ -8,6 +8,8 @@
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>@PC98PLAYER_IOS_VERSION@</string>
 <key>CFBundleVersion</key><string>@PC98PLAYER_IOS_BUILD@</string>
+<key>RetroDOSFeedbackURL</key><string>@PC98PLAYER_IOS_FEEDBACK_URL@</string>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLSchemes</key><array><string>retrodos-feedback</string></array></dict></array>
 <key>ITSAppUsesNonExemptEncryption</key><false/>
 <key>LSRequiresIPhoneOS</key><true/>
 <key>UILaunchScreen</key><dict/>

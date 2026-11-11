@@ -1,0 +1,48 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "retrodos-feedback",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-11-10",
+  "account_id": "02e5a402a29ca16d8200ee8d90beedb9",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "feedback.three-sisters.ai",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "PUBLIC_ORIGIN": "https://feedback.three-sisters.ai",
+    "FEEDBACK_FROM": "feedback@three-sisters.ai",
+    "RECEPTION_ENABLED": "true",
+    "DELIVERY_ENABLED": "true",
+    "GITHUB_APP_ID": "5694625",
+    "GITHUB_CLIENT_ID": "Iv23li9Y1HQaMjdFEb1f",
+    "GITHUB_INSTALLATION_ID": "180470797",
+    "GITHUB_REPOSITORY_ID": "1432612586",
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAF7JX0gQixX2wYg1"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "retrodos-feedback",
+      "database_id": "ed3e52be-ebe7-4a1f-86ec-add21512be5a",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "destination_address": "firecracker.rebirth@gmail.com"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/5 * * * *"
+    ]
+  },
+  "observability": {
+    "enabled": false
+  }
+}
