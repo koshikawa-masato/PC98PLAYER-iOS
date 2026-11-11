@@ -1,101 +1,77 @@
-# Mac ローカルセッションへの引き継ぎ
+# エージェント向け引き継ぎ
 
-更新日：2026-11-06（日本時間）。この文書作成前に確認した main は `dd786ef`。
+更新日：2026-11-11（日本時間）。このファイルを最初に読み、現在のユーザー指示を優先してください。
+旧引き継ぎは [2026-11-06の記録](docs/handoff-20261106.md) に保存しています。旧版の配布番号・未完了事項を現在の状態と混同しないでください。
 
-## ユーザーの依頼と現在の目的
-
-1. PR #1（端末内コンテンツフィルター）と #3（Apple 起動パス修正）を統合し、TestFlight で実機検証できるようにする。
-2. App Store の紹介スクリーンショットを現在の表示に更新する。iPhone／iPad の縦画面・横画面を併記する。
-3. ユーザーは配布用の証明書などが Mac ローカルにあると回答済み。ローカルの Xcode・キーチェーン・既存の Apple 認証を優先して使う。
-
-「画面のアップデート」は **App Store 掲載画像の更新**という意味に訂正済み。アプリのデザイン自体を新しく作り替える依頼ではない。
-
-TestFlight 用のビルド作成・署名・アップロードと掲載画像の更新は依頼済みなので、通常の手順を進めるたびに再確認する必要はない。App Store 本番への新ビルド提出・公開は今回の作業に含めない。OS のキーチェーン解除や Apple の追加認証など本人操作が必要なときだけ、その操作を依頼する。
-
-## 最初に確認すること
-
-- 現在のユーザー指示と適用される AGENTS.md を優先する。
-- この Mac の既存チェックアウトを使う。`git status`・現在のブランチ・remote・HEAD を確認し、未コミット変更とローカルコミットを保護してから最新 main を取得・統合する。無条件の reset や checkout による上書きをしない。
-- 他のエージェントも同じリポジトリで作業している。特に Pages の CSS／HTML とスクリーンショット処理を古い版へ戻さない。
-- `xcodebuild -version`、選択 SDK、利用可能なシミュレーター、既存のコード署名 ID とプロファイルの有効期限・Team／Bundle ID を確認する。秘密鍵・パスワード・API キー本文を出力したりコミットしたりしない。
-- クラウドの `/workspace`、仮想環境、stash はこの Mac にあると仮定しない。
-
-## 統合済みの変更
-
-- PR [#1](https://github.com/koshikawa-masato/PC98PLAYER-iOS/pull/1) と [#3](https://github.com/koshikawa-masato/PC98PLAYER-iOS/pull/3) は GitHub 上で **MERGED** を確認済み。元の宛先は `codex/ios-256-options` で、main にも統合済み。
-- 起動パス変換は `apple/StartupPath.h` を iOS／macOS から呼ぶ。以前クラウドで試した core/player.cpp 内の変換を重ねて戻さない。現在のテストは EXE／COM／BAT、相対データ読込、`/Q` 引数、保存オーバーレイを検証する。
-- `GameLibrary` は保存先共通のキャッシュ取得と Root 検証を行う。`Root=.`、フォルダ外参照、読み取り失敗と候補なしの案内を追加済み。キャッシュとセーブ分離を維持する。
-- フィルターは成人向け／残酷描写を個別に有効化し、黒塗り・ぼかし・モザイクを選択できる。Core ML モデルは同梱、既定は両方オフ。詳細と限界は [docs/content-filter.md](docs/content-filter.md)。モデルのハッシュを確認済みで、再取得・再変換は通常不要。
-- PR #5・#6 の Pages デザインと iPad 撮影修正も main に入っている。iPad 撮影は UI テストでシミュレーター自体を回転するため `IOS_UI_TESTS=ON` が必要。
-
-## 検証済みの証拠
-
-以下は `dd786ef` の結果。後続の変更があれば差分に応じて再検証する。
-
-- [iOS／実モデル・Metal／画面撮影 CI](https://github.com/koshikawa-masato/PC98PLAYER-iOS/actions/runs/42174942510)：成功。iOS スモークテスト、Core ML・Metal テスト、実機向け未署名ビルド、iPhone／iPad 縦横撮影を含む。
-- 同 CI の成果物：`app-store-screenshots`（5.77 MB）、`app-store-screens-logs`、`iOS-smoke-test`、`PC98PLAYER-iOS-development`。
-- [macOS ビルド／CTest](https://github.com/koshikawa-masato/PC98PLAYER-iOS/actions/runs/42174942916)：成功。
-- [Windows／256色テスト](https://github.com/koshikawa-masato/PC98PLAYER-iOS/actions/runs/42174942630)：成功。
-- クラウドの Linux でも統合時点のコア・フィルター判定等8テストが合格。
-
-CI 成功は、実機でのフィルター精度・発熱・速度や iCloud／NAS 実接続の確認を代替しない。上記成果物の画像は生成成功まで確認済みで、このクラウドセッションでは画像そのものの目視レビューや App Store へのアップロードはしていない。
-
-## Mac で TestFlight へ配布する
-
-既存手順：[docs/testflight.md](docs/testflight.md)。ローカル用スクリプトは `tools/archive_ios_testflight.sh`。`tools/ci_testflight.sh` は GitHub の一時 runner 用なので、普段使いの Mac でそのまま実行しない。
-
-- App Store Connect：[RetroDOS Player / TestFlight](https://appstoreconnect.apple.com/apps/6826817332/testflight)
-- Bundle ID：`jp.pc98player.ios`
-- Apple Team：`8JN36X5T3B`
-- 既存の配布証明書：Apple Distribution
-- 既存プロファイル名：`PC98PLAYER iOS App Store`（実在・有効期限を確認する）
-
-候補は **0.2.2 (11)**。番号は予約・アップロード済みではない。App Store Connect の最新ビルドを確認し、未使用で適切に増加する番号を選ぶ。スクリプト既定値の 0.2.1 (10) のまま実行しない。
-
-以下は番号確認後の実行例。作業ディレクトリはリポジトリ直下。
+## クローンして再開する
 
 ```sh
-IOS_VERSION=0.2.2 IOS_BUILD_NUMBER=11 \
-  IOS_BUILD_ROOT=build/local-testflight \
-  tools/archive_ios_testflight.sh
+git clone https://github.com/koshikawa-masato/PC98PLAYER-iOS.git
+cd PC98PLAYER-iOS
+git switch main
+git status --short
+./tools/fetch_ymfm.sh
+IOS_VERSION=0.2.4 IOS_BUILD_NUMBER=51 IOS_UI_TESTS=ON \
+  IOS_FEEDBACK_URL=https://feedback.three-sisters.ai/v1/feedback ./build_ios.sh
 ```
 
-1. 正式版 Xcode と既存の署名を使用する。必要なら `DEVELOPER_DIR` をコマンド単位で指定する。署名エラーが出たらログから証明書の秘密鍵・プロファイル・チーム・Bundle ID の不一致を切り分ける。
-2. アーカイブ／dSYM の UUID、IPA の Bundle ID・バージョン・ビルド番号、配布署名、フィルターモデルの同梱を確認する。古い出力をアップロードしない。
-3. Mac の既存の認証方法で App Store Connect へ送る。既存手順は Transporter で `out/TestFlight/export/RetroDOS Player.ipa` をデリバリする方式。利用可能なら認証済みの CLI も使用できる。
-4. Apple 側の処理完了・エラー有無を確認し、既存の内部テストグループへビルドを追加する。リポジトリ上の記録では「内部テスト」、本人1名、手動追加。現在のグループ構成を再確認する。
-5. 実際に TestFlight でインストール可能になったことを確認してから「配布完了」と報告する。アップロード受付だけで完了扱いにしない。新しい外部テスターの招待は勝手に行わない。
+このコマンドはローカルのシミュレーター用ビルドです。公開済みの番号を新しい配布に再使用しないでください。配布時はApp Store Connectで未使用の番号を確認します。
 
-### 実機確認の重点
+- CMakeとXcodeを使います。Duoの公開APIを含める場合はXcode 27.1以降。従来SDKでも条件付きコンパイルされます。
+- ymfmは上記スクリプトで固定リビジョンを取得します。
+- Core MLモデルとライセンスはリポジトリに含まれます。通常のビルドでモデルの再学習・再変換は不要です。
+- ゲームデータ、セーブ、NAS接続、Apple署名情報、OAuth/CloudflareのSecret、ローカルのビルド成果物はクローンされません。
+- エディタでは生成された `build/ios-iphonesimulator/PC98PLAYER.xcodeproj` を開きます。データなしの確認には起動引数 `--demo` を使えます。
 
-- 成人向け／残酷描写を独立して切り替え、各効果・感度・再起動後の設定保持を確認。
-- 初回推論待ちやゲーム変更・ステート読込・画面回転・全画面切替時に未加工画像や古い結果が出ないことを確認。
-- 音声継続、表示遅延、発熱を記録。画像加工の成功を検出精度の証明にしない。
-- 端末内／iCloud／NAS で直下とサブフォルダ起動を確認。Root 不正・起動候補なし・未ダウンロード・取得中断を区別し、不完全なキャッシュの公開や保存データの損失がないことを確認。
+## 現在のコードと公開版
 
-## App Store の紹介画面を更新する
+- App Store公開版は **0.2.4（ビルド51）**。2026-11-11に公開を確認。署名・配布記録は [docs/testflight.md](docs/testflight.md)。
+- フィードバックフォーム、匿名／Xのメール受付、GitHub App経由のIssue投稿、エラー時の案内、任意の診断JSONをソースへ取り込み済みです。
+- 今回の統合には、公開版にまだ含まれていないモザイクの20×20ピクセル再判定と確認用UIテストを含みます。mainをビルドしたものとApp Store版が同一だとは扱わないでください。
+- モザイクは大区画で候補を絞り、周辺の小区画を1回につき最大4個判定します。未判定部分は覆い、変化していない区画の結果とMetalテクスチャを再利用します。フィルター有効時の画面取得は最大20回/秒とし、ゲストCPU・音声の更新頻度は変えません。
+- Pagesの現行ガイド・FAQ・画像は `docs/` にあります。古いデザインへ戻さず、現在の文面と操作画面を確認して更新してください。
 
-1. 上記の `app-store-screenshots` 成果物を取得し、manifest と画像を目視確認する。端末・向き・表示内容・対象バージョンを合わせる。
-2. 撮り直す場合は、リポジトリ直下で以下を実行する。各端末のシミュレーターが必要。画像の回転加工ではなく実際の端末表示を撮る。
+## 未解決・確認が必要なこと
 
-   ```sh
-   IOS_UI_TESTS=ON ./build_ios.sh
-   python3 tools/capture_store_screens.py
-   ```
+- **全画面の長押しメニューから一時停止できないという実機報告は未解決**です。シミュレーターでは再現せず、製品コードの修正は行っていません。長押しだけではメニューを表示し、そこから「一時停止」を選ぶ仕様です。[確認条件と限界](docs/fullscreen-menu-verification.md)を参照してください。
+- モザイクの実ゲームでの精度・実機での引っかかり改善は、シミュレーターの成功だけで確認済みとしないでください。細かい切り出しで文脈が失われる場合は大区画の保護を維持します。成人向け／残酷描写の完全な検出を保証しません。
+- Issue #10は手動タイトル画面登録と一覧サムネイルで代替し、クローズ済み。#21・#24・#25はこの記録時点で未完了です。作業前にGitHub上の最新状態を確認してください。
+- NASの実接続、端末ロック解除、署名など、別のMacでそのまま引き継がれない状態があります。過去のスクリーンショットを現在の動作証拠にしないでください。
 
-3. 出力は `out/app-store-screens/`。iPhone 縦／横、iPad 縦／横の4枚と記録を確認し、App Store Connect が要求する解像度・端末枠に適合させる。シミュレーター画像の寸法を無条件に適合扱いしない。
-4. App Store Connect の対象バージョンで掲載画像を更新する。公開中バージョンが編集不可なら、次回更新用素材として準備して制約を報告する。画像変更のために新しいバイナリを本番審査・公開へ進めない。
-5. マウス中心のゲームは全画面表示が便利なことも案内する。ゲーム画面のダブルタップで切り替え、再ダブルタップで戻る。
+## 検証コマンド
 
-利用者向けガイド：[GitHub Pages](https://koshikawa-masato.github.io/PC98PLAYER-iOS/)。NAS 接続・全画面操作・App Store バッジは掲載済み。必要な素材更新では、他エージェントが作った最新デザインを保持する。
+```sh
+cmake -S . -B build/native -DCMAKE_BUILD_TYPE=Release
+cmake --build build/native --parallel 4
+ctest --test-dir build/native --output-on-failure
+```
 
-## クラウドで残った制約
+起動済みの検証用シミュレーターのUDIDを指定します。これらは同じBundle IDのアプリをインストールするため、私用のゲーム・セーブを入れた端末ではなく検証用を使用してください。
 
-- TestFlight の [クラウド実行](https://github.com/koshikawa-masato/PC98PLAYER-iOS/actions/runs/42159363224) は署名用 Actions Secrets 6項目がなく停止。アプリのビルド失敗ではない。
-- ユーザーは Mac ローカルの署名素材を使う方針。GitHub へ秘密鍵を登録し直すことを前提にしない。
-- この作業では TestFlight アップロード、内部テストへの追加、App Store 掲載画像の差し替えはまだ完了していない。
-- 実操作動画も未制作。旧24秒動画は静止画による補足。録画する場合はデモ起動／転送／NAS 接続を連続収録し、`tools/site/edit_recording.py` で章タイトルと暗転を付けられる。TestFlight と掲載画像の作業を先に進める。
+```sh
+./tools/test_ios_simulator.sh SIMULATOR_UDID
+./tools/test_content_filter_simulator.sh SIMULATOR_UDID
+xcodebuild test -project build/ios-iphonesimulator/PC98PLAYER.xcodeproj \
+  -scheme PC98PLAYERiOS -configuration Debug \
+  -destination 'platform=iOS Simulator,id=SIMULATOR_UDID' \
+  -only-testing:PC98PLAYERiOSUITests/FullscreenMenuUITests CODE_SIGNING_ALLOWED=NO
+```
 
-## 引き継ぎ後に残す記録
+受付サーバーはNode.js 24以降を使います。以下はローカル検証で、メールやIssueを送信しません。
 
-実施コミット、使用 Xcode、バージョン／ビルド番号、実機・OS、テスト結果、アップロード結果、Apple の処理結果、TestFlight の利用可能状態、画像更新の状態をこの文書または配布記録へ追記する。秘密情報は記録しない。
+```sh
+cd server/feedback
+npm ci
+npm test
+npm run test:runtime
+```
+
+30件のプロトコルテスト、workerd/D1の認証・重複送信テスト、ネイティブの `feedback_error_smoke` は統合前に成功しています。全画面UIテストも統合前のiPhone・Duoシミュレーターで成功。統合後のCI結果は対象PRのChecksを参照してください。
+
+## 受付・配布の境界
+
+- 受付URL：`https://feedback.three-sisters.ai/v1/feedback`。設定・Secret名・運用手順は [docs/feedback-vps.md](docs/feedback-vps.md)。Secretの値はGitや会話へ出さないでください。
+- `IOS_FEEDBACK_URL` を指定しないローカルビルドは送信先未設定です。匿名とXは開発者宛てメール、GitHubは本人確認と公開確認後のIssueです。通常の動作確認で実報告を勝手に送信しないでください。
+- App StoreアプリID `6826817332`、Bundle ID `jp.pc98player.ios`。署名は担当者のMacのXcode／キーチェーンを使います。
+- この引き継ぎのためのmain統合では、TestFlight・App Storeへの新ビルド送信やCloudflareの再デプロイは行いません。配布作業はその時点のユーザー指示に従ってください。
+- 共有コアのBIOS不要方針、Apple側での起動パス変換、ゲームキャッシュとセーブの分離を保持してください。
