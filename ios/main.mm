@@ -696,6 +696,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
     int mouseButtons;
     int filterFrameHeight;
+    CFTimeInterval lastMonitorCapture;
     std::set<NSInteger> physicalKeys;
     std::set<int> touchKeys;
     std::bitset<128> controllerKeys;
@@ -1408,7 +1409,12 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         audio.push(player->audio); nextFrame+=seconds;
         if(player->m->quit) { [self handleGuestTermination]; break; }
     }
-    if(frames) [self refreshMonitor];
+    // Keep guest timing and audio independent of the filtered presentation rate.
+    if(frames && (!self.contentFilter.settings.enabled() || player->m->quit ||
+                  filterFrameHeight!=player->fb_h || (self.titleReference && !self.titleCaptureAttempted) ||
+                  now-lastMonitorCapture>=1.0/20.0)) {
+        [self refreshMonitor];
+    }
 
     if(!fpsSampleStart) {
         fpsSampleStart=now;
@@ -1440,6 +1446,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         filterFrameHeight=player->fb_h;
         [self.view setNeedsLayout];
     }
+    lastMonitorCapture=CACurrentMediaTime();
     UIImage* image=frameImage(player.get());
     uint64_t imageFrame=player->m->frame_count;
     NSData* reference=self.titleReference;

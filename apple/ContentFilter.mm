@@ -33,7 +33,7 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
     if(mask.read(p).r>.5) {
         if(effect==0) color=float4(0,0,0,1);
         else if(effect==1) color=blurred.read(p);
-        else { uint block=24;uint2 center=min((p/block)*block+block/2,size-1);color=original.read(center); }
+        else { uint block=20;uint2 center=min((p/block)*block+block/2,size-1);color=original.read(center); }
     }
     output.write(color,p);
 }
@@ -43,9 +43,18 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
     PresentationGate _gate;
     dispatch_queue_t _worker;
     BOOL _busy;
+    BOOL _needsRefinement;
     UIImage* _pending;
     NSData* _lastSubmittedData;
     void (^_pendingCompletion)(UIImage*,NSString*);
+    NSData* _previousPixels;
+    UIImage* _previousSource;
+    std::vector<Tile> _previousTiles;
+    std::vector<Scores> _previousCells;
+    Scores _previousFull;
+    uint64_t _previousGeneration;
+    id<MTLTexture> _originalTexture, _blurTexture, _outputTexture, _maskTexture;
+    MPSImageGaussianBlur* _blur;
     MLModel* _adultModel;
     MLModel* _harmModel;
     id<MTLDevice> _device;
@@ -55,6 +64,7 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
 @property(nonatomic,readwrite,nullable) NSString* lastError;
 @property(nonatomic,readwrite) NSTimeInterval lastProcessingTime;
 - (MLModel*)loadModel:(NSString*)name error:(NSError**)error;
+- (BOOL)scores:(Scores*)scores image:(CGImageRef)image settings:(Settings)settings error:(NSError**)error;
 @end
 #ifdef PC98PLAYER_TESTING
 @interface PC98UnavailableModelFilter : PC98ContentFilter
@@ -62,6 +72,18 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
 @implementation PC98UnavailableModelFilter
 - (MLModel*)loadModel:(NSString*)name error:(NSError**)error {
     if(error)*error=filterError(@"検証用のモデル読込失敗");return nil;
+}
+@end
+@interface PC98RefinementTestFilter : PC98ContentFilter
+@property(nonatomic) int smallCropCalls;
+@end
+@implementation PC98RefinementTestFilter
+- (BOOL)scores:(Scores*)scores image:(CGImageRef)image settings:(Settings)settings error:(NSError**)error {
+    if (CGImageGetWidth(image)<=20 && CGImageGetHeight(image)<=20) ++self.smallCropCalls;
+    NSData* rgba=rgbaForTest([UIImage imageWithCGImage:image]);
+    const uint8_t* pixel=(const uint8_t*)rgba.bytes;
+    *scores={pixel[0]>240 && pixel[1]<20 && pixel[2]<20 ? .95f : 0.f,0.f};
+    return YES;
 }
 @end
 #endif
@@ -77,7 +99,7 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
 }
 - (void)reset {
     NSAssert(NSThread.isMainThread,@"Content filter presentation is main-thread only");
-    _gate.invalidate();_pending=nil;_pendingCompletion=nil;_lastSubmittedData=nil;self.lastError=nil;
+    _gate.invalidate();_needsRefinement=NO;_pending=nil;_pendingCompletion=nil;_lastSubmittedData=nil;self.lastError=nil;
 }
 - (MLModel*)loadModel:(NSString*)name error:(NSError**)error {
     NSURL* url=[NSBundle.mainBundle URLForResource:name withExtension:@"mlmodelc"];
@@ -132,24 +154,44 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
     if(!bitmap) { CGColorSpaceRelease(colors);if(error)*error=filterError(@"保護画像のメモリを確保できません。");return nil; }
     CGContextDrawImage(bitmap,CGRectMake(0,0,w,h),image.CGImage);CGContextRelease(bitmap);
     for(const Region& r:regions) {
-        size_t x0=std::min(w,(size_t)std::floor(std::max(0.f,r.x)*w)),y0=std::min(h,(size_t)std::floor(std::max(0.f,r.y)*h));
-        size_t x1=std::min(w,(size_t)std::ceil(std::max(0.f,r.x+r.width)*w)),y1=std::min(h,(size_t)std::ceil(std::max(0.f,r.y+r.height)*h));
+        size_t x0=std::min(w,(size_t)std::floor(std::max(0.f,r.x)*w+.0005f)),y0=std::min(h,(size_t)std::floor(std::max(0.f,r.y)*h+.0005f));
+        size_t x1=std::min(w,(size_t)std::ceil(std::max(0.f,r.x+r.width)*w-.0005f)),y1=std::min(h,(size_t)std::ceil(std::max(0.f,r.y+r.height)*h-.0005f));
         for(size_t y=y0;y<y1;++y) if(x1>x0)std::memset(mask.data()+y*w+x0,255,x1-x0);
     }
-    MTLTextureDescriptor* desc=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:w height:h mipmapped:NO];
-    desc.usage=MTLTextureUsageShaderRead|MTLTextureUsageShaderWrite;desc.storageMode=MTLStorageModeShared;
-    id<MTLTexture> original=[_device newTextureWithDescriptor:desc],blurred=[_device newTextureWithDescriptor:desc],output=[_device newTextureWithDescriptor:desc];
-    desc.pixelFormat=MTLPixelFormatR8Unorm;id<MTLTexture> maskTexture=[_device newTextureWithDescriptor:desc];
-    if(!original || !blurred || !output || !maskTexture) { CGColorSpaceRelease(colors);if(error)*error=filterError(@"Metalの保護画像を確保できません。");return nil; }
+    if (_originalTexture.width!=w || _originalTexture.height!=h || !_outputTexture || !_maskTexture) {
+        MTLTextureDescriptor* desc=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:w height:h mipmapped:NO];
+        desc.usage=MTLTextureUsageShaderRead|MTLTextureUsageShaderWrite;
+        desc.storageMode=MTLStorageModeShared;
+        _originalTexture=[_device newTextureWithDescriptor:desc];
+        _outputTexture=[_device newTextureWithDescriptor:desc];
+        _blurTexture=nil;
+        desc.pixelFormat=MTLPixelFormatR8Unorm;
+        _maskTexture=[_device newTextureWithDescriptor:desc];
+    }
+    if (effect==Effect::Blur && !_blurTexture) {
+        MTLTextureDescriptor* desc=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:w height:h mipmapped:NO];
+        desc.usage=MTLTextureUsageShaderRead|MTLTextureUsageShaderWrite;
+        desc.storageMode=MTLStorageModeShared;
+        _blurTexture=[_device newTextureWithDescriptor:desc];
+    }
+    id<MTLTexture> original=_originalTexture, output=_outputTexture, maskTexture=_maskTexture;
+    if (!original || !output || !maskTexture || (effect==Effect::Blur && !_blurTexture)) {
+        CGColorSpaceRelease(colors);
+        if(error)*error=filterError(@"Metalの保護画像を確保できません。");
+        return nil;
+    }
     [original replaceRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0 withBytes:rgba.data() bytesPerRow:w*4];
     [maskTexture replaceRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0 withBytes:mask.data() bytesPerRow:w];
     id<MTLCommandBuffer> command=[_commands commandBuffer];
     if(effect==Effect::Blur) {
-        MPSImageGaussianBlur* blur=[[MPSImageGaussianBlur alloc] initWithDevice:_device sigma:18];
-        blur.edgeMode=MPSImageEdgeModeClamp;[blur encodeToCommandBuffer:command sourceTexture:original destinationTexture:blurred];
+        if (!_blur) {
+            _blur=[[MPSImageGaussianBlur alloc] initWithDevice:_device sigma:18];
+            _blur.edgeMode=MPSImageEdgeModeClamp;
+        }
+        [_blur encodeToCommandBuffer:command sourceTexture:original destinationTexture:_blurTexture];
     }
     id<MTLComputeCommandEncoder> encoder=[command computeCommandEncoder];[encoder setComputePipelineState:_pipeline];
-    [encoder setTexture:original atIndex:0];[encoder setTexture:effect==Effect::Blur?blurred:original atIndex:1];
+    [encoder setTexture:original atIndex:0];[encoder setTexture:effect==Effect::Blur?_blurTexture:original atIndex:1];
     [encoder setTexture:maskTexture atIndex:2];[encoder setTexture:output atIndex:3];
     uint32_t mode=(uint32_t)effect;[encoder setBytes:&mode length:sizeof(mode) atIndex:0];
     [encoder dispatchThreads:MTLSizeMake(w,h,1) threadsPerThreadgroup:MTLSizeMake(16,16,1)];[encoder endEncoding];
@@ -162,23 +204,127 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
     if(result)CGImageRelease(result);CGDataProviderRelease(provider);CFRelease(data);CGColorSpaceRelease(colors);
     if(!picture && error)*error=filterError(@"保護済み画像を作成できません。");return picture;
 }
-- (UIImage*)filter:(UIImage*)image settings:(Settings)settings error:(NSError**)error {
+- (UIImage*)filter:(UIImage*)image pixels:(NSData*)pixels generation:(uint64_t)generation
+         settings:(Settings)settings refining:(BOOL*)refining error:(NSError**)error {
     if(![self prepare:settings error:error])return nil;
-    Scores full;if(![self scores:&full image:image.CGImage settings:settings error:error])return nil;
+    CGImageRef source=image.CGImage;
+    size_t w=CGImageGetWidth(source),h=CGImageGetHeight(source),stride=CGImageGetBytesPerRow(source);
+    CGImageRef previous=_previousSource.CGImage;
+    const bool canReuse=generation==_previousGeneration && previous && pixels && _previousPixels &&
+        CGImageGetWidth(previous)==w && CGImageGetHeight(previous)==h &&
+        CGImageGetBitsPerPixel(source)==32 && CGImageGetBitsPerPixel(previous)==32 &&
+        CGImageGetBytesPerRow(previous)==stride && stride>=w*4 &&
+        CGImageGetBitmapInfo(source)==CGImageGetBitmapInfo(previous) &&
+        pixels.length>=stride*h && _previousPixels.length>=stride*h;
+    auto unchangedCrop=[&](CGRect rect) {
+        if (!canReuse) return false;
+        for (size_t line=0;line<(size_t)rect.size.height;++line) {
+            size_t offset=((size_t)rect.origin.y+line)*stride+(size_t)rect.origin.x*4;
+            if (std::memcmp((const uint8_t*)pixels.bytes+offset,
+                            (const uint8_t*)_previousPixels.bytes+offset,
+                            (size_t)rect.size.width*4)!=0) return false;
+        }
+        return true;
+    };
+    auto classifyCrop=[&](CGRect rect, Scores& score) {
+        CGImageRef crop=CGImageCreateWithImageInRect(source,rect);
+        BOOL ok=crop && [self scores:&score image:crop settings:settings error:error];
+        if (crop) CGImageRelease(crop);
+        return ok;
+    };
+    Scores full;
+    if (canReuse && [pixels isEqualToData:_previousPixels]) full=_previousFull;
+    else if (![self scores:&full image:source settings:settings error:error]) return nil;
+
+    constexpr int divisions=2;
+    constexpr float overlapX=.10f, overlapY=.15f;
     std::vector<Tile> tiles;
-    for(Region r:std::vector<Region>{{0,0,.6f,.65f},{.4f,0,.6f,.65f},{0,.35f,.6f,.65f},{.4f,.35f,.6f,.65f}}) {
-        size_t w=CGImageGetWidth(image.CGImage),h=CGImageGetHeight(image.CGImage);
-        CGImageRef crop=CGImageCreateWithImageInRect(image.CGImage,CGRectMake(r.x*w,r.y*h,r.width*w,r.height*h));
-        Scores score;BOOL ok=crop && [self scores:&score image:crop settings:settings error:error];
-        if(crop)CGImageRelease(crop);if(!ok)return nil;tiles.push_back({r,score});
+    tiles.reserve(divisions*divisions);
+    for (int row=0;row<divisions;++row) {
+        for (int column=0;column<divisions;++column) {
+            float x=std::max(0.f,float(column)/divisions-overlapX);
+            float y=std::max(0.f,float(row)/divisions-overlapY);
+            float right=std::min(1.f,float(column+1)/divisions+overlapX);
+            float bottom=std::min(1.f,float(row+1)/divisions+overlapY);
+            CGRect cropRect=CGRectIntersection(CGRectMake(0,0,w,h),
+                CGRectIntegral(CGRectMake(x*w,y*h,(right-x)*w,(bottom-y)*h)));
+            Region region{float(cropRect.origin.x/w),float(cropRect.origin.y/h),
+                          float(cropRect.size.width/w),float(cropRect.size.height/h)};
+            Scores score;
+            if (tiles.size()<_previousTiles.size() && unchangedCrop(cropRect))
+                score=_previousTiles[tiles.size()].scores;
+            else if (!classifyCrop(cropRect,score)) return nil;
+            tiles.push_back({region,score});
+        }
     }
-    return [self render:image regions:regions(full,tiles,settings) effect:settings.effect error:error];
+    auto mask=regions(full,tiles,settings);
+    std::vector<Scores> cells;
+    if (settings.effect==Effect::Mosaic && !mask.empty() &&
+        std::any_of(tiles.begin(),tiles.end(),[&](const Tile& tile) { return matches(tile.scores,settings); })) {
+        constexpr size_t cellSize=20;
+        const size_t columns=(w+cellSize-1)/cellSize;
+        const size_t rows=(h+cellSize-1)/cellSize;
+        const Scores unknown{-1,-1};
+        cells.assign(columns*rows,unknown);
+        // Limit extra inference work per frame. Untested cells remain covered.
+        int remaining=4;
+        std::vector<Region> refined;
+        size_t areaIndex=0;
+        for (const Tile& tile:tiles) {
+            if (!matches(tile.scores,settings)) continue;
+            const Region& area=mask[areaIndex++];
+            const size_t left=(size_t)std::floor(area.x*w)/cellSize;
+            const size_t top=(size_t)std::floor(area.y*h)/cellSize;
+            const size_t right=std::min(columns,((size_t)std::ceil((area.x+area.width)*w)+cellSize-1)/cellSize);
+            const size_t bottom=std::min(rows,((size_t)std::ceil((area.y+area.height)*h)+cellSize-1)/cellSize);
+            const size_t start=refined.size();
+            bool foundAdult=false, foundHarm=false;
+            for (size_t row=top;row<bottom;++row) {
+                for (size_t column=left;column<right;++column) {
+                    size_t index=row*columns+column;
+                    size_t x=column*cellSize,y=row*cellSize;
+                    size_t width=std::min(cellSize,w-x),height=std::min(cellSize,h-y);
+                    CGRect rect=CGRectMake(x,y,width,height);
+                    Scores& score=cells[index];
+                    if (!valid(score) && index<_previousCells.size() &&
+                        valid(_previousCells[index]) && unchangedCrop(rect))
+                        score=_previousCells[index];
+                    if (!valid(score) && remaining>0) {
+                        if (!classifyCrop(rect,score)) return nil;
+                        --remaining;
+                    }
+                    const bool known=valid(score);
+                    const bool positive=known && matches(score,settings);
+                    foundAdult|=known && score.adult>=settings.threshold();
+                    foundHarm|=known && score.harm>=settings.threshold();
+                    if (!known) *refining=YES;
+                    if (!known || positive)
+                        refined.push_back({float(x)/w,float(y)/h,float(width)/w,float(height)/h});
+                }
+            }
+            // Small crops can lose context. Keep the coarse mask if none confirms it.
+            const bool unresolvedAdult=settings.adult && tile.scores.adult>=settings.threshold() && !foundAdult;
+            const bool unresolvedHarm=settings.harm && tile.scores.harm>=settings.threshold() && !foundHarm;
+            if (unresolvedAdult || unresolvedHarm) {
+                refined.resize(start);
+                refined.push_back(area);
+            }
+        }
+        mask=std::move(refined);
+    }
+    _previousPixels=pixels;
+    _previousSource=image;
+    _previousGeneration=generation;
+    _previousFull=full;
+    _previousTiles=std::move(tiles);
+    _previousCells=std::move(cells);
+    return [self render:image regions:mask effect:settings.effect error:error];
 }
 - (void)submitImage:(UIImage*)image completion:(void (^)(UIImage*,NSString*))completion {
     NSAssert(NSThread.isMainThread,@"Content filter presentation is main-thread only");
     if(!_settings.enabled()) { completion(image,nil);return; }
     NSData* bytes=CFBridgingRelease(CGDataProviderCopyData(CGImageGetDataProvider(image.CGImage)));
-    if(bytes && [_lastSubmittedData isEqualToData:bytes])return;
+    if(bytes && [_lastSubmittedData isEqualToData:bytes] && (_busy || !_needsRefinement))return;
     _lastSubmittedData=bytes;
     _pending=image;_pendingCompletion=[completion copy];if(!_busy)[self beginPending];
 }
@@ -187,14 +333,16 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
     UIImage* image=_pending;void (^completion)(UIImage*,NSString*)=_pendingCompletion;
     _pending=nil;_pendingCompletion=nil;_busy=YES;
     Settings settings=_settings;Ticket ticket=_gate.issue();
+    NSData* pixels=_lastSubmittedData;
     dispatch_async(_worker,^{ @autoreleasepool {
         CFAbsoluteTime started=CFAbsoluteTimeGetCurrent();
-        NSError* error=nil;UIImage* result=[self filter:image settings:settings error:&error];
+        BOOL refining=NO;
+        NSError* error=nil;UIImage* result=[self filter:image pixels:pixels generation:ticket.generation settings:settings refining:&refining error:&error];
         NSTimeInterval elapsed=CFAbsoluteTimeGetCurrent()-started;
         NSString* message=result?nil:(error.localizedDescription ?: @"判定できないため画像を保護しています。");
         dispatch_async(dispatch_get_main_queue(),^{
             self->_busy=NO;
-            if(self->_gate.accept(ticket)) { self.lastError=message;self.lastProcessingTime=elapsed;completion(result,message); }
+            if(self->_gate.accept(ticket)) { self->_needsRefinement=result && refining;self.lastError=message;self.lastProcessingTime=elapsed;completion(result,message); }
             [self beginPending];
         });
     }});
@@ -226,7 +374,7 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
                     if(!covered)outside &= std::memcmp(original+p,modified+p,4)==0;
                     if(covered) {
                         black &= modified[p]==0 && modified[p+1]==0 && modified[p+2]==0 && modified[p+3]==255;
-                        if(x+1<120 && x/24==(x+1)/24)blocks &= std::memcmp(modified+p,modified+p+4,4)==0;
+                        if(x+1<120 && x/20==(x+1)/20)blocks &= std::memcmp(modified+p,modified+p+4,4)==0;
                         if(x+1<120) { beforeVariation+=std::abs((int)original[p]-(int)original[p+4]);afterVariation+=std::abs((int)modified[p]-(int)modified[p+4]); }
                     }
                 }
@@ -237,10 +385,29 @@ kernel void cover(texture2d<float,access::read> original [[texture(0)]],
             }
             if(effect==Effect::Mosaic)mosaic=result;
         }
+        PC98RefinementTestFilter* refinement=[PC98RefinementTestFilter new];
+        Settings mosaicOnly; mosaicOnly.adult=true; mosaicOnly.effect=Effect::Mosaic;
+        NSData* sourcePixels=CFBridgingRelease(CGDataProviderCopyData(CGImageGetDataProvider(source.CGImage)));
+        BOOL more=NO;
+        UIImage* first=[refinement filter:source pixels:sourcePixels generation:1 settings:mosaicOnly refining:&more error:&error];
+        NSData* firstPixels=first ? rgbaForTest(first) : nil;
+        const size_t cleared=(5*160+24)*4, pending=(25*160+24)*4;
+        const auto* before=(const uint8_t*)originalBytes.bytes;
+        const auto* after=(const uint8_t*)firstPixels.bytes;
+        report[@"mosaicRefinementKeepsPendingCellsCovered"]=@(after && more &&
+            refinement.smallCropCalls==4 && std::memcmp(before+cleared,after+cleared,4)==0 &&
+            std::memcmp(before+pending,after+pending,4)!=0);
+        more=NO;
+        UIImage* second=[refinement filter:source pixels:sourcePixels generation:1 settings:mosaicOnly refining:&more error:&error];
+        report[@"mosaicRefinementReusesConfirmedCells"]=@(second && more && refinement.smallCropCalls==8);
         if(error)report[@"error"]=error.localizedDescription;
         dispatch_async(dispatch_get_main_queue(),^{
             if(!prepared) { completion(report,mosaic ?: source);return; }
-            Settings original=self.settings;[self configure:both];__block BOOL staleDelivered=NO,delivered=NO;
+            Settings original=self.settings;
+            Settings mosaicSettings=both;
+            mosaicSettings.effect=Effect::Mosaic;
+            [self configure:mosaicSettings];
+            __block BOOL staleDelivered=NO,delivered=NO;
             [self submitImage:source completion:^(UIImage* image,NSString* message) { staleDelivered=YES; }];
             report[@"enabledSubmitDoesNotRevealSynchronously"]=@(!staleDelivered);
             [self reset];
