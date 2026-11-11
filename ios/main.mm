@@ -5,6 +5,8 @@
 #import <AVFoundation/AVFoundation.h>
 #import <CommonCrypto/CommonDigest.h>
 #import "GameLibrary.h"
+#import "FeedbackForm.h"
+#include "FeedbackErrorPolicy.h"
 #import "Keyboard.h"
 #include "DuoPresentation.h"
 #import "RetroHardware.h"
@@ -481,6 +483,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 }
 
 @interface GameOptionsController : UITableViewController
+@property(nonatomic, strong) UIImage* issueScreenshot;
+@property(nonatomic, copy) NSDictionary* issueDiagnostics;
 @property NSInteger soundBoard;
 @property NSInteger videoColors;
 @property NSInteger clockMHz;
@@ -504,7 +508,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 7; }
-- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?7:section==3?6:section==4?1:section==5?5:2; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?7:section==3?6:section==4?1:section==5?5:section==6?3:2; }
 - (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数",@"表示",@"コンテンツフィルター",@"Bluetoothコントローラー",@"CPUクロックのデフォルト",@"このアプリについて"][section]; }
 - (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section {
     if(section==1)return @"変更を適用するとゲームが再起動します。必要な場合は、先にゲーム内で保存してください。";
@@ -615,6 +619,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
                 [NSString stringWithFormat:@"%ld〜%ld MHz",(long)minimumClockMHz,(long)maximumClockMHz];
             cell.accessoryType=custom ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryDisclosureIndicator;
         }
+    } else if(index.row==2) {
+        cell.textLabel.text=@"バージョン";
+        cell.detailTextLabel.text=[PC98FeedbackAppVersion() stringByAppendingString:@" · 不具合を報告"];
+        cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
     } else {
         cell.textLabel.text=index.row==0?@"プライバシーポリシー":@"ライセンス";
         cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
@@ -630,6 +638,11 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         return;
     }
     if(index.section==6) {
+        [tableView deselectRowAtIndexPath:index animated:YES];
+        if(index.row==2) {
+            [self reportIssue];
+            return;
+        }
         LegalTextController* document=[LegalTextController new];document.title=index.row==0?@"プライバシーポリシー":@"ライセンス";
         document.resource=index.row==0?@"privacy-policy.txt":@"LICENSE";[self.navigationController pushViewController:document animated:YES];return;
     }
@@ -638,6 +651,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     else if(index.section==2 && index.row<2)self.manualDuo=index.row==1;
     else if(index.section==3 && index.row>=2 && index.row<5) { auto settings=self.filterSettings;settings.effect=(content_filter::Effect)(index.row-2);self.filterSettings=settings; }
     [tableView reloadData];
+}
+- (void)reportIssue {
+    UIViewController* form=PC98FeedbackFormWithContext(PC98FeedbackAppVersion(),self.issueScreenshot,self.issueDiagnostics,nil,nil);
+    [self.navigationController pushViewController:form animated:YES];
 }
 - (void)editClock {
     __weak GameOptionsController* weak=self;
@@ -679,6 +696,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
     int mouseButtons;
     int filterFrameHeight;
+    CFTimeInterval lastMonitorCapture;
     std::set<NSInteger> physicalKeys;
     std::set<int> touchKeys;
     std::bitset<128> controllerKeys;
@@ -706,6 +724,14 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 @property NSURL* scopedGameFolder;
 @property BOOL readingOriginal;
 @property NSString* currentID;
+@property(copy) NSDictionary* launchDiagnostics;
+@property(copy) NSDictionary* pendingFeedbackError;
+@property(strong) UIImage* pendingFeedbackImage;
+@property(strong) NSMutableSet<NSString*>* reportedErrorCodes;
+@property BOOL guestTerminationHandled;
+@property BOOL feedbackRestorePlayback;
+@property NSUInteger feedbackGeneration;
+@property uint64_t displayedFrameNumber;
 #ifdef PC98PLAYER_TESTING
 @property AudioCaptureProbe* audioProbe;
 #endif
@@ -829,7 +855,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
             NSURL* cache=area(NSCachesDirectory,[@"PC98Games/" stringByAppendingString:identifier]);
             if([NSFileManager.defaultManager fileExistsAtPath:[cache URLByAppendingPathComponent:@"PC98PLAYER.INI"].path])
                 [self openCache:cache identifier:identifier];
-            else [self message:@"指定されたゲームのキャッシュがありません。"];
+            else [self reportError:@"指定されたゲームのキャッシュがありません。" code:@"cache_missing" summary:@"ゲームのキャッシュを開けませんでした"];
         }
     }
     NSUInteger verifyIndex=[arguments indexOfObject:@"--verify-game-frames"];
@@ -875,6 +901,18 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     if([NSProcessInfo.processInfo.arguments containsObject:@"--smoke-test"]) {
         [self demo];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{ [weak smokeTest]; });
+    }
+    if([arguments containsObject:@"--feedback-error-fixture"] || [arguments containsObject:@"--feedback-normal-exit-fixture"]) {
+        BOOL normal=[arguments containsObject:@"--feedback-normal-exit-fixture"];
+        dispatch_async(dispatch_get_main_queue(),^{
+            NSURL* fixture=area(NSCachesDirectory,@"FeedbackErrorFixture");
+            [NSFileManager.defaultManager createDirectoryAtURL:fixture withIntermediateDirectories:YES attributes:nil error:nil];
+            const uint8_t exitProgram[]={0xb8,0x00,0x4c,0xcd,0x21};
+            [[NSData dataWithBytes:exitProgram length:sizeof(exitProgram)] writeToURL:[fixture URLByAppendingPathComponent:@"EXIT.COM"] atomically:YES];
+            NSString* ini=normal?@"[PC98PLAYER]\nStart=EXIT.COM\n":@"[PC98PLAYER]\nStart=MISSING.EXE\n";
+            [ini writeToURL:[fixture URLByAppendingPathComponent:@"PC98PLAYER.INI"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            [weak openCache:fixture identifier:@"feedback-fixture"];
+        });
     }
 #endif
 }
@@ -1051,6 +1089,119 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     UIAlertController* a=[UIAlertController alertControllerWithTitle:@"RetroDOS Player" message:message preferredStyle:UIAlertControllerStyleAlert];
     [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]]; [self presentViewController:a animated:YES completion:nil];
 }
+- (void)resetFeedbackErrors {
+    self.reportedErrorCodes=[NSMutableSet new];
+    self.pendingFeedbackError=nil;self.pendingFeedbackImage=nil;
+    self.feedbackRestorePlayback=NO;self.guestTerminationHandled=NO;
+    ++self.feedbackGeneration;
+}
+- (NSDictionary*)feedbackDiagnostics:(NSString*)event {
+    auto rect=[](CGRect r)->id { return @[@(r.origin.x),@(r.origin.y),@(r.size.width),@(r.size.height)]; };
+    NSMutableDictionary* result=[@{@"schema_version":@1,@"capture_id":NSUUID.UUID.UUIDString,
+        @"captured_at":[[NSISO8601DateFormatter new] stringFromDate:NSDate.date],
+        @"event":event,@"app_version":PC98FeedbackAppVersion(),@"os_version":UIDevice.currentDevice.systemVersion,
+        @"device_class":UIDevice.currentDevice.model,@"paused":@(paused),@"import_in_progress":@(fetching),
+        @"source_mode":self.currentCache?(self.readingOriginal?@"direct":@"cache"):@"none",
+        @"view_points":rect(self.view.bounds),@"monitor_points":rect([self.monitor convertRect:self.monitor.bounds toView:self.view]),
+        @"display_scale":@(self.traitCollection.displayScale),@"fullscreen":@(fullScreen),
+        @"hardware_keyboard_layout":@(self.keyboard.hardwareLayout),@"hinge_closed":@(hingeClosed),
+        @"controller_count":@(GCController.controllers.count),
+        @"thermal_state":@(NSProcessInfo.processInfo.thermalState),
+        @"low_power_mode":@(NSProcessInfo.processInfo.lowPowerModeEnabled)} mutableCopy];
+    // Only booleans/numbers/fixed classifications: never serialize an INI,
+    // source URL, bookmark, title, filename, user defaults or guest memory.
+    if(self.launchDiagnostics) result[@"launch"]=self.launchDiagnostics;
+    if(player && player->m) {
+        Machine* m=player->m;
+        result[@"runtime"]=@{@"cpu_mhz":@(m->cfg.cpu_mhz),@"sound_board":@(m->cfg.sound_board),
+            @"video_colors":@(m->cfg.video_colors),@"pc9821":@(m->cfg.pc9821),@"pegc_active":@(m->pegc.on),
+            @"framebuffer_pixels":@[@640,@(player->fb_h)],@"frame":@(m->frame_count),
+            @"displayed_frame":@(self.displayedFrameNumber),@"guest_exit":@(m->quit),
+            @"cpu_frame_ms":@(player->perf_cpu_ms),@"audio_frame_ms":@(player->perf_audio_ms)};
+    }
+    double elapsed=0;int frames=0;
+    for(const auto& sample:fpsHistory) { elapsed+=sample.elapsed;frames+=sample.frames; }
+    result[@"performance"]=@{@"fps_sample_seconds":@(elapsed),@"fps":elapsed>0?@(frames/elapsed):NSNull.null,
+        @"target_fps":@((double)MASTER_CLOCK/FRAME_TICKS)};
+    { std::lock_guard<std::mutex> lock(audio.mutex);
+        result[@"audio"]=@{@"sample_rate":@(audio.sampleRate),@"queued_samples":@(audio.samples.size()),
+            @"underrun_frames":@(audio.underrunFrames),@"started":@(audio.started),@"paused":@(audio.paused)}; }
+    auto filter=self.contentFilter.settings;
+    result[@"filter"]=@{@"adult":@(filter.adult),@"harm":@(filter.harm),@"effect":@((int)filter.effect),
+        @"sensitivity":@(filter.sensitivity),@"last_processing_ms":@(self.contentFilter.lastProcessingTime*1000),
+        @"has_error":@(self.contentFilter.lastError.length>0)};
+    return result;
+}
+- (void)reportError:(NSString*)message code:(NSString*)code summary:(NSString*)summary {
+    if(!self.reportedErrorCodes) self.reportedErrorCodes=[NSMutableSet new];
+    if(self.pendingFeedbackError || [self.reportedErrorCodes containsObject:code]) return;
+    [self.reportedErrorCodes addObject:code];
+    // Freeze diagnostic values BEFORE pausing or closing audio. The image is
+    // exactly the displayed, filtered image; never attach an unfiltered frame.
+    BOOL runtimeContext=[code hasPrefix:@"guest_"] || [code hasPrefix:@"state_"] ||
+        [code hasPrefix:@"floppy_"] || [code hasPrefix:@"title_"] || [code isEqualToString:@"media_load"];
+    self.pendingFeedbackImage=runtimeContext && !(bossMode && hingeClosed)?self.monitor.image:nil;
+    NSMutableDictionary* diagnostics=[[self feedbackDiagnostics:code] mutableCopy];
+    if(!runtimeContext) {
+        [diagnostics removeObjectForKey:@"runtime"];
+        diagnostics[@"source_mode"]=usesGameCache()?@"selected_folder_cache":@"selected_folder_direct";
+    }
+    self.pendingFeedbackError=@{@"message":message?:summary,@"summary":summary,
+        @"diagnostics":diagnostics,@"generation":@(self.feedbackGeneration)};
+#ifdef PC98PLAYER_TESTING
+    if([NSProcessInfo.processInfo.arguments containsObject:@"--feedback-error-fixture"])
+        [[NSJSONSerialization dataWithJSONObject:diagnostics options:NSJSONWritingPrettyPrinted error:nil]
+            writeToURL:area(NSDocumentDirectory,@"feedback-error-captured.json") atomically:YES];
+#endif
+    self.feedbackRestorePlayback=player && player->m && !player->m->quit && !paused;
+    if(player && player->m && !player->m->quit) [self suspend];
+    [self presentPendingFeedbackError];
+}
+- (void)finishErrorFeedback {
+    BOOL resume=self.feedbackRestorePlayback;self.feedbackRestorePlayback=NO;
+    if(resume && player && player->m && !player->m->quit && !(bossMode && hingeClosed)) {
+        paused=NO;[self startAudio];nextFrame=CACurrentMediaTime();self.status.text=@"実行中";
+    }
+}
+- (void)presentPendingFeedbackError {
+    if(!self.pendingFeedbackError || self.presentedViewController || self.isBeingDismissed ||
+       !self.view.window || UIApplication.sharedApplication.applicationState!=UIApplicationStateActive ||
+       (bossMode && hingeClosed)) return;
+    NSDictionary* context=self.pendingFeedbackError;UIImage* image=self.pendingFeedbackImage;
+    self.pendingFeedbackError=nil;self.pendingFeedbackImage=nil;
+    NSUInteger generation=self.feedbackGeneration;
+    UIAlertController* alert=[UIAlertController alertControllerWithTitle:@"エラーが発生しました"
+        message:[context[@"message"] stringByAppendingString:@"\n\nこの状態からフィードバックできます。送信前に内容を確認できます。"]
+        preferredStyle:UIAlertControllerStyleAlert];
+    __weak PlayerController* weak=self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:^(UIAlertAction* action) {
+        if(weak.feedbackGeneration==generation) [weak finishErrorFeedback];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"フィードバックする" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+        PlayerController* s=weak;if(!s || s.feedbackGeneration!=generation)return;
+        [s dismissViewControllerAnimated:YES completion:^{
+            if(weak.feedbackGeneration==generation)
+                [weak showFeedbackImage:image diagnostics:context[@"diagnostics"] summary:context[@"summary"]];
+        }];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)handleGuestTermination {
+    if(!player || !player->m->quit || self.guestTerminationHandled)return;
+    self.guestTerminationHandled=YES;
+    [self refreshMonitor];
+    using feedback_error::GuestFailure;
+    auto failure=feedback_error::guestFailure(player->m);
+    if(failure!=GuestFailure::None) {
+        NSString* code=failure==GuestFailure::Command?@"guest_command":failure==GuestFailure::Memory?@"guest_memory":@"guest_execution";
+        NSString* summary=failure==GuestFailure::Command?@"起動コマンドを実行できませんでした":failure==GuestFailure::Memory?@"ゲストのメモリが不足しています":@"ソフトウェアの実行が停止しました";
+        NSString* message=player->m->status.empty()?
+            (failure==GuestFailure::Command?@"Bad command or file name":failure==GuestFailure::Memory?@"Not enough memory":summary):text(player->m->status);
+        [self reportError:message code:code summary:summary];
+    }
+    paused=YES;[self releaseKeys];audio.close();
+    self.status.text=player->m->quit>=2?text(player->m->status):@"実行が終了しました";
+}
 - (void)updateScan:(int)scan {
     if(!player || paused) return;
     BOOL down=touchKeys.count(scan)>0 || controllerKeys.test(scan);
@@ -1114,7 +1265,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer*)gesture {
     if([gesture isKindOfClass:UILongPressGestureRecognizer.class])
         return player && !fetching && !player->m->quit && !self.presentedViewController &&
-            !(bossMode && hingeClosed) && (fullScreen || [self.currentID isEqualToString:@"demo"] || [self canRegisterTitleFrame]);
+            !(bossMode && hingeClosed) && (fullScreen || [self.currentID isEqualToString:@"demo"] ||
+                (self.displayedSourceFrame && self.monitor.image));
     return YES;
 }
 - (void)pauseFromFullscreenMenu {
@@ -1132,7 +1284,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     CGDataProviderRef provider=source.CGImage ? CGImageGetDataProvider(source.CGImage) : nullptr;
     NSData* pixels=provider ? CFBridgingRelease(CGDataProviderCopyData(provider)) : nil;
     if(!pixels.length || !writeTitleScreenshot(shown,identifier)) {
-        [self message:@"タイトル画面を保存できませんでした。"];
+        [self reportError:@"タイトル画面を保存できませんでした。" code:@"title_save" summary:@"タイトル画面を保存できませんでした"];
         return;
     }
     NSData* digest=titleFrameDigest(pixels.bytes,pixels.length);
@@ -1180,8 +1332,32 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
             [weak registerTitleImage:shown source:source identifier:identifier];
         }]];
     }
+    if(self.displayedSourceFrame && self.monitor.image && !(bossMode && hingeClosed)) {
+        UIImage* screenshot=self.monitor.image;
+        NSDictionary* diagnostics=[self feedbackDiagnostics:@"screenshot"];
+        [menu addAction:[UIAlertAction actionWithTitle:@"フィードバックする" style:UIAlertActionStyleDefault
+            handler:^(UIAlertAction* action) {
+                [weak dismissViewControllerAnimated:YES completion:^{ [weak showFeedbackImage:screenshot diagnostics:diagnostics summary:nil]; }];
+            }]];
+    }
     [menu addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
     return menu;
+}
+- (void)showScreenshotFeedback:(UIImage*)screenshot {
+    [self showFeedbackImage:screenshot diagnostics:[self feedbackDiagnostics:@"screenshot"] summary:nil];
+}
+- (void)showFeedbackImage:(UIImage*)screenshot diagnostics:(NSDictionary*)diagnostics summary:(NSString*)summary {
+    if(self.presentedViewController || (bossMode && hingeClosed)) return;
+    __weak PlayerController* weak=self;
+    UIViewController* form=PC98FeedbackFormWithContext(PC98FeedbackAppVersion(),screenshot,diagnostics,summary,^{[weak finishErrorFeedback];});
+    form.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"閉じる"
+        style:UIBarButtonItemStylePlain target:self action:@selector(closeScreenshotFeedback)];
+    UINavigationController* navigation=[[UINavigationController alloc] initWithRootViewController:form];
+    navigation.modalInPresentation=YES;
+    [self presentViewController:navigation animated:YES completion:nil];
+}
+- (void)closeScreenshotFeedback {
+    [self dismissViewControllerAnimated:YES completion:^{[self finishErrorFeedback];}];
 }
 - (void)fullscreenLongPress:(UILongPressGestureRecognizer*)gesture {
     if(gesture.state!=UIGestureRecognizerStateBegan || ![self gestureRecognizerShouldBegin:gesture]) return;
@@ -1206,6 +1382,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.fpsLabel.hidden=YES;
 }
 - (void)tick:(CADisplayLink*)link {
+    [self presentPendingFeedbackError];
+    [self handleGuestTermination];
     BOOL acceptsControllerInput=player && !player->m->quit && !paused && !fetching &&
         !(bossMode && hingeClosed) && !self.presentedViewController &&
         self.view.window.windowScene.activationState==UISceneActivationStateForegroundActive;
@@ -1229,9 +1407,14 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         [self.audioProbe appendReference:player->audio rate:player->ps.sample_rate];
 #endif
         audio.push(player->audio); nextFrame+=seconds;
-        if(player->m->quit) { paused=YES; [self releaseKeys]; audio.close(); self.status.text=player->m->quit==2 ? text(player->m->status) : @"実行が終了しました"; break; }
+        if(player->m->quit) { [self handleGuestTermination]; break; }
     }
-    if(frames) [self refreshMonitor];
+    // Keep guest timing and audio independent of the filtered presentation rate.
+    if(frames && (!self.contentFilter.settings.enabled() || player->m->quit ||
+                  filterFrameHeight!=player->fb_h || (self.titleReference && !self.titleCaptureAttempted) ||
+                  now-lastMonitorCapture>=1.0/20.0)) {
+        [self refreshMonitor];
+    }
 
     if(!fpsSampleStart) {
         fpsSampleStart=now;
@@ -1263,7 +1446,9 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         filterFrameHeight=player->fb_h;
         [self.view setNeedsLayout];
     }
+    lastMonitorCapture=CACurrentMediaTime();
     UIImage* image=frameImage(player.get());
+    uint64_t imageFrame=player->m->frame_count;
     NSData* reference=self.titleReference;
     BOOL matchesTitle=reference && !self.titleCaptureAttempted &&
         !(bossMode && hingeClosed) &&
@@ -1274,6 +1459,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     [self.contentFilter submitImage:image completion:^(UIImage* filtered,NSString* error) {
         PlayerController* s=weak;if(!s || !s->player)return;
         s.monitor.image=filtered;
+        s.displayedFrameNumber=imageFrame;
         s.displayedSourceFrame=filtered && !error ? image : nil;
         if(error)s.status.text=[@"保護フィルター: " stringByAppendingString:error];
         else if([s.status.text hasPrefix:@"保護フィルター:"])s.status.text=s->paused?@"一時停止":s.contentFilter.settings.enabled()?@"実行中 — 保護フィルター有効":@"実行中";
@@ -1362,6 +1548,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 }
 - (void)mountFloppyAtURL:(NSURL*)source unit:(int)unit {
     if(!player || player->m->quit || fetching) return;
+    [self.reportedErrorCodes removeObject:@"floppy_mount"];
     NSArray* supported=@[@"d88",@"d68",@"88d",@"d98",@"fdi",@"nfd",@"hdm",@"xdf",@"dup",@"tfd",@"2hd",@"img",@"scp",@"hfe"];
     if(![supported containsObject:source.pathExtension.lowercaseString]) {
         [self message:@"D88、FDI、HFEなどのフロッピーイメージを選んでください。"];
@@ -1374,13 +1561,13 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     if(![manager createDirectoryAtURL:directory withIntermediateDirectories:YES attributes:nil error:&error] ||
        ![manager copyItemAtURL:source toURL:disk error:&error]) {
         [manager removeItemAtURL:directory error:nil];
-        [self message:error.localizedDescription];
+        [self reportError:error.localizedDescription code:@"floppy_mount" summary:@"フロッピーディスクを取得できませんでした"];
         return;
     }
     std::string reason;
     if(!floppy::insert_unit(unit,disk.fileSystemRepresentation,&reason)) {
         [manager removeItemAtURL:directory error:nil];
-        [self message:[@"ディスクをセットできませんでした。 " stringByAppendingString:text(reason)]];
+        [self reportError:[@"ディスクをセットできませんでした。 " stringByAppendingString:text(reason)] code:@"floppy_mount" summary:@"フロッピーディスクをセットできませんでした"];
         return;
     }
     self.status.text=[disk.lastPathComponent stringByAppendingString:@" をセットしました"];
@@ -1406,6 +1593,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     if(urls.count) [self openSource:urls.firstObject identifier:registeredGameID(urls.firstObject)];
 }
 - (void)openSource:(NSURL*)source identifier:(NSString*)identifier {
+    if(fetching)return;
+    [self resetFeedbackErrors];self.launchDiagnostics=nil;
     if(usesGameCache()) { [self cacheSource:source identifier:identifier]; return; }
     if(fetching) return;
     BOOL scoped=[source startAccessingSecurityScopedResource];
@@ -1413,7 +1602,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     NSError* error=nil;
     if(![source getResourceValue:&directory forKey:NSURLIsDirectoryKey error:&error] || !directory.boolValue) {
         if(scoped) [source stopAccessingSecurityScopedResource];
-        [self message:error.localizedDescription ?: @"ゲームフォルダを開けませんでした。"];
+        [self reportError:error.localizedDescription code:@"source_open" summary:@"ゲームフォルダを開けませんでした"];
         return;
     }
     NSString* name=catalogNameForFolder(source) ?: source.lastPathComponent;
@@ -1449,7 +1638,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
                 NSDictionary* report=@{@"sourceName":source.lastPathComponent ?: @"", @"scoped":@(scoped), @"identifier":identifier, @"error":error.localizedDescription ?: @"", @"domain":error.domain ?: @"", @"code":@(error.code), @"usableCache":@([GameLibrary isUsableCacheAtURL:destination])};
                 [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil] writeToURL:area(NSDocumentDirectory,@"cache-import-report.json") atomically:YES];
 #endif
-                if(error) { s.status.text=error.localizedDescription; [s message:error.localizedDescription]; }
+                if(error) { s.status.text=error.localizedDescription; [s reportError:error.localizedDescription code:@"cache_import" summary:@"ゲームデータを取得できませんでした"]; }
                 else [s openCache:destination identifier:identifier];
             });
         }
@@ -1457,7 +1646,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 }
 - (BOOL)prepareLocalProgram:(NSURL*)program root:(NSURL*)root settings:(PlayerSettings&)settings {
     if([GameLibrary isWindowsProgramAtURL:program]) {
-        [self message:@"この実行ファイルはWindows用です。PC-98／DOS用の起動ファイルを選んでください。"];
+        [self reportError:@"この実行ファイルはWindows用です。PC-98／DOS用の起動ファイルを選んでください。" code:@"windows_program" summary:@"Windows用の実行ファイルが選択されています"];
         return NO;
     }
     NSURL* launchFolder=[GameLibrary launchFolderForProgram:program relativeToRoot:root];
@@ -1471,6 +1660,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     [self openGameFolder:cache identifier:identifier direct:NO];
 }
 - (void)openGameFolder:(NSURL*)folder identifier:(NSString*)identifier direct:(BOOL)direct {
+    [self resetFeedbackErrors];self.launchDiagnostics=nil;
     BOOL scoped=direct && [folder startAccessingSecurityScopedResource];
     NSURL* cache=folder.URLByStandardizingPath.URLByResolvingSymlinksInPath;
     [self stopGame];
@@ -1482,15 +1672,17 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     NSString* saves=[@"PC98Saves/" stringByAppendingString:identifier];
     NSURL* saved=area(NSApplicationSupportDirectory,[saves stringByAppendingPathComponent:@"files"]);
     NSError* error=nil;
-    if(![NSFileManager.defaultManager createDirectoryAtURL:saved withIntermediateDirectories:YES attributes:nil error:&error]) { [self message:error.localizedDescription]; return; }
+    if(![NSFileManager.defaultManager createDirectoryAtURL:saved withIntermediateDirectories:YES attributes:nil error:&error]) { [self reportError:error.localizedDescription code:@"save_directory" summary:@"保存領域を作成できませんでした"]; return; }
     hostfs::set_overlay(cache.fileSystemRepresentation,saved.fileSystemRepresentation);
     NSURL* iniURL=[cache URLByAppendingPathComponent:@"PC98PLAYER.INI"];
     Ini ini;
     BOOL loadedINI=ini.load(iniURL.fileSystemRepresentation);
+    self.launchDiagnostics=@{@"ini_loaded":@(loadedINI),@"ini_present":@([NSFileManager.defaultManager fileExistsAtPath:iniURL.path]),
+        @"ini_has_start":@(!ini.get("PC98PLAYER.START").empty()),@"ini_has_root":@(!ini.get("PC98PLAYER.ROOT").empty())};
     NSString* configured=text(ini.get("PC98PLAYER.ROOT"));
     NSURL* root=[GameLibrary gameRootAtURL:cache relativePath:configured error:&error];
     if(!root) {
-        [self message:[@"Root= の指定先を開けません。ゲームフォルダ内の相対パスと取得状態を確認してください。\n" stringByAppendingString:error.localizedDescription ?: @""]]; return;
+        [self reportError:[@"Root= の指定先を開けません。ゲームフォルダ内の相対パスと取得状態を確認してください。\n" stringByAppendingString:error.localizedDescription ?: @""] code:@"invalid_root" summary:@"INIのRoot指定先を開けませんでした"]; return;
     }
     PlayerSettings ps; player_settings_from_ini(ini,root.fileSystemRepresentation,&ps);
     NSInteger clock=[NSUserDefaults.standardUserDefaults integerForKey:gameClockKey(identifier)];
@@ -1543,8 +1735,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
             if(relative) [programs addObject:relative];
         }
     }
-    if(scanError) { [self message:[@"ゲームフォルダを読み取れません。取得状態を確認してください。\n" stringByAppendingString:scanError.localizedDescription]]; return; }
-    if(!programs.count) { [self message:@"起動ファイルがありません。ZIPを展開し、BAT・COM・EXEのあるフォルダを選んでください。iCloudでは「ファイル」でダウンロード完了を確認してください。以前取得した内容が不完全な場合は「一覧」でゲーム本体のキャッシュを消去して再取得してください（セーブは保持されます）。"]; return; }
+    if(scanError) { [self reportError:[@"ゲームフォルダを読み取れません。取得状態を確認してください。\n" stringByAppendingString:scanError.localizedDescription] code:@"folder_scan" summary:@"ゲームフォルダを読み取れませんでした"]; return; }
+    if(!programs.count) { [self reportError:@"起動ファイルがありません。ZIPを展開し、BAT・COM・EXEのあるフォルダを選んでください。iCloudでは「ファイル」でダウンロード完了を確認してください。以前取得した内容が不完全な場合は「一覧」でゲーム本体のキャッシュを消去して再取得してください（セーブは保持されます）。" code:@"no_program" summary:@"起動ファイルが見つかりませんでした"]; return; }
     [programs sortUsingSelector:@selector(localizedStandardCompare:)];
     FileChooser* chooser=[FileChooser new]; chooser.title=@"起動するプログラム"; chooser.paths=programs; chooser.explanation=explanation;
     __weak PlayerController* weak=self;
@@ -1560,9 +1752,14 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     [self presentViewController:navigation animated:YES completion:nil];
 }
 - (void)launchSettings:(PlayerSettings)settings {
+    self.guestTerminationHandled=NO;
+    NSMutableDictionary* launch=[self.launchDiagnostics mutableCopy] ?: [NSMutableDictionary new];
+    launch[@"cpu_mhz"]=@(settings.cfg.cpu_mhz);launch[@"video_colors"]=@(settings.cfg.video_colors);
+    launch[@"sound_board"]=@(settings.cfg.sound_board);launch[@"floppy_boot"]=@(settings.cfg.boot_fd);
+    launch[@"program_selected"]=@(!settings.cfg.start.empty());self.launchDiagnostics=launch;
     player=std::make_unique<Player>(); mac_install_font(settings.font_name,settings.font_shift); std::string error;
     settings.cfg.start = apple_startup::dos_start_path(settings.cfg.start);
-    if(!player->init(settings,&error)) { [self stopGame]; [self message:text(error)]; return; }
+    if(!player->init(settings,&error)) { [self reportError:text(error) code:@"launch_failed" summary:@"ソフトウェアを起動できませんでした"]; [self stopGame]; return; }
     paused=NO; nextFrame=CACurrentMediaTime(); self.status.text=self.readingOriginal ? @"実行中 — 元フォルダを直接読込、保存データは別領域" : @"実行中 — ゲーム本体はキャッシュ、保存データは別領域";
 #if TARGET_OS_SIMULATOR
     NSString* nasPath=[NSUserDefaults.standardUserDefaults stringForKey:@"PC98SimulatorNASRoot"];
@@ -1576,7 +1773,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     [self startAudio]; [self becomeFirstResponder];
     NSString* warnings=@"";
     for(auto* e:{&player->floppy_error,&player->cd_error,&player->rhythm_error}) if(!e->empty()) warnings=[warnings stringByAppendingFormat:@"%@\n",text(*e)];
-    if(warnings.length) [self message:warnings];
+    if(warnings.length) [self reportError:warnings code:@"media_load" summary:@"ディスクまたは音源データを読み込めませんでした"];
 }
 - (void)slots:(BOOL)load {
     if(!player || fetching) return;
@@ -1585,10 +1782,12 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     __weak PlayerController* weak=self;
     for(int slot=0;slot<STATE_SLOTS;++slot) [menu addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"スロット %d",slot+1] style:UIAlertActionStyleDefault handler:^(UIAlertAction* a) {
         PlayerController* s=weak; if(!s || !s->player) return;
-        if(load) { [s.contentFilter reset];s.monitor.image=nil; }
+        [s.reportedErrorCodes removeObject:load?@"state_load":@"state_save"];
         std::string error; BOOL ok=load?s->player->load_state(slot,&error):s->player->save_state(slot,&error);
+        // A failed load preserves the current state and its filtered screenshot.
+        if(load && ok) { [s.contentFilter reset];s.monitor.image=nil; }
         [s releaseKeys]; s->audio.clear(); s->nextFrame=CACurrentMediaTime();
-        if(!ok) [s message:text(error)]; else s.status.text=load?@"ステートを読み込みました":@"ステートを保存しました";
+        if(!ok) [s reportError:text(error) code:load?@"state_load":@"state_save" summary:load?@"ステートを読み込めませんでした":@"ステートを保存できませんでした"]; else s.status.text=load?@"ステートを読み込みました":@"ステートを保存しました";
         if(s->player) [s refreshMonitor];
     }]];
     [menu addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
@@ -1598,8 +1797,11 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 - (void)loadSlot { [self slots:YES]; }
 - (void)showOptions {
     if(fetching || self.presentedViewController) return;
+    NSDictionary* diagnostics=[self feedbackDiagnostics:@"options"];
     BOOL previousPause=paused;[self suspend];
     GameOptionsController* options=[[GameOptionsController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+    options.issueDiagnostics=diagnostics;
+    if(self.displayedSourceFrame && !(bossMode && hingeClosed)) options.issueScreenshot=self.monitor.image;
     options.soundBoard=player?player->m->cfg.sound_board:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98SoundBoard"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98SoundBoard"]:86);
     options.videoColors=player?player->m->cfg.video_colors:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98VideoColors"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98VideoColors"]:16);
     NSInteger defaultClock=[NSUserDefaults.standardUserDefaults integerForKey:defaultClockKey];
@@ -1826,7 +2028,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
             NSError* error=nil;
             NSURL* source=[GameLibrary resolveEntry:entry error:&error];
             if(source) [weak openSource:source identifier:gameIdentifier];
-            else [weak message:@"場所へのアクセスを復元できません。「開く」で再選択してください。"];
+            else [weak reportError:@"場所へのアクセスを復元できません。「開く」で再選択してください。" code:@"source_access" summary:@"登録したフォルダへのアクセスを復元できませんでした"];
         }];
     }
     // Also expose complete caches staged for device testing.
@@ -1845,7 +2047,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
             catalogName:catalogNameForFolder(cache) fallback:title
             action:^{
                 if(usesGameCache()) [weak openCache:cache identifier:identifier];
-                else [weak message:@"元フォルダを「開く」から選び直してください。"];
+                else [weak reportError:@"元フォルダを「開く」から選び直してください。" code:@"source_access" summary:@"元フォルダを開けませんでした"];
             }];
     }
     menu.demoAction=^{ [weak demo]; };
@@ -2115,7 +2317,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     [self rightClick];result[@"fullscreenRightClick"]=@(player->m->mouse.buttons==2);[self releaseKeys];
     result[@"fullscreenAcceptsLongPress"]=@(hold && [self gestureRecognizerShouldBegin:hold]);
     UIAlertController* menu=[self fullscreenMenu];
-    result[@"fullscreenMenuActions"]=@(menu.actions.count==6 && [menu.actions[3].title isEqualToString:@"FDD"] && [menu.actions[2].title isEqualToString:@"コントローラーを非表示"] && [menu.actions[0].title isEqualToString:@"一時停止"] && [menu.actions[1].title isEqualToString:@"リセット"]);
+    result[@"fullscreenMenuActions"]=@(menu.actions.count==7 && [menu.actions[5].title isEqualToString:@"フィードバックする"] && [menu.actions[3].title isEqualToString:@"FDD"] && [menu.actions[2].title isEqualToString:@"コントローラーを非表示"] && [menu.actions[0].title isEqualToString:@"一時停止"] && [menu.actions[1].title isEqualToString:@"リセット"]);
     [self pauseFromFullscreenMenu];
     result[@"fullscreenMenuPauses"]=@(paused && fullscreenMenuPaused && audio.paused);
     [self rightClick];

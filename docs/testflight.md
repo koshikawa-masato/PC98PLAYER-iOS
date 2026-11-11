@@ -1,5 +1,33 @@
 # TestFlight配布
 
+## 2026年11月10日：0.2.4（ビルド51）
+
+エラー時のフィードバック案内と、初期オフ・プレビュー可能な任意の診断JSONを追加。Transporterで21:00 JSTに送信し、Appleの処理完了後に既存の内部テストグループへ追加しました。ビルド50の審査提出を差し替え、ビルド51をApp Storeへ提出しました。2026年11月11日に0.2.4の公開を確認しました。
+
+- AppleビルドID：`1e724c87-293c-4f58-be40-b7db2bcce8e8`。
+- 提出ID：`d218c377-dafd-4472-a4d5-e35cdbb14a5d`。
+- IPA SHA-256：`ee1f27e103a2224669b3acdb631c283163339e5bb1df0d825676a15eefabab48`。
+- HEAD `144e60e` とローカル変更。配布ソースのコピーとファイルハッシュを `out/TestFlight/build-51-sources/`、`out/TestFlight/build-51-record.json` に保存。
+- 署名検証、実コアを使うエラー判定・JSONテスト、既存iOSスモーク46項目、受付サーバー30テストが通過。シミュレーターでエラー案内・フォーム・JSONプレビュー・閉じた後の再開を確認。
+- 新しいエラー報告機能の実機確認および診断JSONを含む実送信は未実施。任意のゲームのフリーズやiOSアプリ自体のクラッシュは検出対象外。
+- 任意診断を含むプライバシー回答とPagesポリシーを公開済み。
+- [App Store審査提出](https://appstoreconnect.apple.com/apps/6826817332/distribution/reviewsubmissions/details/d218c377-dafd-4472-a4d5-e35cdbb14a5d)
+
+## 2026年11月10日：0.2.4（ビルド50）
+
+認証付きフィードバック版をTransporterでアップロード（19:57 JST）し、Appleの処理完了後に既存の「内部テスト」グループ（1名）へ追加。「テスト中」と表示されることを確認。テスト内容も登録済み。
+
+- ソース：`codex/ios-title-catalog`、HEAD `0b8b836` とローカル変更。今回の配布に伴うcommit/pushは未実施。
+- Xcode 27.2（27B52）／SDK 24B8118、Apple Distribution／PC98PLAYER iOS App Storeプロファイル。
+- 受付先：`https://feedback.three-sisters.ai/v1/feedback`。
+- 匿名／Xのメール受信、GitHubのIssue作成、iOS認証画面からのアプリ復帰を検証用シミュレーターで確認。自動テスト30件とworkerd/D1結合テストも成功。
+- アプリ内ポリシーとプライバシーマニフェストに任意の報告本文・画像・ユーザーIDの取扱いを反映。この時点ではApp Store Connectの本番プライバシー回答は未更新でしたが、ビルド51の提出時に更新・公開済みです。
+- 配布IPAの署名・Bundle ID・バージョン・ビルド番号・受付URL・dSYM UUID・マニフェスト同梱を確認。
+- IPA SHA-256：`d2d3fa093ca5883c89a2033041e0ce6ae430db1ab715308969828da0bad6ffaf`。
+- [App Store Connect ビルド50](https://appstoreconnect.apple.com/teams/94f4f5a7-ccba-45ef-b191-497842793d88/apps/6826817332/testflight/ios/ed8de648-da3f-439e-bf9d-a7d01585d6e4)
+
+ビルド50は20:29 JSTに本番審査へ提出しましたが、その後、上記ビルド51へ差し替えました。
+
 App Store Connect: https://appstoreconnect.apple.com/apps/6826817332/testflight
 
 - Bundle ID: `jp.pc98player.ios`
