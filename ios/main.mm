@@ -11,6 +11,7 @@
 #include "DuoPresentation.h"
 #import "RetroHardware.h"
 #include "AudioOut.h"
+#include "MidiSynth.h"
 #include "font.h"
 #include "floppy.h"
 #include "player.h"
@@ -111,6 +112,8 @@ static BOOL validClockMHz(NSInteger clock) {
     return clock>=minimumClockMHz && clock<=maximumClockMHz;
 }
 
+// Player の MIDI 出口からソフトウェア音源へ渡す
+static void MidiSinkTrampoline(void* user, const uint8_t* msg, int len) { static_cast<MidiSynth*>(user)->handleMessage(msg, len); }
 static NSString* gameClockKey(NSString* identifier) {
     return [@"PC98GameClockMHz." stringByAppendingString:identifier];
 }
@@ -702,6 +705,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 @interface PlayerController : UIViewController <UIDocumentPickerDelegate,UIAdaptivePresentationControllerDelegate,UIGestureRecognizerDelegate> {
     std::unique_ptr<Player> player;
     AudioOut audio;
+    MidiSynth midiSynth;
+    BOOL midiFontLoaded;
     double nextFrame;
     double fpsSampleStart;
     int fpsSampleFrames;
@@ -765,6 +770,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 - (BOOL)canBecomeFirstResponder { return YES; }
 - (void)viewDidLoad {
     [super viewDidLoad]; self.view.multipleTouchEnabled=YES; self.view.backgroundColor=PC98Plastic(.84); paused=YES;
+    // MIDI 音源のサウンドフォントは同梱されている場合だけ読む（標本化周波数はゲーム起動時に合わせ直す）
+    NSString* soundFont=[[NSBundle mainBundle] pathForResource:@"GeneralUser-GS" ofType:@"sf2"];
+    NSData* soundFontData=soundFont?[NSData dataWithContentsOfFile:soundFont]:nil;
+    midiFontLoaded=soundFontData && midiSynth.load(soundFontData.bytes,(int)soundFontData.length,44100);
     manualDuo=[NSUserDefaults.standardUserDefaults boolForKey:@"PC98ManualDuo"];
     bossMode=[NSUserDefaults.standardUserDefaults boolForKey:@"PC98BossMode"];
     self.contentFilter=[PC98ContentFilter new];
@@ -1152,6 +1161,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     { std::lock_guard<std::mutex> lock(audio.mutex);
         result[@"audio"]=@{@"sample_rate":@(audio.sampleRate),@"queued_samples":@(audio.samples.size()),
             @"underrun_frames":@(audio.underrunFrames),@"started":@(audio.started),@"paused":@(audio.paused)}; }
+    result[@"midi"]=@{@"fontLoaded":@(midiFontLoaded),@"mpuEnabled":@(player ? player->ps.cfg.midi : 0),
+        @"messages":@(midiSynth.messageCount),@"noteOns":@(midiSynth.noteOnCount)};
     auto filter=self.contentFilter.settings;
     result[@"filter"]=@{@"adult":@(filter.adult),@"harm":@(filter.harm),@"effect":@((int)filter.effect),
         @"sensitivity":@(filter.sensitivity),@"last_processing_ms":@(self.contentFilter.lastProcessingTime*1000),
@@ -1445,6 +1456,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 #ifdef PC98PLAYER_TESTING
         [self.audioProbe appendReference:player->audio rate:player->ps.sample_rate];
 #endif
+        if(midiFontLoaded) midiSynth.renderMix(player->audio.data(), player->audio.size()/2);
         audio.push(player->audio); nextFrame+=seconds;
         if(player->m->quit) { [self handleGuestTermination]; break; }
     }
@@ -1517,7 +1529,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.titleReference=nil;
     self.titleCaptureAttempted=NO;
     [self.contentFilter reset];self.monitor.image=nil;filterFrameHeight=0;
-    fullscreenMenuPaused=NO; paused=YES; [self releaseKeys]; audio.close();
+    fullscreenMenuPaused=NO; paused=YES; [self releaseKeys]; audio.close(); midiSynth.reset();
     if(player) { player->shutdown(); player.reset(); [self.view setNeedsLayout]; }
     hostfs::set_overlay("","");
     [self.scopedGameFolder stopAccessingSecurityScopedResource];
@@ -1532,7 +1544,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 #ifdef PC98PLAYER_TESTING
     [self.audioProbe event:paused?@"pause":@"resume"];
 #endif
-    if(paused) { audio.pause(); self.status.text=@"一時停止"; }
+    if(paused) { audio.pause(); midiSynth.allSoundOff(); self.status.text=@"一時停止"; }
     else { [self startAudio]; nextFrame=CACurrentMediaTime(); self.status.text=@"実行中"; }
 }
 - (void)startAudio {
@@ -1738,7 +1750,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     if([identifier isEqualToString:@"demo"])
         apple_set_video_colors(ps.cfg,ps.cfg.start=="DEMO480.COM" ? 256 : 16);
     apple_apply_crt_mode(ps.cfg,(int)displayModeForGame(identifier));   // 色数のあとに画面モード
-    ps.cfg.midi=0; ps.cfg.trace=0; ps.sample_rate=std::clamp(ps.sample_rate,8000,192000);
+    ps.cfg.midi=midiFontLoaded ? 1 : 0; ps.cfg.trace=0; ps.sample_rate=std::clamp(ps.sample_rate,8000,192000);
     if(ps.cfg.start.empty() && !ps.cfg.boot_fd) {
         NSString* explanation;
         if(loadedINI)
@@ -1797,7 +1809,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     launch[@"cpu_mhz"]=@(settings.cfg.cpu_mhz);launch[@"video_colors"]=@(settings.cfg.video_colors);
     launch[@"sound_board"]=@(settings.cfg.sound_board);launch[@"floppy_boot"]=@(settings.cfg.boot_fd);
     launch[@"program_selected"]=@(!settings.cfg.start.empty());self.launchDiagnostics=launch;
+    midiSynth.reset();   // 前のゲームの発音・チャンネル設定を残さない
+    if(midiFontLoaded && midiSynth.outputRate!=settings.sample_rate) midiSynth.setOutputRate(settings.sample_rate);
     player=std::make_unique<Player>(); mac_install_font(settings.font_name,settings.font_shift); std::string error;
+    player->midi_user=&midiSynth; player->midi_sink=&MidiSinkTrampoline;
     settings.cfg.start = apple_startup::dos_start_path(settings.cfg.start);
     if(!player->init(settings,&error)) { [self reportError:text(error) code:@"launch_failed" summary:@"ソフトウェアを起動できませんでした"]; [self stopGame]; return; }
     paused=NO; nextFrame=CACurrentMediaTime(); self.status.text=self.readingOriginal ? @"実行中 — 元フォルダを直接読込、保存データは別領域" : @"実行中 — ゲーム本体はキャッシュ、保存データは別領域";
