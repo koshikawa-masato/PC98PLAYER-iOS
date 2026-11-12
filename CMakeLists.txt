@@ -83,7 +83,7 @@ elseif(APPLE)
     target_include_directories(PC98PLAYERiOS PRIVATE apple ios)
     target_compile_options(PC98PLAYERiOS PRIVATE -fobjc-arc)
     target_compile_definitions(PC98PLAYERiOS PRIVATE $<$<CONFIG:Debug>:PC98PLAYER_TESTING>)
-    target_link_libraries(PC98PLAYERiOS PRIVATE "$<$<CONFIG:Debug>:-framework ReplayKit>" "$<$<CONFIG:Debug>:-framework CoreMedia>" pc98core "-framework Foundation" "-framework CoreGraphics" "-framework QuartzCore" "-framework UIKit" "-framework AuthenticationServices" "-framework Security" "-framework GameController" "-framework CoreText" "-framework AudioToolbox" "-framework AVFoundation" "-framework UniformTypeIdentifiers" "-framework CoreML" "-framework Vision" "-framework Metal" "-framework MetalPerformanceShaders")
+    target_link_libraries(PC98PLAYERiOS PRIVATE "$<$<CONFIG:Debug>:-framework ReplayKit>" "$<$<CONFIG:Debug>:-framework CoreMedia>" pc98core "-framework Foundation" "-framework CoreGraphics" "-framework QuartzCore" "-framework UIKit" "-framework AuthenticationServices" "-framework Security" "-framework GameController" "-framework CoreText" "-framework AudioToolbox" "-framework AVFoundation" "-framework UniformTypeIdentifiers" "-framework CoreML" "-framework Vision" "-framework Metal" "-framework MetalPerformanceShaders" "-framework CoreMIDI")
     set_target_properties(PC98PLAYERiOS PROPERTIES
       MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist.in"
       MACOSX_BUNDLE_GUI_IDENTIFIER "${PC98PLAYER_IOS_BUNDLE_ID}"

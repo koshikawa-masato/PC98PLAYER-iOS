@@ -12,6 +12,7 @@
 #import "RetroHardware.h"
 #include "AudioOut.h"
 #include "MidiSynth.h"
+#include "MidiOut.h"
 #include "font.h"
 #include "floppy.h"
 #include "player.h"
@@ -126,8 +127,24 @@ static BOOL validClockMHz(NSInteger clock) {
     return clock>=minimumClockMHz && clock<=maximumClockMHz;
 }
 
-// Player の MIDI 出口からソフトウェア音源へ渡す
-static void MidiSinkTrampoline(void* user, const uint8_t* msg, int len) { static_cast<MidiSynth*>(user)->handleMessage(msg, len); }
+// MIDI の送り先（0 = 内蔵シンセ、1 = 外部 MIDI OUT）。グローバル設定のみ（ゲームごとではない）
+static NSString* const midiModeKey=@"PC98MidiMode";
+static NSString* const midiDestinationIDKey=@"PC98MidiDestinationID";
+static NSString* const midiDestinationNameKey=@"PC98MidiDestinationName";
+static BOOL midiUsesExternalOut(void) {
+    return [NSUserDefaults.standardUserDefaults integerForKey:midiModeKey]==1;
+}
+// Player の MIDI 出口から、設定に応じて内蔵シンセか外部 MIDI OUT へ渡す
+struct MidiDispatch {
+    MidiSynth* synth=nullptr;
+    MidiOut* out=nullptr;
+    BOOL external=NO;
+    void handleMessage(const uint8_t* msg, int len) {
+        if(external) { if(out) out->handleMessage(msg, len); }
+        else if(synth) synth->handleMessage(msg, len);
+    }
+};
+static void MidiSinkTrampoline(void* user, const uint8_t* msg, int len) { static_cast<MidiDispatch*>(user)->handleMessage(msg, len); }
 static NSString* gameClockKey(NSString* identifier) {
     return [@"PC98GameClockMHz." stringByAppendingString:identifier];
 }
@@ -514,6 +531,9 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 @property(nonatomic, strong) UIImage* issueScreenshot;
 @property(nonatomic, copy) NSDictionary* issueDiagnostics;
 @property NSInteger soundBoard;
+@property NSInteger midiMode;
+@property NSInteger midiDestinationID;
+@property(copy) NSString* midiDestinationName;
 @property NSInteger videoColors;
 @property NSInteger displayMode;
 @property NSInteger clockMHz;
@@ -537,9 +557,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 7; }
-- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==2?7:section==3?6:section==4?1:section==5?5:section==6?3:section==1?5:2; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==0?5:section==2?7:section==3?6:section==4?1:section==5?5:section==6?3:section==1?5:2; }
 - (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数・画面モード",@"表示",@"コンテンツフィルター",@"Bluetoothコントローラー",@"CPUクロックのデフォルト",@"このアプリについて"][section]; }
 - (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section {
+    if(section==0)return @"MIDIは内蔵シンセか外部出力のどちらかへ送ります。外部出力は、他の音源アプリの仮想ポートやBluetooth／USB／ネットワークMIDI機器が対象です。MIDIの変更は次回のゲーム起動から適用します。";
     if(section==1)return @"変更を適用するとゲームが再起動します。必要な場合は、先にゲーム内で保存してください。";
     if(section==2)return @"通常は自動判別を使います。Duo上下表示を固定すると、上にモニタ、下にキーボードを配置します。表示だけの変更では再起動しません。「ボスがきた」モードはDuoを閉じると一時停止し、アウターのアプリ画面を黒くします。開き直しても自動再生せず、▶︎で再開します。端末の画面電源やシステム表示は変更しません。";
     if(section==5)return @"次回のゲーム起動から適用します。一覧のⓘでゲームごとの設定を保存できます。";
@@ -550,9 +571,23 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     UITableViewCell* cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
     cell.detailTextLabel.numberOfLines=0;
     if(index.section==0) {
-        cell.textLabel.text=index.row==0?@"OPN":@"OPNA";
-        cell.detailTextLabel.text=index.row==0?@"YM2203":@"YM2608";
-        cell.accessoryType=(self.soundBoard==(index.row==0?26:86))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
+        if(index.row<2) {
+            cell.textLabel.text=index.row==0?@"OPN":@"OPNA";
+            cell.detailTextLabel.text=index.row==0?@"YM2203":@"YM2608";
+            cell.accessoryType=(self.soundBoard==(index.row==0?26:86))?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
+        } else if(index.row==2) {
+            cell.textLabel.text=@"MIDI：内蔵シンセ";
+            cell.detailTextLabel.text=@"サウンドフォント（GeneralUser GS）で再生";
+            cell.accessoryType=self.midiMode==0?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
+        } else if(index.row==3) {
+            cell.textLabel.text=@"MIDI：外部へ出力";
+            cell.detailTextLabel.text=@"他の音源アプリやMIDI機器へ送る（MIDI OUT）";
+            cell.accessoryType=self.midiMode==1?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
+        } else {
+            cell.textLabel.text=@"外部MIDIの送り先";
+            cell.detailTextLabel.text=self.midiDestinationName.length?self.midiDestinationName:@"自動（最初に見つかったポート）";
+            cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
+        }
     } else if(index.section==1) {
         cell.textLabel.text=index.row==0?@"16色":@"256色";
         cell.detailTextLabel.text=index.row==0?@"標準グラフィック":@"拡張グラフィック";
@@ -680,12 +715,49 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         LegalTextController* document=[LegalTextController new];document.title=index.row==0?@"プライバシーポリシー":@"ライセンス";
         document.resource=index.row==0?@"privacy-policy.txt":@"LICENSE";[self.navigationController pushViewController:document animated:YES];return;
     }
-    if(index.section==0)self.soundBoard=index.row==0?26:86;
+    if(index.section==0 && index.row<2)self.soundBoard=index.row==0?26:86;
+    else if(index.section==0 && index.row==2)self.midiMode=0;
+    else if(index.section==0 && index.row==3)self.midiMode=1;
+    else if(index.section==0 && index.row==4) { [self chooseMidiDestinationFromCell:[tableView cellForRowAtIndexPath:index]]; return; }
     else if(index.section==1 && index.row>=2)self.displayMode=index.row-2;
     else if(index.section==1)self.videoColors=index.row==0?16:256;
     else if(index.section==2 && index.row<2)self.manualDuo=index.row==1;
     else if(index.section==3 && index.row>=2 && index.row<5) { auto settings=self.filterSettings;settings.effect=(content_filter::Effect)(index.row-2);self.filterSettings=settings; }
     [tableView reloadData];
+}
+- (void)chooseMidiDestinationFromCell:(UITableViewCell*)cell {
+    [self.tableView deselectRowAtIndexPath:self.tableView.indexPathForSelectedRow animated:YES];
+    auto destinations=MidiOut::destinations();
+    if(destinations.empty()) {
+        UIAlertController* none=[UIAlertController alertControllerWithTitle:@"外部MIDIの送り先"
+            message:@"MIDIの送り先が見つかりません。音源アプリを起動するか、MIDI機器を接続してから選び直してください。送り先を「自動」にしておくと、ゲーム起動時に最初に見つかったポートへ送ります。"
+            preferredStyle:UIAlertControllerStyleAlert];
+        [none addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:none animated:YES completion:nil];
+        return;
+    }
+    UIAlertController* picker=[UIAlertController alertControllerWithTitle:@"外部MIDIの送り先" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    __weak GameOptionsController* weak=self;
+    [picker addAction:[UIAlertAction actionWithTitle:@"自動（最初に見つかったポート）" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+        GameOptionsController* options=weak; if(!options) return;
+        options.midiDestinationID=0; options.midiDestinationName=@""; options.midiMode=1;
+        [options.tableView reloadData];
+    }]];
+    for(auto& entry : destinations) {
+        NSString* name=[NSString stringWithUTF8String:entry.second.c_str()] ?: @"(名称なし)";
+        NSInteger uniqueID=entry.first;
+        [picker addAction:[UIAlertAction actionWithTitle:name style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+            GameOptionsController* options=weak; if(!options) return;
+            options.midiDestinationID=uniqueID; options.midiDestinationName=name; options.midiMode=1;
+            [options.tableView reloadData];
+        }]];
+    }
+    [picker addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+    if(picker.popoverPresentationController && cell) {
+        picker.popoverPresentationController.sourceView=cell;
+        picker.popoverPresentationController.sourceRect=cell.bounds;
+    }
+    [self presentViewController:picker animated:YES completion:nil];
 }
 - (void)reportIssue {
     UIViewController* form=PC98FeedbackFormWithContext(PC98FeedbackAppVersion(),self.issueScreenshot,self.issueDiagnostics,nil,nil);
@@ -713,6 +785,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     [NSUserDefaults.standardUserDefaults setBool:self.portraitEdgeToEdge forKey:portraitEdgeToEdgeKey];
     [NSUserDefaults.standardUserDefaults setBool:self.cacheOnLaunch forKey:cacheOnLaunchKey];
     [NSUserDefaults.standardUserDefaults setInteger:self.clockMHz forKey:defaultClockKey];
+    [NSUserDefaults.standardUserDefaults setInteger:self.midiMode forKey:midiModeKey];
+    [NSUserDefaults.standardUserDefaults setInteger:self.midiDestinationID forKey:midiDestinationIDKey];
+    if(self.midiDestinationName.length) [NSUserDefaults.standardUserDefaults setObject:self.midiDestinationName forKey:midiDestinationNameKey];
+    else [NSUserDefaults.standardUserDefaults removeObjectForKey:midiDestinationNameKey];
     if(self.willApply)self.willApply(self.filterSettings);[self dismissViewControllerAnimated:YES completion:^{if(self.applied)self.applied(self.soundBoard,self.videoColors,self.displayMode,self.manualDuo,self.bossMode,self.filterSettings);}]; }
 @end
 
@@ -720,7 +796,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     std::unique_ptr<Player> player;
     AudioOut audio;
     MidiSynth midiSynth;
+    MidiOut midiOut;
+    MidiDispatch midiDispatch;
     BOOL midiFontLoaded;
+    BOOL midiExternal;
     double nextFrame;
     double fpsSampleStart;
     int fpsSampleFrames;
@@ -1178,7 +1257,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         result[@"audio"]=@{@"sample_rate":@(audio.sampleRate),@"queued_samples":@(audio.samples.size()),
             @"underrun_frames":@(audio.underrunFrames),@"started":@(audio.started),@"paused":@(audio.paused)}; }
     result[@"midi"]=@{@"fontLoaded":@(midiFontLoaded),@"mpuEnabled":@(player ? player->ps.cfg.midi : 0),
-        @"messages":@(midiSynth.messageCount),@"noteOns":@(midiSynth.noteOnCount)};
+        @"messages":@(midiSynth.messageCount),@"noteOns":@(midiSynth.noteOnCount),
+        @"externalOut":@(midiExternal),@"outConnected":@(midiOut.connected()),
+        @"outDestination":midiOut.connectedName.empty()?@"":@(midiOut.connectedName.c_str()),
+        @"outMessages":@(midiOut.messageCount),@"outSent":@(midiOut.sentCount),@"outErrors":@(midiOut.errorCount)};
     auto filter=self.contentFilter.settings;
     result[@"filter"]=@{@"adult":@(filter.adult),@"harm":@(filter.harm),@"effect":@((int)filter.effect),
         @"sensitivity":@(filter.sensitivity),@"last_processing_ms":@(self.contentFilter.lastProcessingTime*1000),
@@ -1252,7 +1334,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
             (failure==GuestFailure::Command?@"Bad command or file name":failure==GuestFailure::Memory?@"Not enough memory":summary):text(player->m->status);
         [self reportError:message code:code summary:summary];
     }
-    paused=YES;[self releaseKeys];audio.close();
+    paused=YES;[self releaseKeys];audio.close(); midiOut.allSoundOff();
     self.status.text=player->m->quit>=2?text(player->m->status):@"実行が終了しました";
 }
 - (void)updateScan:(int)scan {
@@ -1472,7 +1554,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 #ifdef PC98PLAYER_TESTING
         [self.audioProbe appendReference:player->audio rate:player->ps.sample_rate];
 #endif
-        if(midiFontLoaded) midiSynth.renderMix(player->audio.data(), player->audio.size()/2);
+        if(midiFontLoaded && !midiExternal) midiSynth.renderMix(player->audio.data(), player->audio.size()/2);
         audio.push(player->audio); nextFrame+=seconds;
         if(player->m->quit) { [self handleGuestTermination]; break; }
     }
@@ -1545,7 +1627,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.titleReference=nil;
     self.titleCaptureAttempted=NO;
     [self.contentFilter reset];self.monitor.image=nil;filterFrameHeight=0;
-    fullscreenMenuPaused=NO; paused=YES; [self releaseKeys]; audio.close(); midiSynth.reset();
+    fullscreenMenuPaused=NO; paused=YES; [self releaseKeys]; audio.close(); midiSynth.reset(); midiOut.reset();
     if(player) {
         // 作ったディスクは実ファイルを入れているので、終える前に書き戻す
         for(int unit=0;unit<2;++unit) [self writeBackUserDiskForUnit:unit];
@@ -1564,7 +1646,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 #ifdef PC98PLAYER_TESTING
     [self.audioProbe event:paused?@"pause":@"resume"];
 #endif
-    if(paused) { audio.pause(); midiSynth.allSoundOff(); self.status.text=@"一時停止"; }
+    if(paused) { audio.pause(); midiSynth.allSoundOff(); midiOut.allSoundOff(); self.status.text=@"一時停止"; }
     else { [self startAudio]; nextFrame=CACurrentMediaTime(); self.status.text=@"実行中"; }
 }
 - (void)startAudio {
@@ -1574,7 +1656,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     if(error || !audio.open(player->ps.sample_rate)) self.status.text=@"音声を開始できませんでした（映像のみ）";
 }
 - (void)suspend {
-    [self releaseKeys]; paused=YES; audio.pause();
+    [self releaseKeys]; paused=YES; audio.pause(); midiOut.allSoundOff();
     self.status.text=@"一時停止 — ▶︎で再開";
 }
 - (void)showFloppyDrives {
@@ -1882,7 +1964,9 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     if([identifier isEqualToString:@"demo"])
         apple_set_video_colors(ps.cfg,ps.cfg.start=="DEMO480.COM" ? 256 : 16);
     apple_apply_crt_mode(ps.cfg,(int)displayModeForGame(identifier));   // 色数のあとに画面モード
-    ps.cfg.midi=midiFontLoaded ? 1 : 0; ps.cfg.trace=0; ps.sample_rate=std::clamp(ps.sample_rate,8000,192000);
+    midiExternal=midiUsesExternalOut();
+    // 外部出力時はサウンドフォントが無くても MPU を有効にする（送り先は launchSettings で開く）
+    ps.cfg.midi=(midiFontLoaded || midiExternal) ? 1 : 0; ps.cfg.trace=0; ps.sample_rate=std::clamp(ps.sample_rate,8000,192000);
     if(ps.cfg.start.empty() && !ps.cfg.boot_fd) {
         NSString* explanation;
         if(loadedINI)
@@ -1943,8 +2027,15 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     launch[@"program_selected"]=@(!settings.cfg.start.empty());self.launchDiagnostics=launch;
     midiSynth.reset();   // 前のゲームの発音・チャンネル設定を残さない
     if(midiFontLoaded && midiSynth.outputRate!=settings.sample_rate) midiSynth.setOutputRate(settings.sample_rate);
+    midiDispatch.synth=&midiSynth; midiDispatch.out=&midiOut; midiDispatch.external=midiExternal;
+    if(midiExternal) {
+        NSString* destinationName=[NSUserDefaults.standardUserDefaults stringForKey:midiDestinationNameKey];
+        midiOut.open((int32_t)[NSUserDefaults.standardUserDefaults integerForKey:midiDestinationIDKey],
+                     destinationName ? destinationName.UTF8String : "");
+        midiOut.reset();   // 前のゲームの発音・コントローラー設定を外部音源へ残さない
+    }
     player=std::make_unique<Player>(); mac_install_font(settings.font_name,settings.font_shift); std::string error;
-    player->midi_user=&midiSynth; player->midi_sink=&MidiSinkTrampoline;
+    player->midi_user=&midiDispatch; player->midi_sink=&MidiSinkTrampoline;
     settings.cfg.start = apple_startup::dos_start_path(settings.cfg.start);
     if(!player->init(settings,&error)) { [self reportError:text(error) code:@"launch_failed" summary:@"ソフトウェアを起動できませんでした"]; [self stopGame]; return; }
     paused=NO; nextFrame=CACurrentMediaTime(); self.status.text=self.readingOriginal ? @"実行中 — 元フォルダを直接読込、保存データは別領域" : @"実行中 — ゲーム本体はキャッシュ、保存データは別領域";
@@ -1992,6 +2083,9 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     options.soundBoard=player?player->m->cfg.sound_board:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98SoundBoard"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98SoundBoard"]:86);
     options.videoColors=player?player->m->cfg.video_colors:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98VideoColors"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98VideoColors"]:16);
     options.displayMode=[NSUserDefaults.standardUserDefaults integerForKey:displayModeKey];
+    options.midiMode=midiUsesExternalOut()?1:0;
+    options.midiDestinationID=[NSUserDefaults.standardUserDefaults integerForKey:midiDestinationIDKey];
+    options.midiDestinationName=[NSUserDefaults.standardUserDefaults stringForKey:midiDestinationNameKey] ?: @"";
     NSInteger defaultClock=[NSUserDefaults.standardUserDefaults integerForKey:defaultClockKey];
     options.clockMHz=validClockMHz(defaultClock) ? defaultClock : 0;
     __weak PlayerController* weak=self;
