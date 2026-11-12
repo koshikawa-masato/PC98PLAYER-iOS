@@ -192,6 +192,11 @@ static std::vector<HardwareKey> hardwareKeys() {
     [self setNeedsLayout];
     [self setNeedsDisplay];
 }
+- (void)setControllerTopInset:(CGFloat)value {
+    if(_controllerTopInset==value) return;
+    _controllerTopInset=value;
+    [self setNeedsLayout];
+}
 - (void)setLandscapeEdgeControls:(BOOL)value {
     if(_landscapeEdgeControls==value) return;
     _landscapeEdgeControls=value;
@@ -507,10 +512,13 @@ static std::vector<HardwareKey> hardwareKeys() {
     CGFloat chordY=(CGRectGetMidY(a)+CGRectGetMidY(b))/2;
     actionChordFrame=CGRectMake(chordX-.34*unit,chordY-.30*unit,.68*unit,.60*unit);
     CGFloat toolbarButtonWidth=MAX(1,MIN(82,(width-22)/2));
-    CGFloat toolbarButtonHeight=MAX(1,MIN(38,top+.8*unit-8));
+    // ツールバーと状態表示がパネル上端に重なる配置では、その帯の下にポーズ／キー設定を置く（タッチパッドと同じ扱い）。
+    // 全画面の輪郭表示ではツールバー自体が無いので従来どおり上端に置く。
+    CGFloat buttonsTop=self.outlinesOnly ? 5 : 5+self.controllerTopInset;
+    CGFloat toolbarButtonHeight=MAX(1,MIN(38,top+.8*unit-3-buttonsTop));
     CGFloat settingsX=width-8-toolbarButtonWidth;
-    self.controllerSettings.frame=CGRectMake(settingsX,5,toolbarButtonWidth,toolbarButtonHeight);
-    self.controllerPause.frame=CGRectMake(settingsX-6-toolbarButtonWidth,5,toolbarButtonWidth,toolbarButtonHeight);
+    self.controllerSettings.frame=CGRectMake(settingsX,buttonsTop,toolbarButtonWidth,toolbarButtonHeight);
+    self.controllerPause.frame=CGRectMake(settingsX-6-toolbarButtonWidth,buttonsTop,toolbarButtonWidth,toolbarButtonHeight);
 }
 - (unsigned)actionButtonsAt:(CGPoint)point {
     if(CGRectContainsPoint(actionChordFrame,point)) return 3;

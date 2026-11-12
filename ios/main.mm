@@ -1044,6 +1044,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.topPanel.separateControls=separateControls;
     // ツールバーと状態表示がパネル上端に重なる配置では、タッチパッド面をその下から始める
     self.keyboard.touchpadTopInset=separateControls ? 54 : 0;
+    // 同じ配置ではコントローラーのポーズ／キー設定ボタンも帯の下に置く（全画面ではツールバーが無いので対象外）
+    self.keyboard.controllerTopInset=(separateControls && !fullScreen) ? 54 : 0;
     BOOL phonePortrait=self.traitCollection.userInterfaceIdiom==UIUserInterfaceIdiomPhone &&
         self.view.bounds.size.width<self.view.bounds.size.height;
     self.topPanel.framelessDisplay=phonePortrait && !verticalDivision && usesPortraitEdgeToEdge();
