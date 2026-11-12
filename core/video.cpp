@@ -77,7 +77,7 @@ text:
     int rows = H / rowh;
     bool blink_phase = (m->frame_count / 30) & 1;
     uint32_t tsad = (uint32_t)(m->gdcm.pram[0] | (m->gdcm.pram[1] << 8));
-    bool textInk = false;   // テキスト画面に実際に描かれた字形があるか（カーソルの判定に使う）
+    bool rowInk[64] = {};   // 行ごとに「実際に見える字形・印があるか」（カーソルの判定に使う）
     for (int r = 0; r < rows; r++) {
         // 全角の右半分は「直前のセルが全角の左半分だった」ことで決まる（セルの中身は見ない）。
         // 外字（76・77 区）は同じコードが続くと左→右と交互になる。
@@ -129,6 +129,9 @@ text:
             if ((at & 2) && blink_phase) visible = false;
             if (!visible && !rev) continue;
             uint32_t col = 0xFF000000u | ((at & 0x40) ? 0xFF0000u : 0) | ((at & 0x80) ? 0x00FF00u : 0) | ((at & 0x20) ? 0x0000FFu : 0);
+            // 反転した空白は色が黒なら見えない（画面端に並ぶ Farland の反転空白など）ので印に数えない。
+            // 反転でも色付きならベタ塗りの印として見えるので数える
+            bool cellInk = rev && col != 0xFF000000u;
             int y0 = r * rowh;
             for (int y = 0; y < rowh && y0 + y < H; y++) {
                 uint8_t bits = 0;
@@ -140,21 +143,24 @@ text:
                     if (ul && y == 15) bits = 0xFF;
                     if (vl) bits |= 0x80;
                 }
+                if (bits) cellInk = true;   // 反転前の字形ビットで判定する
                 if (rev) bits = (uint8_t)~bits;
-                if (bits) textInk = true;
                 uint32_t* o = out + (y0 + y) * 640 + c * 8;
                 for (int k = 0; k < 8; k++) if (bits & (0x80 >> k)) o[k] = col;
             }
+            if (cellInk && r < 64) rowInk[r] = true;
         }
     }
     // カーソル
-    // テキスト画面が真っ白なときは出さない: グラフィック専用画面へ移るのにカーソルを
+    // カーソルのある行に本文が無いときは出さない: グラフィック専用画面へ移るのにカーソルを
     // 消し忘れるソフト（Farland Story など）では、起動時の BIOS カーソルが空のテキスト
-    // 画面の位置に点滅し続けてしまう。本文のある画面では従来どおり点滅させる。
-    if ((m->gdcm.csrform[0] & 0x80) && textInk && ((m->frame_count / 16) & 1)) {
+    // 画面の位置に点滅し続けてしまう。以前は画面全体で判定していたが、Farland は画面端に
+    // 「反転した黒の空白」を並べるため、それを本文と数えて会話・戦闘シーンで再び出てしまった。
+    // 本文のある行では従来どおり点滅させる。
+    if ((m->gdcm.csrform[0] & 0x80) && ((m->frame_count / 16) & 1)) {
         uint32_t ead = m->gdcm.ead & 0xFFF;
         int r = (int)(ead / 80), c = (int)(ead % 80);
-        if (r < rows) {
+        if (r < rows && r < 64 && rowInk[r]) {
             // カーソルの形: CSRFORM の開始ライン〜終了ライン。開始が終了より下なら何も出ない
             //（カーソルを消すのに表示ビットではなくこちらを使うソフトがある）
             int top = m->gdcm.csrform[1] & 0x1F, bot = (m->gdcm.csrform[2] >> 3) & 0x1F;
