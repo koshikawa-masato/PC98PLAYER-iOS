@@ -128,6 +128,9 @@ namespace floppy {
     std::string current_path_unit(int unit);
     // イメージの中身を調べる（読めなければ false）。dos = MS-DOS のファイル表がある、bootable = IPL がある
     bool probe_image(const std::string& path, bool* dos, bool* bootable);                 // 入っていなければ nullptr（フォルダを入れているときも nullptr）
+    // 空のディスク（PC-98 標準の 2HD・1024 バイト x 8 セクタ x 77 シリンダ。DOS でフォーマット済みの FAT12）を
+    // D88 で path に作る（あれば上書き）。失敗なら false、err に理由
+    bool create_blank_image(const std::string& path, std::string* err);
     // フォルダを入れているとき、そのホストのパス（空 = フォルダではない）。
     // FloppyImage= にフォルダ名を書くと、そのフォルダをフロッピーのドライブとしてそのまま見せる
     //（ファイルを確かめるだけのキーディスク向け。セクタ単位の読み書きはできない）

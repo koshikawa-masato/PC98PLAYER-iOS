@@ -54,6 +54,20 @@ static NSString* text(const std::string& s) { return [NSString stringWithUTF8Str
 static NSURL* area(NSSearchPathDirectory directory,NSString* component) {
     return [[NSFileManager.defaultManager URLsForDirectory:directory inDomains:NSUserDomainMask].firstObject URLByAppendingPathComponent:component isDirectory:YES];
 }
+// アプリ内で作ったディスク（空のディスク）の置き場。ゲームごとに PC98UserDisks/<identifier>（nil = ゲームが無い）
+static NSURL* userDiskDirectory(NSString* identifier) {
+    if(!identifier.length) return nil;
+    return area(NSApplicationSupportDirectory,[@"PC98UserDisks/" stringByAppendingString:identifier]);
+}
+// パスがそのゲームの PC98UserDisks の下か（コピーではなく実ファイルを入れているので、取り出す前に書き戻す）
+static BOOL isUserDiskPath(const std::string& path,NSString* identifier) {
+    NSURL* directory=userDiskDirectory(identifier);
+    if(!directory || path.empty()) return NO;
+    std::string base=directory.fileSystemRepresentation;
+    while(base.size()>1 && base.back()=='/') base.pop_back();
+    base+='/';
+    return path.size()>base.size() && path.compare(0,base.size(),base)==0;
+}
 static NSString* gameIDForURLString(NSString* urlString) {
     NSData* bytes=[urlString dataUsingEncoding:NSUTF8StringEncoding];
     unsigned char hash[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(bytes.bytes,(CC_LONG)bytes.length,hash);
@@ -1532,7 +1546,11 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.titleCaptureAttempted=NO;
     [self.contentFilter reset];self.monitor.image=nil;filterFrameHeight=0;
     fullscreenMenuPaused=NO; paused=YES; [self releaseKeys]; audio.close(); midiSynth.reset();
-    if(player) { player->shutdown(); player.reset(); [self.view setNeedsLayout]; }
+    if(player) {
+        // 作ったディスクは実ファイルを入れているので、終える前に書き戻す
+        for(int unit=0;unit<2;++unit) [self writeBackUserDiskForUnit:unit];
+        player->shutdown(); player.reset(); [self.view setNeedsLayout];
+    }
     hostfs::set_overlay("","");
     [self.scopedGameFolder stopAccessingSecurityScopedResource];
     self.scopedGameFolder=nil;
@@ -1576,11 +1594,24 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         [drives addAction:[UIAlertAction actionWithTitle:insert style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
             [weak pickFloppyForUnit:unit];
         }]];
+        if(userDiskDirectory(self.currentID)) {
+            NSString* create=[NSString stringWithFormat:@"%@ に空のディスクを作成…",drive];
+            [drives addAction:[UIAlertAction actionWithTitle:create style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+                [weak askBlankFloppyNameForUnit:unit];
+            }]];
+            if([self userDiskNames].count) {
+                NSString* created=[NSString stringWithFormat:@"%@ に作成したディスクをセット…",drive];
+                [drives addAction:[UIAlertAction actionWithTitle:created style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+                    [weak chooseUserDiskForUnit:unit];
+                }]];
+            }
+        }
         if(mounted.length) {
             NSString* eject=[NSString stringWithFormat:@"%@ から %@ を取り出す",drive,mounted];
             [drives addAction:[UIAlertAction actionWithTitle:eject style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
                 PlayerController* s=weak;
                 if(!s || !s->player) return;
+                [s writeBackUserDiskForUnit:unit];
                 floppy::eject_unit(unit);
                 s.status.text=[NSString stringWithFormat:@"%@ のディスクを取り出しました",drive];
             }]];
@@ -1588,6 +1619,105 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     }
     [drives addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:drives animated:YES completion:nil];
+}
+// 入っているのが作ったディスク（PC98UserDisks の下の実ファイル）なら、今の中身を同じファイルへ書き戻す（失敗は無視）
+- (void)writeBackUserDiskForUnit:(int)unit {
+    std::string path=floppy::current_path_unit(unit);
+    FloppyImage* image=floppy::image_unit(unit);
+    if(!image || !isUserDiskPath(path,self.currentID)) return;
+    image->save_d88(path,nullptr);
+}
+// 作ったディスク（.d88）のファイル名を名前順に
+- (NSArray<NSString*>*)userDiskNames {
+    NSURL* directory=userDiskDirectory(self.currentID);
+    if(!directory) return @[];
+    NSArray<NSString*>* names=[NSFileManager.defaultManager contentsOfDirectoryAtPath:directory.path error:nil] ?: @[];
+    NSMutableArray<NSString*>* disks=[NSMutableArray new];
+    for(NSString* name in names) if([name.pathExtension.lowercaseString isEqualToString:@"d88"]) [disks addObject:name];
+    return [disks sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
+}
+- (void)askBlankFloppyNameForUnit:(int)unit {
+    if(!player || player->m->quit || fetching || !userDiskDirectory(self.currentID)) return;
+    UIAlertController* alert=[UIAlertController alertControllerWithTitle:@"空のディスクを作成"
+        message:@"ディスクの名前を入力してください。" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField* field) {
+        field.text=@"ブランクディスク";
+        field.clearButtonMode=UITextFieldViewModeWhileEditing;
+        field.accessibilityLabel=@"ディスクの名前";
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+    __weak PlayerController* weak=self;
+    __weak UIAlertController* weakAlert=alert;
+    [alert addAction:[UIAlertAction actionWithTitle:@"作成" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+        [weak createBlankFloppyNamed:weakAlert.textFields.firstObject.text unit:unit];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)createBlankFloppyNamed:(NSString*)requested unit:(int)unit {
+    if(!player || player->m->quit || fetching) return;
+    NSURL* directory=userDiskDirectory(self.currentID);
+    if(!directory) return;
+    [self.reportedErrorCodes removeObject:@"floppy_create"];
+    // パスの区切りや制御文字を除く。空・隠しファイルになる名前は既定の名前にする
+    NSMutableCharacterSet* invalid=[NSMutableCharacterSet characterSetWithCharactersInString:@"/\\:"];
+    [invalid formUnionWithCharacterSet:NSCharacterSet.controlCharacterSet];
+    NSString* name=[[requested ?: @"" componentsSeparatedByCharactersInSet:invalid] componentsJoinedByString:@""];
+    name=[name stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    while([name hasPrefix:@"."]) name=[name substringFromIndex:1];
+    if(!name.length) name=@"ブランクディスク";
+    // .d88 以外の拡張子のままだと「作成したディスク」の一覧に出ないので、.d88 でなければ付ける
+    if(![name.pathExtension.lowercaseString isEqualToString:@"d88"]) name=[name stringByAppendingPathExtension:@"d88"];
+    NSFileManager* manager=NSFileManager.defaultManager;
+    NSError* error=nil;
+    if(![manager createDirectoryAtURL:directory withIntermediateDirectories:YES attributes:nil error:&error]) {
+        [self reportError:error.localizedDescription code:@"floppy_create" summary:@"空のディスクを作成できませんでした"];
+        return;
+    }
+    // 同じ名前があれば「 2」「 3」… を付けて空いている名前にする
+    NSString* stem=name.stringByDeletingPathExtension, *extension=name.pathExtension;
+    NSURL* disk=[directory URLByAppendingPathComponent:name];
+    for(int n=2;[manager fileExistsAtPath:disk.path];++n)
+        disk=[directory URLByAppendingPathComponent:[[NSString stringWithFormat:@"%@ %d",stem,n] stringByAppendingPathExtension:extension]];
+    std::string reason;
+    if(!floppy::create_blank_image(disk.fileSystemRepresentation,&reason)) {
+        [manager removeItemAtURL:disk error:nil];
+        [self reportError:[@"空のディスクを作成できませんでした。 " stringByAppendingString:text(reason)] code:@"floppy_create" summary:@"空のディスクを作成できませんでした"];
+        return;
+    }
+    // コピーせず、作った実ファイルをそのまま入れる（書き込みはこのファイルへ残る）。入れ替える前に今のものを書き戻す
+    [self writeBackUserDiskForUnit:unit];
+    if(!floppy::insert_unit(unit,disk.fileSystemRepresentation,&reason)) {
+        [self reportError:[@"作成したディスクをセットできませんでした。 " stringByAppendingString:text(reason)] code:@"floppy_create" summary:@"作成したディスクをセットできませんでした"];
+        return;
+    }
+    self.status.text=[disk.lastPathComponent stringByAppendingString:@" を作成してセットしました"];
+}
+- (void)chooseUserDiskForUnit:(int)unit {
+    if(!player || player->m->quit || fetching) return;
+    NSURL* directory=userDiskDirectory(self.currentID);
+    NSArray<NSString*>* names=[self userDiskNames];
+    if(!directory || !names.count) return;
+    UIAlertController* list=[UIAlertController alertControllerWithTitle:@"作成したディスク"
+        message:nil preferredStyle:UIAlertControllerStyleAlert];
+    __weak PlayerController* weak=self;
+    for(NSString* name in names) {
+        [list addAction:[UIAlertAction actionWithTitle:name style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+            PlayerController* s=weak;
+            if(!s || !s->player || s->player->m->quit) return;
+            [s.reportedErrorCodes removeObject:@"floppy_mount"];
+            NSURL* disk=[directory URLByAppendingPathComponent:name];
+            // 入れ替える前に、今入っている作ったディスクを書き戻す
+            [s writeBackUserDiskForUnit:unit];
+            std::string reason;
+            if(!floppy::insert_unit(unit,disk.fileSystemRepresentation,&reason)) {
+                [s reportError:[@"ディスクをセットできませんでした。 " stringByAppendingString:text(reason)] code:@"floppy_mount" summary:@"フロッピーディスクをセットできませんでした"];
+                return;
+            }
+            s.status.text=[name stringByAppendingString:@" をセットしました"];
+        }]];
+    }
+    [list addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:list animated:YES completion:nil];
 }
 - (void)pickFloppyForUnit:(int)unit {
     UIDocumentPickerViewController* picker=[[UIDocumentPickerViewController alloc]

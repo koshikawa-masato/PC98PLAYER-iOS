@@ -642,6 +642,51 @@ bool probe_image(const std::string& path, bool* dos, bool* bootable) {
     return true;
 }
 
+// 空のディスクを作る: 2HD（77 シリンダ x 2 ヘッド x 8 セクタ x 1024 バイト、N=3）を DOS でフォーマットした形にして、
+// save_d88 で書き出す。論理セクタ 0 = 起動セクタ、1〜2・3〜4 = FAT（2 つ）、5〜10 = ルートディレクトリ、11〜 = データ
+bool create_blank_image(const std::string& path, std::string* err) {
+    const int CYL = 77, HEADS = 2, SPT = 8, SS = 1024;
+    const uint32_t TOTAL = (uint32_t)(CYL * HEADS * SPT);   // 1232
+    FloppyImage* im = new FloppyImage();
+    im->media = FD_2HD;
+    im->cylinders = CYL;
+    im->heads = HEADS;
+    im->wprot = false;
+    for (uint32_t lba = 0; lba < TOTAL; lba++) {
+        FdSector s;
+        s.c = (uint8_t)(lba / 16); s.h = (uint8_t)((lba % 16) / 8); s.r = (uint8_t)(lba % 8 + 1); s.n = 3;
+        s.status = 0; s.deleted = false; s.fm = false;
+        s.file_off = -1; s.copies = 1; s.next_copy = 0;
+        s.data.assign((size_t)SS, 0);
+        uint8_t* d = s.data.data();
+        if (lba == 0) {
+            // 起動セクタ（BPB）
+            d[0] = 0xEB; d[1] = 0x3C; d[2] = 0x90;
+            memset(d + 3, 0x20, 8);                       // OEM 名（空白）
+            d[11] = (uint8_t)SS; d[12] = (uint8_t)(SS >> 8);  // バイト／セクタ
+            d[13] = 1;                                    // セクタ／クラスタ
+            d[14] = 1; d[15] = 0;                         // 予約セクタ
+            d[16] = 2;                                    // FAT の数
+            d[17] = 192; d[18] = 0;                       // ルートのエントリ数
+            d[19] = (uint8_t)TOTAL; d[20] = (uint8_t)(TOTAL >> 8);   // 総セクタ数
+            d[21] = 0xFE;                                 // メディアバイト
+            d[22] = 2; d[23] = 0;                         // セクタ／FAT
+            d[24] = (uint8_t)SPT; d[25] = 0;              // セクタ／トラック
+            d[26] = (uint8_t)HEADS; d[27] = 0;            // ヘッド数
+            d[28] = d[29] = d[30] = d[31] = 0;            // 隠しセクタ
+            d[62] = 0xFA; d[63] = 0xF4; d[64] = 0xEB; d[65] = 0xFD;   // cli; hlt; jmp hlt
+        } else if (lba == 1 || lba == 3) {
+            d[0] = 0xFE; d[1] = 0xFF; d[2] = 0xFF;        // FAT の先頭（残りと 2 セクタ目は 0）
+        } else if (lba >= 11) {
+            memset(d, 0xE5, (size_t)SS);                  // データ領域
+        }
+        im->trk[s.c * 2 + s.h].secs.push_back(std::move(s));
+    }
+    bool ok = im->save_d88(path, err);
+    delete im;
+    return ok;
+}
+
 void eject_unit(int unit) { if (unit == 0) eject(); else if (unit == 1) { delete s_img2; s_img2 = nullptr; s_changes2++; fatfs::reset(); } }
 FloppyImage* image_unit(int unit) { return unit == 0 ? s_img : unit == 1 ? s_img2 : nullptr; }
 std::string current_path_unit(int unit) { if (unit == 0) return current_path(); return (unit == 1 && s_img2) ? s_img2->path : std::string(); }
