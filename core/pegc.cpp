@@ -224,13 +224,12 @@ int pegc_render(Machine* m, uint32_t* out) {
     if (pitch == 0) pitch = 80;
     uint32_t page = p.single ? 0 : (uint32_t)(m->disp_bank & 1) * 0x40000;
     uint32_t mask = p.single ? (VRAM_SIZE - 1) : 0x3FFFF;
-    // SCROLL の 2 つの領域（開始アドレスはワード単位。8 バイト単位にするため 2 倍）
+    // SCROLL の表示領域（最大 4 つを順に表示。開始アドレスはワード単位。8 バイト単位にするため 2 倍）。
+    // LEN=0 の領域は「画面の下端まで」という従来の扱い（その領域で描画を終える）。
+    // 16 色側（video.cpp）と揃える: 3 領域以上を使う場面で後続領域を落としたり
+    // 前の領域の続きとして読んだりすると、固定したい下部がスクロールに引きずられる（#31）。
     int y = 0;
-    for (int area = 0; area < 2 && y < H; area++) {
-        const uint8_t* pr = m->gdcs.pram + area * 4;
-        uint32_t sad = (uint32_t)(pr[0] | (pr[1] << 8) | ((pr[2] & 3) << 16));
-        uint32_t len = (uint32_t)(((pr[2] | (pr[3] << 8)) & 0x3FFF) >> 4);
-        if (len == 0) len = (uint32_t)H;
+    auto render_area = [&](uint32_t sad, uint32_t len) {
         uint32_t vad = (sad << 1) & (mask >> 3);
         for (uint32_t l = 0; l < len && y < H; l++, y++) {
             uint32_t* o = out + y * 640;
@@ -239,7 +238,15 @@ int pegc_render(Machine* m, uint32_t* out) {
             for (int x = 0; x < 640; x++) o[x] = pal[m->pegc_vram[(base + (uint32_t)x) & (VRAM_SIZE - 1)]];
             vad = (vad + pitch) & (mask >> 3);
         }
-        if (area == 0 && len >= (uint32_t)H) break;
+    };
+    for (int area = 0; area < 4 && y < H; area++) {
+        const uint8_t* pr = m->gdcs.pram + area * 4;
+        uint32_t sad = (uint32_t)(pr[0] | (pr[1] << 8) | ((pr[2] & 3) << 16));
+        uint32_t len = (uint32_t)(((pr[2] | (pr[3] << 8)) & 0x3FFF) >> 4);
+        bool last = (len == 0);            // LEN=0 は下端まで
+        if (last) len = (uint32_t)H;
+        render_area(sad, len);
+        if (last) break;
     }
     for (; y < H; y++) for (int x = 0; x < 640; x++) out[y * 640 + x] = 0xFF000000u;
     return H;
