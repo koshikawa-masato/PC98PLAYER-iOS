@@ -16,8 +16,11 @@
 @property(nonatomic) CGFloat touchpadTopInset;
 - (void)releaseAll;
 - (void)repeatHeldKeys;
+// コントローラーの操作子（十字キー・アクションボタン・ポーズボタン）の周囲 margin ポイント以内かどうか（自ビューの座標系）
+- (BOOL)isNearControllerControls:(CGPoint)point margin:(CGFloat)margin;
 #ifdef PC98PLAYER_TESTING
 - (BOOL)controllerChordForTesting:(BOOL (^)(int scan))isDown;
+- (BOOL)controlMarginForTesting;
 - (BOOL)touchpadForTesting:(BOOL (^)(int button))isDown;
 - (BOOL)tapReturnSectionsForTesting;
 - (BOOL)hardwareLayoutForTesting;

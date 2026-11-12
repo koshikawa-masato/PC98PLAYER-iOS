@@ -507,6 +507,16 @@ static std::vector<HardwareKey> hardwareKeys() {
     if(CGRectContainsPoint(self.controllerKeys[5].frame,point)) return 2;
     return 0;
 }
+// 操作子の輪郭だけでなく周囲 margin ポイントまでを「操作子の近傍」とみなす（全画面時の誤ダブルタップ防止用）
+- (BOOL)isNearControllerControls:(CGPoint)point margin:(CGFloat)margin {
+    if(!self.controllerMode) return NO;
+    if(CGRectContainsPoint(CGRectInset(stickFrame,-margin,-margin),point)) return YES;
+    if(CGRectContainsPoint(CGRectInset(actionChordFrame,-margin,-margin),point)) return YES;
+    for(int i=4;i<6;++i)
+        if(CGRectContainsPoint(CGRectInset(self.controllerKeys[i].frame,-margin,-margin),point)) return YES;
+    return !self.controllerPause.hidden &&
+        CGRectContainsPoint(CGRectInset(self.controllerPause.frame,-margin,-margin),point);
+}
 - (void)changeActionButtonsFrom:(unsigned)previous to:(unsigned)next {
     for(unsigned index=0;index<2;++index) {
         unsigned bit=1u<<index;
@@ -918,6 +928,25 @@ static std::vector<HardwareKey> hardwareKeys() {
     passed=passed && isDown(space);
     [controller updateKey:b down:NO];
     return passed && !isDown(space);
+}
+- (BOOL)controlMarginForTesting {
+    PC98Keyboard* probe=[[PC98Keyboard alloc] initWithFrame:CGRectMake(0,0,844,390)];
+    probe.outlinesOnly=YES;
+    if(!probe.controllerKeys) [probe buildController];
+    [probe layoutController];
+    const CGFloat margin=20;
+    CGRect b=probe.controllerKeys[5].frame, stick=probe->stickFrame;
+    CGPoint buttonCenter=CGPointMake(CGRectGetMidX(b),CGRectGetMidY(b));
+    CGPoint buttonNear=CGPointMake(CGRectGetMaxX(b)+margin/2,CGRectGetMidY(b));
+    CGPoint stickNear=CGPointMake(CGRectGetMinX(stick)-margin/2,CGRectGetMidY(stick));
+    CGPoint bottomFar=CGPointMake(CGRectGetMidX(probe.bounds),CGRectGetMaxY(probe.bounds)-2);
+    CGPoint cornerFar=CGPointMake(2,2);
+    return [probe isNearControllerControls:buttonCenter margin:margin] &&
+        [probe isNearControllerControls:buttonNear margin:margin] &&
+        [probe isNearControllerControls:stickNear margin:margin] &&
+        ![probe isNearControllerControls:buttonNear margin:0] &&
+        ![probe isNearControllerControls:bottomFar margin:margin] &&
+        ![probe isNearControllerControls:cornerFar margin:margin];
 }
 - (BOOL)touchpadForTesting:(BOOL (^)(int button))isDown {
     PC98Keyboard* probe=[[PC98Keyboard alloc] initWithFrame:self.bounds];

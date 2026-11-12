@@ -786,7 +786,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     UITapGestureRecognizer* twoFingerTap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(rightClick)];
     twoFingerTap.numberOfTouchesRequired=2;[self.monitor addGestureRecognizer:twoFingerTap];
     UITapGestureRecognizer* doubleTap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(toggleFullScreen)];
-    doubleTap.numberOfTapsRequired=2;[doubleTap requireGestureRecognizerToFail:twoFingerTap];[self.monitor addGestureRecognizer:doubleTap];
+    doubleTap.numberOfTapsRequired=2;doubleTap.delegate=self;[doubleTap requireGestureRecognizerToFail:twoFingerTap];[self.monitor addGestureRecognizer:doubleTap];
     UITapGestureRecognizer* tap=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(leftClick:)];
     [tap requireGestureRecognizerToFail:hold];[tap requireGestureRecognizerToFail:doubleTap];[tap requireGestureRecognizerToFail:twoFingerTap];[self.monitor addGestureRecognizer:tap];
     self.status=[UILabel new]; self.status.text=@"ゲームフォルダを選択してください";
@@ -1297,6 +1297,14 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         return player && !fetching && !player->m->quit && !self.presentedViewController &&
             !(bossMode && hingeClosed) && (fullScreen || [self.currentID isEqualToString:@"demo"] ||
                 (self.displayedSourceFrame && self.monitor.image));
+    if([gesture isKindOfClass:UITapGestureRecognizer.class]) {
+        UITapGestureRecognizer* tapGesture=(UITapGestureRecognizer*)gesture;
+        // 全画面でコントローラー枠を表示中は、操作子周辺（20pt）のダブルタップを全画面解除と判定しない
+        if(tapGesture.numberOfTapsRequired==2 && tapGesture.numberOfTouchesRequired==1 &&
+           fullScreen && self.keyboard.outlinesOnly && !self.keyboard.hidden &&
+           [self.keyboard isNearControllerControls:[gesture locationInView:self.keyboard] margin:20])
+            return NO;
+    }
     return YES;
 }
 - (void)pauseFromFullscreenMenu {
@@ -2369,6 +2377,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     result[@"fullscreenControllerChord"]=@([self.keyboard controllerChordForTesting:^BOOL(int scan) {
         return player->m->kb_down[scan];
     }]);
+    result[@"controlMargin"]=@([self.keyboard controlMarginForTesting]);
     [self releaseKeys];
     [self rightClick];result[@"fullscreenRightClick"]=@(player->m->mouse.buttons==2);[self releaseKeys];
     result[@"fullscreenAcceptsLongPress"]=@(hold && [self gestureRecognizerShouldBegin:hold]);
