@@ -144,12 +144,12 @@ static std::vector<HardwareKey> hardwareKeys() {
     std::set<int> modifierChords;
     std::map<int,double> repeatAt;
     __weak UITouch* stickTouch;
-    CGPoint panelSwipeOrigin;
+    NSHashTable<UITouch*>* panelSwipeBlockedTouches;   // 除外域で始まった指（押している間は切替スワイプを始めない）
     CGRect stickFrame;
     CGRect actionChordFrame;
     std::map<UITouch*,unsigned> actionTouches;
     unsigned stickDirections;
-    CGFloat panelSwipeDirection;     // 切替フリックの向き（+1=右=次のモード、-1=左=前のモード）
+    CGFloat panelSwipeDirection;     // 二本指切替スワイプの向き（+1=右=次のモード、-1=左=前のモード）
     CGRect touchpadFrame;            // タッチパッド面
     __weak UITouch* touchpadTouch;   // パッド面を操作中のタッチ（1本のみ）
     CGPoint touchpadTouchStart, touchpadTouchLast;
@@ -178,7 +178,7 @@ static std::vector<HardwareKey> hardwareKeys() {
 // 全画面（outlinesOnly）中は従来どおりコントローラーの枠表示を使い、タッチパッドは通常表示に戻ったとき復帰する
 - (BOOL)touchpadMode { return _touchpadMode && !self.outlinesOnly; }
 - (NSInteger)inputModeIndex { return _touchpadMode ? 2 : _controllerMode ? 1 : 0; }
-// 右フリック＝次のモード（+1）、左フリック＝前のモード（-1）。両端では止まる
+// 二本指で右スワイプ＝次のモード（+1）、左スワイプ＝前のモード（-1）。両端では止まる
 - (void)stepInputMode:(NSInteger)step {
     NSInteger mode=std::clamp<NSInteger>([self inputModeIndex]+step,0,2);
     self.controllerMode=mode==1;
@@ -244,15 +244,23 @@ static std::vector<HardwareKey> hardwareKeys() {
         self.keys=groups;
         UIPanGestureRecognizer* swipe=[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(swipeInputPanel:)];
         swipe.delegate=self;
-        swipe.maximumNumberOfTouches=1;
+        // 一本指はタイピング・パッド操作に使うため、モード切替は二本指スワイプのみ
+        swipe.minimumNumberOfTouches=2;
+        swipe.maximumNumberOfTouches=2;
         [self addGestureRecognizer:swipe];
+        panelSwipeBlockedTouches=[NSHashTable weakObjectsHashTable];
     }
     return self;
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer*)gesture shouldReceiveTouch:(UITouch*)touch {
-    panelSwipeOrigin=[touch locationInView:self.superview];
+    BOOL accepted=[self panelSwipeAcceptsTouch:touch];
+    // 二本のうちどちらかが除外域で始まったら、その指を離すまで切替スワイプを始めない
+    if(!accepted) [panelSwipeBlockedTouches addObject:touch];
+    return accepted;
+}
+- (BOOL)panelSwipeAcceptsTouch:(UITouch*)touch {
     if(self.touchpadMode) {
-        // パッド面とクリックボタンの上で始まった操作はマウス操作とし、切替フリックにしない
+        // パッド面とクリックボタンの上で始まった操作はマウス操作とし、切替スワイプにしない
         CGPoint location=[touch locationInView:self];
         if(CGRectContainsPoint(touchpadFrame,location)) return NO;
         for(UIButton* button in self.touchpadButtons) if(CGRectContainsPoint(button.frame,location)) return NO;
@@ -266,18 +274,21 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer*)gesture {
     UIPanGestureRecognizer* swipe=(UIPanGestureRecognizer*)gesture;
-    CGPoint point=[swipe locationInView:self.superview];
-    CGPoint movement=CGPointMake(point.x-panelSwipeOrigin.x,point.y-panelSwipeOrigin.y);
+    for(UITouch* touch in panelSwipeBlockedTouches.allObjects) {
+        if(touch.phase==UITouchPhaseEnded || touch.phase==UITouchPhaseCancelled) [panelSwipeBlockedTouches removeObject:touch];
+        else return NO;
+    }
+    // 二本指では重心が指の追加でずれるため、原点ではなく認識器の移動量（translation）で判定する
+    CGPoint movement=[swipe translationInView:self.superview];
     if(CGPointEqualToPoint(movement,CGPointZero)) movement=[swipe velocityInView:self.superview];
-    // キーボードは右（次）のみ、タッチパッドは左（前）のみ、ゲームパッドは左右どちらも受け付ける
-    panelSwipeDirection=self.touchpadMode ? -1 : self.controllerMode ? (movement.x<0 ? -1 : 1) : 1;
-    return !self.outlinesOnly && !self.switchingInputMode && std::abs(movement.x)>=std::abs(movement.y)*1.4 &&
-           movement.x*panelSwipeDirection>=0;
+    // 全モードで左右どちらも受け付ける（右＝次、左＝前）。端では stepInputMode: のクランプで止まる
+    panelSwipeDirection=movement.x<0 ? -1 : 1;
+    return !self.outlinesOnly && !self.switchingInputMode && std::abs(movement.x)>=std::abs(movement.y)*1.4;
 }
 - (void)swipeInputPanel:(UIPanGestureRecognizer*)gesture {
     CGFloat direction=panelSwipeDirection;
     CGFloat distance=MIN(64,self.bounds.size.width*.18);
-    CGFloat drag=MAX(0,([gesture locationInView:self.superview].x-panelSwipeOrigin.x)*direction);
+    CGFloat drag=MAX(0,[gesture translationInView:self.superview].x*direction);
     BOOL reduceMotion=UIAccessibilityIsReduceMotionEnabled();
     if(gesture.state==UIGestureRecognizerStateBegan) [self releaseAll];
     if(gesture.state==UIGestureRecognizerStateBegan || gesture.state==UIGestureRecognizerStateChanged) {
@@ -395,7 +406,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     if(self.mouseClicked) self.mouseClicked((int)sender.tag);
 }
 - (CGFloat)touchpadHeaderBottom {
-    // 上端の帯（パッド面の外）は切替フリックとモード表示に使う
+    // 上端の帯（パッド面の外）は二本指の切替スワイプとモード表示に使う
     return self.touchpadTopInset+MAX(1,MIN(28,self.bounds.size.height*.12));
 }
 - (void)layoutTouchpad {
@@ -416,7 +427,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     CGFloat headerTop=self.touchpadTopInset, headerHeight=[self touchpadHeaderBottom]-headerTop;
     NSDictionary* header=@{NSFontAttributeName:[UIFont systemFontOfSize:MAX(6,MIN(11,headerHeight*.45)) weight:UIFontWeightMedium],
         NSForegroundColorAttributeName:PC98Plastic(.30),NSParagraphStyleAttributeName:centered};
-    [@"タッチパッド　◀ 左フリックでゲームパッド" drawInRect:CGRectMake(0,headerTop+headerHeight*.25,self.bounds.size.width,headerHeight*.75) withAttributes:header];
+    [@"タッチパッド　◀ 二本指スワイプで切替" drawInRect:CGRectMake(0,headerTop+headerHeight*.25,self.bounds.size.width,headerHeight*.75) withAttributes:header];
     NSDictionary* hint=@{NSFontAttributeName:[UIFont systemFontOfSize:11],
         NSForegroundColorAttributeName:[UIColor colorWithWhite:1 alpha:.45],NSParagraphStyleAttributeName:centered};
     [@"ドラッグでカーソル移動・タップで左クリック" drawInRect:CGRectMake(touchpadFrame.origin.x,CGRectGetMidY(touchpadFrame)-7,touchpadFrame.size.width,16) withAttributes:hint];
@@ -961,6 +972,15 @@ static std::vector<HardwareKey> hardwareKeys() {
     // 右＝次、左＝前の一方向チェーン：キーボード→ゲームパッド→タッチパッド（端では止まる）→…→キーボード
     const NSInteger steps[]={1,1,1,-1,-1,-1}, expected[]={1,2,2,1,0,0};
     BOOL passed=[probe inputModeIndex]==0;
+    // モード切替のパン認識器は二本指専用（一本指のタイピング・パッド操作と競合しない）
+    NSUInteger switchPans=0;
+    for(UIGestureRecognizer* gesture in probe.gestureRecognizers) {
+        if(![gesture isKindOfClass:UIPanGestureRecognizer.class] || gesture.delegate!=probe) continue;
+        UIPanGestureRecognizer* pan=(UIPanGestureRecognizer*)gesture;
+        passed=passed && pan.minimumNumberOfTouches==2 && pan.maximumNumberOfTouches==2;
+        ++switchPans;
+    }
+    passed=passed && switchPans==1;
     for(size_t i=0;i<std::size(steps);++i) {
         [probe stepInputMode:steps[i]];
         passed=passed && [probe inputModeIndex]==expected[i];
