@@ -77,6 +77,7 @@ text:
     int rows = H / rowh;
     bool blink_phase = (m->frame_count / 30) & 1;
     uint32_t tsad = (uint32_t)(m->gdcm.pram[0] | (m->gdcm.pram[1] << 8));
+    bool textInk = false;   // テキスト画面に実際に描かれた字形があるか（カーソルの判定に使う）
     for (int r = 0; r < rows; r++) {
         // 全角の右半分は「直前のセルが全角の左半分だった」ことで決まる（セルの中身は見ない）。
         // 外字（76・77 区）は同じコードが続くと左→右と交互になる。
@@ -140,13 +141,17 @@ text:
                     if (vl) bits |= 0x80;
                 }
                 if (rev) bits = (uint8_t)~bits;
+                if (bits) textInk = true;
                 uint32_t* o = out + (y0 + y) * 640 + c * 8;
                 for (int k = 0; k < 8; k++) if (bits & (0x80 >> k)) o[k] = col;
             }
         }
     }
     // カーソル
-    if ((m->gdcm.csrform[0] & 0x80) && ((m->frame_count / 16) & 1)) {
+    // テキスト画面が真っ白なときは出さない: グラフィック専用画面へ移るのにカーソルを
+    // 消し忘れるソフト（Farland Story など）では、起動時の BIOS カーソルが空のテキスト
+    // 画面の位置に点滅し続けてしまう。本文のある画面では従来どおり点滅させる。
+    if ((m->gdcm.csrform[0] & 0x80) && textInk && ((m->frame_count / 16) & 1)) {
         uint32_t ead = m->gdcm.ead & 0xFFF;
         int r = (int)(ead / 80), c = (int)(ead % 80);
         if (r < rows) {
