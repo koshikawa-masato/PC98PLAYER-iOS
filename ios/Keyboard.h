@@ -9,10 +9,16 @@
 - (void)loadControllerBindingsForGame:(NSString*)identifier;
 - (void)updateControllerPause:(BOOL)paused enabled:(BOOL)enabled;
 @property(copy) void (^keyChanged)(int scan, BOOL down);
+// タッチパッドモード：パッド面のドラッグ量（ポイント）と、クリック（1=左、2=右）を通知する
+@property(copy) void (^mouseMoved)(CGPoint delta);
+@property(copy) void (^mouseClicked)(int button);
+// タッチパッドモードで上端から空けておく高さ（パネル上に重なるツールバー分）
+@property(nonatomic) CGFloat touchpadTopInset;
 - (void)releaseAll;
 - (void)repeatHeldKeys;
 #ifdef PC98PLAYER_TESTING
 - (BOOL)controllerChordForTesting:(BOOL (^)(int scan))isDown;
+- (BOOL)touchpadForTesting:(BOOL (^)(int button))isDown;
 - (BOOL)tapReturnSectionsForTesting;
 - (BOOL)hardwareLayoutForTesting;
 - (BOOL)tapScanForTesting:(int)scan;

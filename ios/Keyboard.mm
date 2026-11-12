@@ -149,6 +149,12 @@ static std::vector<HardwareKey> hardwareKeys() {
     CGRect actionChordFrame;
     std::map<UITouch*,unsigned> actionTouches;
     unsigned stickDirections;
+    CGFloat panelSwipeDirection;     // 切替フリックの向き（+1=右=次のモード、-1=左=前のモード）
+    CGRect touchpadFrame;            // タッチパッド面
+    __weak UITouch* touchpadTouch;   // パッド面を操作中のタッチ（1本のみ）
+    CGPoint touchpadTouchStart, touchpadTouchLast;
+    NSTimeInterval touchpadTouchTime;
+    BOOL touchpadTouchTravelled;     // タップの許容量を超えて動いた（＝タップではなく移動）
 }
 @property(strong) NSArray<NSArray<UIButton*>*>* keys;
 @property(strong) UIImpactFeedbackGenerator* keyFeedback;
@@ -158,13 +164,34 @@ static std::vector<HardwareKey> hardwareKeys() {
 @property(strong) UIButton* controllerSettings;
 @property(strong) UIButton* controllerPause;
 @property(strong) UIView* stickKnob;
+@property(strong) NSArray<UIButton*>* touchpadButtons;   // [0]=左クリック、[1]=右クリック
 @property BOOL controllerMode;
+// 入力モードは キーボード（両方NO）／ゲームパッド（controllerMode）／タッチパッド（touchpadMode）の3値
+@property(nonatomic) BOOL touchpadMode;
 @property BOOL switchingInputMode;
 @end
 @implementation PC98Keyboard
 @synthesize controllerMode=_controllerMode;
+@synthesize touchpadMode=_touchpadMode;
 
 - (BOOL)controllerMode { return _controllerMode || self.outlinesOnly; }
+// 全画面（outlinesOnly）中は従来どおりコントローラーの枠表示を使い、タッチパッドは通常表示に戻ったとき復帰する
+- (BOOL)touchpadMode { return _touchpadMode && !self.outlinesOnly; }
+- (NSInteger)inputModeIndex { return _touchpadMode ? 2 : _controllerMode ? 1 : 0; }
+// 右フリック＝次のモード（+1）、左フリック＝前のモード（-1）。両端では止まる
+- (void)stepInputMode:(NSInteger)step {
+    NSInteger mode=std::clamp<NSInteger>([self inputModeIndex]+step,0,2);
+    self.controllerMode=mode==1;
+    self.touchpadMode=mode==2;
+    if(mode==1 && !self.controllerKeys) [self buildController];
+    if(mode==2 && !self.touchpadButtons) [self buildTouchpad];
+}
+- (void)setTouchpadTopInset:(CGFloat)value {
+    if(_touchpadTopInset==value) return;
+    _touchpadTopInset=value;
+    [self setNeedsLayout];
+    [self setNeedsDisplay];
+}
 - (void)setLandscapeEdgeControls:(BOOL)value {
     if(_landscapeEdgeControls==value) return;
     _landscapeEdgeControls=value;
@@ -224,6 +251,13 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer*)gesture shouldReceiveTouch:(UITouch*)touch {
     panelSwipeOrigin=[touch locationInView:self.superview];
+    if(self.touchpadMode) {
+        // パッド面とクリックボタンの上で始まった操作はマウス操作とし、切替フリックにしない
+        CGPoint location=[touch locationInView:self];
+        if(CGRectContainsPoint(touchpadFrame,location)) return NO;
+        for(UIButton* button in self.touchpadButtons) if(CGRectContainsPoint(button.frame,location)) return NO;
+        return YES;
+    }
     if(!self.controllerMode) return YES;
     CGPoint point=[touch locationInView:self];
     return !CGRectContainsPoint(stickFrame,point) && ![self actionButtonsAt:point] &&
@@ -235,11 +269,13 @@ static std::vector<HardwareKey> hardwareKeys() {
     CGPoint point=[swipe locationInView:self.superview];
     CGPoint movement=CGPointMake(point.x-panelSwipeOrigin.x,point.y-panelSwipeOrigin.y);
     if(CGPointEqualToPoint(movement,CGPointZero)) movement=[swipe velocityInView:self.superview];
+    // キーボードは右（次）のみ、タッチパッドは左（前）のみ、ゲームパッドは左右どちらも受け付ける
+    panelSwipeDirection=self.touchpadMode ? -1 : self.controllerMode ? (movement.x<0 ? -1 : 1) : 1;
     return !self.outlinesOnly && !self.switchingInputMode && std::abs(movement.x)>=std::abs(movement.y)*1.4 &&
-           (self.controllerMode ? movement.x>=0 : movement.x<=0);
+           movement.x*panelSwipeDirection>=0;
 }
 - (void)swipeInputPanel:(UIPanGestureRecognizer*)gesture {
-    CGFloat direction=self.controllerMode ? 1 : -1;
+    CGFloat direction=panelSwipeDirection;
     CGFloat distance=MIN(64,self.bounds.size.width*.18);
     CGFloat drag=MAX(0,([gesture locationInView:self.superview].x-panelSwipeOrigin.x)*direction);
     BOOL reduceMotion=UIAccessibilityIsReduceMotionEnabled();
@@ -271,8 +307,7 @@ static std::vector<HardwareKey> hardwareKeys() {
             return;
         }
         [self releaseAll];
-        self.controllerMode=!self.controllerMode;
-        if(self.controllerMode && !self.controllerKeys) [self buildController];
+        [self stepInputMode:direction>0 ? 1 : -1];
         [self setNeedsLayout];
         [self layoutIfNeeded];
         [self setNeedsDisplay];
@@ -335,6 +370,68 @@ static std::vector<HardwareKey> hardwareKeys() {
     [self.controllerSettings addTarget:self action:@selector(openControllerSettings) forControlEvents:UIControlEventMenuActionTriggered];
     [self addSubview:self.controllerSettings];
     [self updateControllerMenu];
+}
+- (void)buildTouchpad {
+    // パッド面はパネル自身が描画・タッチ処理し、クリックボタンだけ実ボタンにする（ポーズボタンと同じ扱い）
+    NSArray<NSString*>* titles=@[@"左クリック",@"右クリック"];
+    NSMutableArray<UIButton*>* buttons=[NSMutableArray new];
+    for(NSUInteger i=0;i<titles.count;++i) {
+        UIButton* button=[UIButton buttonWithType:UIButtonTypeSystem];
+        button.tag=(NSInteger)i+1;   // マウスボタン番号（1=左、2=右）
+        [button setTitle:titles[i] forState:UIControlStateNormal];
+        [button setTitleColor:PC98Plastic(.20) forState:UIControlStateNormal];
+        button.titleLabel.font=[UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+        button.backgroundColor=PC98Plastic(.96);
+        button.layer.cornerRadius=6;
+        button.layer.borderWidth=1;
+        button.layer.borderColor=PC98Plastic(.55).CGColor;
+        [button addTarget:self action:@selector(tapTouchpadButton:) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:button];
+        [buttons addObject:button];
+    }
+    self.touchpadButtons=buttons;
+}
+- (void)tapTouchpadButton:(UIButton*)sender {
+    if(self.mouseClicked) self.mouseClicked((int)sender.tag);
+}
+- (CGFloat)touchpadHeaderBottom {
+    // 上端の帯（パッド面の外）は切替フリックとモード表示に使う
+    return self.touchpadTopInset+MAX(1,MIN(28,self.bounds.size.height*.12));
+}
+- (void)layoutTouchpad {
+    CGFloat width=self.bounds.size.width, height=self.bounds.size.height, margin=8;
+    CGFloat top=[self touchpadHeaderBottom];
+    CGFloat buttonHeight=MAX(1,MIN(52,height*.2));
+    CGFloat buttonY=height-margin-buttonHeight;
+    touchpadFrame=CGRectMake(margin,top,MAX(1,width-margin*2),MAX(1,buttonY-margin-top));
+    CGFloat buttonWidth=MAX(1,(width-margin*3)/2);
+    self.touchpadButtons[0].frame=CGRectMake(margin,buttonY,buttonWidth,buttonHeight);
+    self.touchpadButtons[1].frame=CGRectMake(margin*2+buttonWidth,buttonY,buttonWidth,buttonHeight);
+}
+- (void)drawTouchpad {
+    PC98Gradient(CGRectInset(self.bounds,1,1),PC98Plastic(.91),PC98Plastic(.69),10);
+    PC98Gradient(touchpadFrame,PC98Plastic(.42),PC98Plastic(.58),8);
+    NSMutableParagraphStyle* centered=[NSMutableParagraphStyle new];
+    centered.alignment=NSTextAlignmentCenter;
+    CGFloat headerTop=self.touchpadTopInset, headerHeight=[self touchpadHeaderBottom]-headerTop;
+    NSDictionary* header=@{NSFontAttributeName:[UIFont systemFontOfSize:MAX(6,MIN(11,headerHeight*.45)) weight:UIFontWeightMedium],
+        NSForegroundColorAttributeName:PC98Plastic(.30),NSParagraphStyleAttributeName:centered};
+    [@"タッチパッド　◀ 左フリックでゲームパッド" drawInRect:CGRectMake(0,headerTop+headerHeight*.25,self.bounds.size.width,headerHeight*.75) withAttributes:header];
+    NSDictionary* hint=@{NSFontAttributeName:[UIFont systemFontOfSize:11],
+        NSForegroundColorAttributeName:[UIColor colorWithWhite:1 alpha:.45],NSParagraphStyleAttributeName:centered};
+    [@"ドラッグでカーソル移動・タップで左クリック" drawInRect:CGRectMake(touchpadFrame.origin.x,CGRectGetMidY(touchpadFrame)-7,touchpadFrame.size.width,16) withAttributes:hint];
+}
+- (void)moveTouchpadTouch:(UITouch*)touch {
+    CGPoint point=[touch locationInView:self];
+    if(!touchpadTouchTravelled) {
+        // タップ判定中の小さなぶれではカーソルを動かさない。超えたら開始点からの移動量をまとめて送る
+        if(std::hypot(point.x-touchpadTouchStart.x,point.y-touchpadTouchStart.y)<8) return;
+        touchpadTouchTravelled=YES;
+        touchpadTouchLast=touchpadTouchStart;
+    }
+    CGPoint delta=CGPointMake(point.x-touchpadTouchLast.x,point.y-touchpadTouchLast.y);
+    touchpadTouchLast=point;
+    if(self.mouseMoved) self.mouseMoved(delta);
 }
 - (void)openControllerSettings {
     if(self.controllerSettingsOpening) self.controllerSettingsOpening();
@@ -509,6 +606,7 @@ static std::vector<HardwareKey> hardwareKeys() {
         [[UIBezierPath bezierPathWithRoundedRect:actionChordFrame cornerRadius:5] fill];
         return;
     }
+    if(self.touchpadMode) { [self drawTouchpad]; return; }
     if(self.hardwareLayout) { [self drawHardwareCase]; return; }
     CGRect shell=CGRectInset(self.bounds,.5,.5);
     PC98Gradient(shell,PC98Plastic(.91),PC98Plastic(.69),10);
@@ -536,7 +634,7 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGRect caseFrame=self.controllerMode || !self.hardwareLayout ? CGRectInset(self.bounds,1,1) : [self hardwareFrame];
+    CGRect caseFrame=self.controllerMode || self.touchpadMode || !self.hardwareLayout ? CGRectInset(self.bounds,1,1) : [self hardwareFrame];
     self.layer.shadowPath=[UIBezierPath bezierPathWithRoundedRect:caseFrame cornerRadius:10].CGPath;
     self.controllerSettings.hidden=!self.controllerMode || self.outlinesOnly;
     self.controllerPause.hidden=!self.controllerMode;
@@ -544,6 +642,16 @@ static std::vector<HardwareKey> hardwareKeys() {
     for(PC98KeyButton* key in self.controllerKeys) {
         key.hidden=!self.controllerMode;
         key.isAccessibilityElement=self.controllerMode;
+    }
+    for(UIButton* button in self.touchpadButtons) button.hidden=!self.touchpadMode;
+    if(self.touchpadMode) {
+        for(NSArray* row in self.keys) for(UIButton* key in row) {
+            key.hidden=YES;
+            key.isAccessibilityElement=NO;
+        }
+        [self layoutTouchpad];
+        [self setNeedsDisplay];
+        return;
     }
     if(self.controllerMode) {
         for(NSArray* row in self.keys) for(UIButton* key in row) {
@@ -683,6 +791,16 @@ static std::vector<HardwareKey> hardwareKeys() {
     NSMutableArray* pressed=[NSMutableArray new];
     for(UITouch* t in set) {
         CGPoint point=[t locationInView:self];
+        if(self.touchpadMode) {
+            // パッド面の1本目のタッチだけを扱う（上端の帯などパッド外は何もしない）
+            if(!touchpadTouch && CGRectContainsPoint(touchpadFrame,point)) {
+                touchpadTouch=t;
+                touchpadTouchStart=touchpadTouchLast=point;
+                touchpadTouchTime=t.timestamp;
+                touchpadTouchTravelled=NO;
+            }
+            continue;
+        }
         if(self.controllerMode) {
             if(CGRectContainsPoint(stickFrame,point)) {
                 if(!stickTouch) { stickTouch=t; [self moveStickTo:point]; }
@@ -702,6 +820,7 @@ static std::vector<HardwareKey> hardwareKeys() {
 - (void)touchesMoved:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
     NSMutableArray* pressed=[NSMutableArray new];
     for(UITouch* t in set) {
+        if(t==touchpadTouch) { [self moveTouchpadTouch:t]; continue; }
         if(t==stickTouch) { [self moveStickTo:[t locationInView:self]]; continue; }
         auto action=actionTouches.find(t);
         if(action!=actionTouches.end()) {
@@ -723,6 +842,14 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (void)endTouches:(NSSet<UITouch*>*)set cancelled:(BOOL)cancelled {
     for(UITouch* t in set) {
+        if(t==touchpadTouch) {
+            // 動かさずに短く離したらタップ＝左クリック
+            if(!cancelled && !touchpadTouchTravelled && t.timestamp-touchpadTouchTime<.35 && self.mouseClicked)
+                self.mouseClicked(1);
+            touchpadTouch=nil;
+            touchpadTouchTravelled=NO;
+            continue;
+        }
         if(t==stickTouch) {
             [self moveStickTo:CGPointMake(CGRectGetMidX(stickFrame),CGRectGetMidY(stickFrame))];
             stickTouch=nil;
@@ -791,6 +918,36 @@ static std::vector<HardwareKey> hardwareKeys() {
     passed=passed && isDown(space);
     [controller updateKey:b down:NO];
     return passed && !isDown(space);
+}
+- (BOOL)touchpadForTesting:(BOOL (^)(int button))isDown {
+    PC98Keyboard* probe=[[PC98Keyboard alloc] initWithFrame:self.bounds];
+    probe.mouseClicked=self.mouseClicked;
+    // 右＝次、左＝前の一方向チェーン：キーボード→ゲームパッド→タッチパッド（端では止まる）→…→キーボード
+    const NSInteger steps[]={1,1,1,-1,-1,-1}, expected[]={1,2,2,1,0,0};
+    BOOL passed=[probe inputModeIndex]==0;
+    for(size_t i=0;i<std::size(steps);++i) {
+        [probe stepInputMode:steps[i]];
+        passed=passed && [probe inputModeIndex]==expected[i];
+    }
+    [probe stepInputMode:1]; [probe stepInputMode:1];
+    [probe setNeedsLayout]; [probe layoutIfNeeded];
+    UIButton* left=probe.touchpadButtons.firstObject;
+    UIButton* right=probe.touchpadButtons.lastObject;
+    CGRect pad=probe->touchpadFrame;
+    passed=passed && probe.touchpadMode && !probe.controllerMode && probe.touchpadButtons.count==2 &&
+        !left.hidden && !right.hidden && CGRectContainsRect(probe.bounds,pad) &&
+        CGRectContainsRect(probe.bounds,left.frame) && CGRectContainsRect(probe.bounds,right.frame) &&
+        CGRectGetMinY(left.frame)>=CGRectGetMaxY(pad) && CGRectGetMaxX(left.frame)<=CGRectGetMinX(right.frame) &&
+        CGRectGetMinY(pad)>0 && probe.keys[2][1].hidden;
+    [left sendActionsForControlEvents:UIControlEventTouchUpInside];
+    passed=passed && isDown(1);
+    [right sendActionsForControlEvents:UIControlEventTouchUpInside];
+    passed=passed && isDown(2);
+    // 全画面（枠表示）中はコントローラーに切り替わり、戻るとタッチパッドに復帰する
+    probe.outlinesOnly=YES; [probe layoutIfNeeded];
+    passed=passed && !probe.touchpadMode && probe.controllerMode && left.hidden && right.hidden;
+    probe.outlinesOnly=NO; [probe layoutIfNeeded];
+    return passed && probe.touchpadMode && !probe.controllerMode && !left.hidden;
 }
 - (BOOL)pressScansForTesting:(NSArray<NSNumber*>*)scans {
     NSMutableArray* buttons=[NSMutableArray new];
@@ -862,6 +1019,8 @@ static std::vector<HardwareKey> hardwareKeys() {
     std::set<int> down=latched; for(auto pair:counts) if(pair.second) down.insert(pair.first);
     for(int scan:down) if(self.keyChanged) self.keyChanged(scan,NO);
     stickTouch=nil;
+    touchpadTouch=nil;
+    touchpadTouchTravelled=NO;
     stickDirections=0;
     self.stickKnob.center=CGPointMake(CGRectGetMidX(stickFrame),CGRectGetMidY(stickFrame));
     actionTouches.clear();

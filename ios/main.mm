@@ -811,6 +811,12 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         [s updateScan:scan];
     };
     self.keyboard.pauseChanged=^{ [weak togglePause]; };
+    // タッチパッドモード：既存のモニタ操作と同じマウス注入経路を使う
+    self.keyboard.mouseMoved=^(CGPoint delta) { [weak moveMouseBy:delta]; };
+    self.keyboard.mouseClicked=^(int button) {
+        PlayerController* s=weak; if(!s) return;
+        if(button==2) [s rightClick]; else [s leftClick:nil];
+    };
     self.keyboard.controllerSettingsOpening=^{
         PlayerController* controller=weak;
         if(controller && !controller->paused) [controller togglePause];
@@ -1027,6 +1033,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     CGFloat keyboardSlack=(self.keyboard.bounds.size.height-MIN(self.keyboard.bounds.size.height-8,(self.keyboard.bounds.size.width-4)*.44))/2;
     BOOL separateControls=duo && !verticalDivision && keyboardSlack>=54;
     self.topPanel.separateControls=separateControls;
+    // ツールバーと状態表示がパネル上端に重なる配置では、タッチパッド面をその下から始める
+    self.keyboard.touchpadTopInset=separateControls ? 54 : 0;
     BOOL phonePortrait=self.traitCollection.userInterfaceIdiom==UIUserInterfaceIdiomPhone &&
         self.view.bounds.size.width<self.view.bounds.size.height;
     self.topPanel.framelessDisplay=phonePortrait && !verticalDivision && usesPortraitEdgeToEdge();
@@ -1266,6 +1274,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 - (void)pressesCancelled:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event { [self releaseKeys]; }
 - (void)moveMouse:(UIPanGestureRecognizer*)pan {
     CGPoint delta=[pan translationInView:self.monitor]; [pan setTranslation:CGPointZero inView:self.monitor];
+    [self moveMouseBy:delta];
+}
+// モニタ上のパンとタッチパッド面で共有する相対移動。感度はモニタの表示倍率（画面上の指の移動量＝カーソルの移動量）
+- (void)moveMouseBy:(CGPoint)delta {
     CGFloat scale=MIN(self.monitor.bounds.size.width/640,self.monitor.bounds.size.height/(player?player->fb_h:400));
     if(player && !paused && scale>0) machine_mouse(player->m,(int)(delta.x/scale),(int)(delta.y/scale),mouseButtons);
 }
@@ -1317,8 +1329,9 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     if(fullScreen) {
         BOOL showController=self.keyboard.hidden;
         NSString* controllerTitle=showController?@"コントローラーを表示":@"コントローラーを非表示";
-        [menu addAction:[UIAlertAction actionWithTitle:@"一時停止" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
-            [weak pauseFromFullscreenMenu];
+        [menu addAction:[UIAlertAction actionWithTitle:paused?@"再生":@"一時停止" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
+            PlayerController* s=weak; if(!s) return;
+            if(s->paused) [s togglePause]; else [s pauseFromFullscreenMenu];
         }]];
         [menu addAction:[UIAlertAction actionWithTitle:@"リセット" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
             PlayerController* s=weak;if(!s) return;
@@ -2338,6 +2351,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     }
     result[@"monitorTwoFingerGesture"]=@(self.monitor.multipleTouchEnabled && hasTwoFingerTap && hasSingleFingerDoubleTap);
     [self rightClick];result[@"monitorRightClick"]=@(player->m->mouse.buttons==2);[self releaseKeys];
+    result[@"touchpadMode"]=@([self.keyboard touchpadForTesting:^BOOL(int button) {
+        return player->m->mouse.buttons==button;
+    }]);
+    [self releaseKeys];
     UILongPressGestureRecognizer* hold=nil;
     for(UIGestureRecognizer* gesture in self.view.gestureRecognizers)
         if([gesture isKindOfClass:UILongPressGestureRecognizer.class]) hold=(UILongPressGestureRecognizer*)gesture;
