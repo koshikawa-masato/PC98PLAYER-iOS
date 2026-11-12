@@ -400,8 +400,10 @@ found:
 bool Player::init(const PlayerSettings& s, std::string* err) {
     ps = s;
     fontrom_set_jis78(ps.jis78);
-    floppy::set_drive_letter(ps.cfg.floppy_drive);   // DOS のドライブ表を作る前に決めておく
-    floppy::set_drive_letter_unit(1, ps.cfg.boot_fd ? 0 : ps.cfg.floppy_drive2);
+    // ブートモード（Boot=FD）では実機どおり FDD1=A: / FDD2=B: とする（ゲストの DOS が起動ドライブを A: に割り当て、
+    // ドライブ表 0060:006C でフロッピーを探すゲームもあるため）。通常モードは DOS のドライブ表に合わせる
+    floppy::set_drive_letter(ps.cfg.boot_fd ? 'A' : ps.cfg.floppy_drive);   // DOS のドライブ表を作る前に決めておく
+    floppy::set_drive_letter_unit(1, ps.cfg.boot_fd ? 'B' : ps.cfg.floppy_drive2);
     m = machine_create(ps.cfg);
     m->ask_pc9821_user = this;
     m->ask_pc9821 = [](void* u) -> bool {
