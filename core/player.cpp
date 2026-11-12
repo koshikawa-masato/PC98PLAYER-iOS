@@ -236,11 +236,12 @@ bool player_settings_from_ini(const Ini& ini, const std::string& root, PlayerSet
         // ゲームのドライブと重なったらずらす（Drive=B, FloppyDrive=A のようにフロッピーを A: にもできる）
         if (c == ps->cfg.drive) c = (char)(c == 'Z' ? 'A' : c + 1);
         ps->cfg.floppy_drive = c;
-        // 2 台目のフロッピーのドライブ名（FloppyDisk2= を書いたときに使う）。空なら 1 台目の次の空いている名前
+        // 2 台目のフロッピーのドライブ名。指定が無ければ 1 台目の次の空いている名前を常に割り当てる
+        //（FloppyDisk2= の有無によらない。名前が無いと FDD 画面で「FDD 2」としか出ず紛らわしいため）
         std::string f2 = G("FLOPPYDRIVE2", "");
         char c2 = f2.empty() ? 0 : (char)toupper((unsigned char)f2[0]);
         if (c2 < 'A' || c2 > 'Z' || c2 == ps->cfg.drive || c2 == c) c2 = 0;
-        if (!c2 && !ps->cfg.floppy_image2.empty()) {
+        if (!c2) {
             for (char k = (char)(c + 1); k != c; k = (char)(k == 'Z' ? 'A' : k + 1))
                 if (k != ps->cfg.drive) { c2 = k; break; }
         }
