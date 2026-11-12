@@ -1299,10 +1299,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
                 (self.displayedSourceFrame && self.monitor.image));
     if([gesture isKindOfClass:UITapGestureRecognizer.class]) {
         UITapGestureRecognizer* tapGesture=(UITapGestureRecognizer*)gesture;
-        // 全画面でコントローラー枠を表示中は、操作子周辺（20pt）のダブルタップを全画面解除と判定しない
+        // 全画面でコントローラー枠を表示中は、操作子周辺（A/Bボタンは50pt、その他は20pt）のダブルタップを全画面解除と判定しない
         if(tapGesture.numberOfTapsRequired==2 && tapGesture.numberOfTouchesRequired==1 &&
            fullScreen && self.keyboard.outlinesOnly && !self.keyboard.hidden &&
-           [self.keyboard isNearControllerControls:[gesture locationInView:self.keyboard] margin:20])
+           [self.keyboard isNearControllerControls:[gesture locationInView:self.keyboard] margin:20 actionMargin:50])
             return NO;
     }
     return YES;

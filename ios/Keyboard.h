@@ -17,7 +17,9 @@
 - (void)releaseAll;
 - (void)repeatHeldKeys;
 // コントローラーの操作子（十字キー・アクションボタン・ポーズボタン）の周囲 margin ポイント以内かどうか（自ビューの座標系）
+// actionMargin はアクションボタン（と同時押し判定エリア）専用の広めのマージン
 - (BOOL)isNearControllerControls:(CGPoint)point margin:(CGFloat)margin;
+- (BOOL)isNearControllerControls:(CGPoint)point margin:(CGFloat)margin actionMargin:(CGFloat)actionMargin;
 #ifdef PC98PLAYER_TESTING
 - (BOOL)controllerChordForTesting:(BOOL (^)(int scan))isDown;
 - (BOOL)controlMarginForTesting;

@@ -508,12 +508,16 @@ static std::vector<HardwareKey> hardwareKeys() {
     return 0;
 }
 // 操作子の輪郭だけでなく周囲 margin ポイントまでを「操作子の近傍」とみなす（全画面時の誤ダブルタップ防止用）
+// アクションボタンは連打で外しやすいため、専用の actionMargin（広め）を適用する
 - (BOOL)isNearControllerControls:(CGPoint)point margin:(CGFloat)margin {
+    return [self isNearControllerControls:point margin:margin actionMargin:margin];
+}
+- (BOOL)isNearControllerControls:(CGPoint)point margin:(CGFloat)margin actionMargin:(CGFloat)actionMargin {
     if(!self.controllerMode) return NO;
     if(CGRectContainsPoint(CGRectInset(stickFrame,-margin,-margin),point)) return YES;
-    if(CGRectContainsPoint(CGRectInset(actionChordFrame,-margin,-margin),point)) return YES;
+    if(CGRectContainsPoint(CGRectInset(actionChordFrame,-actionMargin,-actionMargin),point)) return YES;
     for(int i=4;i<6;++i)
-        if(CGRectContainsPoint(CGRectInset(self.controllerKeys[i].frame,-margin,-margin),point)) return YES;
+        if(CGRectContainsPoint(CGRectInset(self.controllerKeys[i].frame,-actionMargin,-actionMargin),point)) return YES;
     return !self.controllerPause.hidden &&
         CGRectContainsPoint(CGRectInset(self.controllerPause.frame,-margin,-margin),point);
 }
@@ -938,6 +942,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     CGRect b=probe.controllerKeys[5].frame, stick=probe->stickFrame;
     CGPoint buttonCenter=CGPointMake(CGRectGetMidX(b),CGRectGetMidY(b));
     CGPoint buttonNear=CGPointMake(CGRectGetMaxX(b)+margin/2,CGRectGetMidY(b));
+    CGPoint buttonWide=CGPointMake(CGRectGetMaxX(b)+30,CGRectGetMidY(b));
     CGPoint stickNear=CGPointMake(CGRectGetMinX(stick)-margin/2,CGRectGetMidY(stick));
     CGPoint bottomFar=CGPointMake(CGRectGetMidX(probe.bounds),CGRectGetMaxY(probe.bounds)-2);
     CGPoint cornerFar=CGPointMake(2,2);
@@ -945,6 +950,8 @@ static std::vector<HardwareKey> hardwareKeys() {
         [probe isNearControllerControls:buttonNear margin:margin] &&
         [probe isNearControllerControls:stickNear margin:margin] &&
         ![probe isNearControllerControls:buttonNear margin:0] &&
+        [probe isNearControllerControls:buttonWide margin:margin actionMargin:50] &&
+        ![probe isNearControllerControls:buttonWide margin:margin] &&
         ![probe isNearControllerControls:bottomFar margin:margin] &&
         ![probe isNearControllerControls:cornerFar margin:margin];
 }
