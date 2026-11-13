@@ -36,9 +36,15 @@ int video_render(Machine* m, uint32_t* out) {
     // グラフィック
     bool gon = m->gdcs.display != 0;
     const uint8_t (*pl)[0x8000] = m->gvram[m->disp_bank];
-    uint32_t sad1 = (uint32_t)(m->gdcs.pram[0] | (m->gdcs.pram[1] << 8) | ((m->gdcs.pram[2] & 3) << 16));
-    uint32_t len1 = (uint32_t)((m->gdcs.pram[2] >> 4) | ((m->gdcs.pram[3] & 0x3F) << 4));
-    uint32_t sad2 = (uint32_t)(m->gdcs.pram[4] | (m->gdcs.pram[5] << 8) | ((m->gdcs.pram[6] & 3) << 16));
+    // GDC の表示領域（最大 4 つ）。各領域の開始アドレスと長さを読む
+    auto area_sad = [&](int a) {
+        const uint8_t* pr = m->gdcs.pram + a * 4;
+        return (uint32_t)(pr[0] | (pr[1] << 8) | ((pr[2] & 3) << 16));
+    };
+    auto area_len = [&](int a) {
+        const uint8_t* pr = m->gdcs.pram + a * 4;
+        return (uint32_t)((pr[2] >> 4) | ((pr[3] & 0x3F) << 4));
+    };
     int zoom = ((m->gdcs.zoom >> 4) & 15) + 1;   // ZOOM の上位 4bit が表示の倍率（下位は描画用）
     // 1 本の VRAM の行を何本の走査線で見せるか: GDC の CSRFORM の「1 行の走査線数」（200 ライン表示は 2）、
     // と ZOOM のうち大きいもの（BIOS・LIO の 200 ライン表示も CSRFORM で作る）
@@ -50,13 +56,15 @@ int video_render(Machine* m, uint32_t* out) {
     // GDC が 5MHz のときは PITCH がバイト単位（8 ドット）、2.5MHz のときはワード単位（16 ドット）
     uint32_t stride = m->gdc_clk5 ? (uint32_t)(m->gdcs.pitch >= 80 ? m->gdcs.pitch : 80)
                                   : (uint32_t)(m->gdcs.pitch >= 40 ? m->gdcs.pitch : 40) * 2;
-    // LEN は走査線の本数（400 ライン基準）
-    if (len1 == 0 || len1 > 400) len1 = 400;
-    for (int y = 0; y < 400; y++) {
+    // LEN は走査線の本数（400 ライン基準）。GDC の表示領域は最大 4 つを順に表示する。
+    // LEN=0 の領域は「画面の下端まで」という従来の扱い（その領域で描画を終える）。
+    // 3 領域を使う場面（例: ファーランドストーリーの戦闘カットイン = 上部固定／
+    // 中央は開始アドレスで横スクロール／下部ウィンドウ固定）では、2 領域目以降を
+    // 一つの開始アドレスから流し読みすると、下部が中央のスクロールに引きずられる（#31）。
+    int y = 0;
+    auto render_line = [&](uint32_t addr) {
         uint32_t* o = out + y * 640;
-        if (!gon) { for (int x = 0; x < 640; x++) o[x] = 0xFF000000u; continue; }
-        uint32_t addr = (uint32_t)y < len1 ? (sad1 * 2 + (uint32_t)(y / rep) * stride)
-                                            : (sad2 * 2 + (uint32_t)((y - (int)len1) / rep) * stride);
+        if (!gon) { for (int x = 0; x < 640; x++) o[x] = 0xFF000000u; return; }
         for (int bx = 0; bx < 80; bx++) {
             uint32_t a = (addr + bx) & 0x7FFF;
             uint8_t b = pl[0][a], r = pl[1][a], g = pl[2][a], e = m->analog ? pl[3][a] : 0;
@@ -66,7 +74,19 @@ int video_render(Machine* m, uint32_t* out) {
                 o[bx * 8 + k] = pal[ci];
             }
         }
+    };
+    for (int a = 0; a < 4 && y < 400; a++) {
+        uint32_t len = area_len(a);
+        bool last = (len == 0);            // LEN=0 は下端まで
+        if (last) len = 400;
+        if (len > 400) len = 400;
+        uint32_t sad = area_sad(a);
+        for (uint32_t l = 0; l < len && y < 400; l++, y++)
+            render_line(sad * 2 + (l / (uint32_t)rep) * stride);
+        if (last) break;
     }
+    for (; y < 400; y++)
+        for (int x = 0; x < 640; x++) out[y * 640 + x] = 0xFF000000u;
 
     }
 text:
