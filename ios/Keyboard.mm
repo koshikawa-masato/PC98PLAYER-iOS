@@ -173,6 +173,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     BOOL touchpadTapCancelled;       // 2本目以降の指が触れた（＝マルチタッチ操作の始まり）のでタップにしない
 }
 @property(strong) NSArray<NSArray<UIButton*>*>* keys;
+@property(strong) UIView* swipeStrip;   // 切替スワイプ中のカルーセル帯（現在と隣モードの絵を横に並べたもの）
 @property(strong) UIImpactFeedbackGenerator* keyFeedback;
 @property(strong) NSArray<PC98KeyButton*>* controllerKeys;
 @property(copy) NSString* controllerBindingsKey;
@@ -283,21 +284,71 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (void)applySwipeSlide:(CGAffineTransform)slide {
     self.transform=slide;
-    // ゲーム画面もパネルと同じ量だけスライドさせ、画面全体で切り替わる見た目にする
-    self.swipeCompanionView.transform=slide;
+}
+// パネルの現在の見た目（drawRect の描画を含む）をそのまま撮る
+- (UIImage*)swipeSnapshot {
+    UIGraphicsImageRenderer* renderer=[[UIGraphicsImageRenderer alloc] initWithBounds:self.bounds];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext* context) {
+        [self drawViewHierarchyInRect:self.bounds afterScreenUpdates:YES];
+    }];
+}
+// 現在と隣モードの絵を横に並べた「帯」をパネルに被せる。上半分（ゲーム画面）は
+// 一切動かず、下半分の中だけが横にずれて切り替わる（＝ダルマ落とし式）ための土台。
+// 右スワイプ（次）では帯は [隣|現在] で左に張り出し、左スワイプ（前）では [現在|隣]。
+- (BOOL)beginSwipeStripForStep:(NSInteger)step {
+    NSInteger target=[self inputModeIndex]+step;
+    if(self.swipeStrip || target<0 || target>2 || self.outlinesOnly) return NO;
+    CGFloat w=self.bounds.size.width, h=self.bounds.size.height;
+    if(w<10 || h<10) return NO;
+    // 前回のスナップバック等のアニメーションが残っていると絵がずれるので、静止状態にしてから撮る
+    [self.layer removeAllAnimations];
+    self.transform=CGAffineTransformIdentity;
+    UIImage* current=[self swipeSnapshot];
+    [self stepInputMode:step];
+    [self setNeedsLayout]; [self layoutIfNeeded]; [self setNeedsDisplay];
+    UIImage* neighbor=[self swipeSnapshot];
+    [self stepInputMode:-step];
+    [self setNeedsLayout]; [self layoutIfNeeded]; [self setNeedsDisplay];
+    UIView* strip=[[UIView alloc] initWithFrame:CGRectMake(step>0 ? -w : 0,0,w*2,h)];
+    strip.userInteractionEnabled=NO;
+    UIImageView* first=[[UIImageView alloc] initWithImage:step>0 ? neighbor : current];
+    UIImageView* second=[[UIImageView alloc] initWithImage:step>0 ? current : neighbor];
+    first.frame=CGRectMake(0,0,w,h); second.frame=CGRectMake(w,0,w,h);
+    [strip addSubview:first]; [strip addSubview:second];
+    self.clipsToBounds=YES;   // 帯のはみ出しはパネルの内側だけに切り取る
+    [self addSubview:strip];
+    self.swipeStrip=strip;
+    return YES;
+}
+- (void)removeSwipeStrip {
+    [self.swipeStrip removeFromSuperview];
+    self.swipeStrip=nil;
+    self.clipsToBounds=NO;
 }
 - (void)swipeInputPanel:(UIPanGestureRecognizer*)gesture {
     // スワイプが始まったら保留中の指は入力にしない。認識に失敗したら通常入力として確定する
     if(gesture.state==UIGestureRecognizerStateBegan) [self discardPendingTouches];
-    if(gesture.state==UIGestureRecognizerStateFailed) [self commitPendingTouches];
+    if(gesture.state==UIGestureRecognizerStateFailed) {
+        [self commitPendingTouches];
+        if(self.swipeStrip) [self removeSwipeStrip];
+    }
     CGFloat direction=panelSwipeDirection;
     CGFloat distance=MIN(64,self.bounds.size.width*.18);
     CGFloat drag=MAX(0,[gesture translationInView:self.superview].x*direction);
     BOOL reduceMotion=UIAccessibilityIsReduceMotionEnabled();
-    if(gesture.state==UIGestureRecognizerStateBegan) [self releaseAll];
+    if(gesture.state==UIGestureRecognizerStateBegan) {
+        [self releaseAll];
+        // 隣モードがある向きではカルーセル帯を用意し、ドラッグ中は帯だけを動かす
+        if(!reduceMotion) [self beginSwipeStripForStep:direction>0 ? 1 : -1];
+    }
     if(gesture.state==UIGestureRecognizerStateBegan || gesture.state==UIGestureRecognizerStateChanged) {
-        // スワイプが始まった瞬間からパネルが指に 1:1 で追従してスクロールする
-        if(!reduceMotion) [self applySwipeSlide:CGAffineTransformMakeTranslation(direction*MIN(drag,self.bounds.size.width*.45),0)];
+        if(self.swipeStrip) {
+            // 帯が指に 1:1 で追従し、隣モードの絵が横から入ってくる
+            self.swipeStrip.transform=CGAffineTransformMakeTranslation(direction*MIN(drag,self.bounds.size.width),0);
+        } else if(!reduceMotion) {
+            // 帯が無い（端のモード等）場合は従来どおりパネル自体が追従する
+            [self applySwipeSlide:CGAffineTransformMakeTranslation(direction*MIN(drag,self.bounds.size.width*.45),0)];
+        }
         return;
     }
 
@@ -305,13 +356,40 @@ static std::vector<HardwareKey> hardwareKeys() {
     BOOL change=gesture.state==UIGestureRecognizerStateEnded &&
                 (drag>=MIN(70,self.bounds.size.width*.22) || (drag>=20 && velocity>450));
     if(!change) {
-        [UIView animateWithDuration:reduceMotion ? 0 : .18 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-            [self applySwipeSlide:CGAffineTransformIdentity];
-        } completion:nil];
+        if(self.swipeStrip) {
+            UIView* strip=self.swipeStrip;
+            [UIView animateWithDuration:reduceMotion ? 0 : .18 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+                strip.transform=CGAffineTransformIdentity;
+            } completion:^(BOOL finished) {
+                if(self.swipeStrip==strip) [self removeSwipeStrip];
+            }];
+        } else {
+            [UIView animateWithDuration:reduceMotion ? 0 : .18 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
+                [self applySwipeSlide:CGAffineTransformIdentity];
+            } completion:nil];
+        }
         return;
     }
 
     self.switchingInputMode=YES;
+    if(self.swipeStrip) {
+        // 帯を1ページ分まで送り切り、実物のモードを切り替えてから帯を外す（絵は同一なので継ぎ目なし）
+        UIView* strip=self.swipeStrip;
+        CGFloat page=self.bounds.size.width;
+        NSTimeInterval slideTime=reduceMotion ? 0 : .12+.18*(1-MIN(drag,page)/page);
+        [UIView animateWithDuration:slideTime delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+            strip.transform=CGAffineTransformMakeTranslation(direction*page,0);
+        } completion:^(BOOL finished) {
+            [self releaseAll];
+            [self stepInputMode:direction>0 ? 1 : -1];
+            [self setNeedsLayout];
+            [self layoutIfNeeded];
+            [self setNeedsDisplay];
+            if(self.swipeStrip==strip) [self removeSwipeStrip];
+            self.switchingInputMode=NO;
+        }];
+        return;
+    }
     CGFloat exitOffset=MAX(distance,MIN(drag,self.bounds.size.width*.45));
     [UIView animateWithDuration:reduceMotion ? 0 : .10 animations:^{
         if(!reduceMotion) {

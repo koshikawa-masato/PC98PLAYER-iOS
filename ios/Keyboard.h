@@ -14,8 +14,6 @@
 @property(copy) void (^mouseClicked)(int button);
 // タッチパッドモードで上端から空けておく高さ（パネル上に重なるツールバー分）
 @property(nonatomic) CGFloat touchpadTopInset;
-// モード切替スワイプで、パネルと一緒にスライドさせる相手（ゲーム画面のキャビネット）
-@property(nonatomic, weak) UIView* swipeCompanionView;
 // コントローラーモードで上端から空けておく高さ（同上：ポーズ／キー設定ボタンの配置用）
 @property(nonatomic) CGFloat controllerTopInset;
 - (void)releaseAll;
