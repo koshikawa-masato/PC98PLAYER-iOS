@@ -15,9 +15,6 @@
    [OPTIONAL] #define TSF_POW, TSF_POWF, TSF_EXPF, TSF_LOG, TSF_TAN, TSF_LOG10, TSF_SQRT to avoid math.h
 
    NOT YET IMPLEMENTED
-     - Support for ChorusEffectsSend and ReverbEffectsSend generators
-       (the generators and their modulators are parsed and evaluated,
-        but there is no effects unit to send to yet)
      - Better low-pass filter without lowering performance too much
 
    LOCAL EXTENSIONS (RetroDOS Player, on top of upstream v0.9)
@@ -34,6 +31,10 @@
      - initialAttenuation follows the SF2 specification (1440 cB max =
        144 dB); upstream scaled it by 0.01 instead of 0.1, applying ten
        times too little attenuation in dB.
+     - A send/return effects unit: the ChorusEffectsSend and
+       ReverbEffectsSend generators and their modulators (including the
+       CC91/CC93 default modulators) feed a Freeverb-style reverb and a
+       stereo chorus, which are mixed back into the rendered output.
 
    LICENSE (MIT)
 
@@ -346,6 +347,23 @@ typedef char tsf_char20[20];
 
 #define TSF_FourCCEquals(value1, value2) (value1[0] == value2[0] && value1[1] == value2[1] && value1[2] == value2[2] && value1[3] == value2[3])
 
+struct tsf_fx_state
+{
+	float sampleRate;
+	float* combBuffers[16]; //8 stereo pairs of reverb comb filters
+	int combLengths[16];
+	int combIndices[16];
+	float combFilterStore[16];
+	float* allpassBuffers[8]; //4 stereo pairs of reverb allpass filters
+	int allpassLengths[8];
+	int allpassIndices[8];
+	float* chorusBuffers[2];
+	int chorusLength;
+	int chorusWriteIndex;
+	float chorusPhase;
+	TSF_BOOL initialized;
+};
+
 struct tsf
 {
 	struct tsf_preset* presets;
@@ -362,7 +380,71 @@ struct tsf
 	float outSampleRate;
 	float globalGainDB;
 	int* refCount;
+
+	// Effects send/return state (LOCAL EXTENSION). The send buffers hold
+	// interleaved stereo frames for one render call; fxActive marks them
+	// live, and fxTailSamples keeps the unit running after the last
+	// sending voice ends so reverb tails are not cut off.
+	float* fxReverbBuffer;
+	float* fxChorusBuffer;
+	int fxBufferCapacity;
+	int fxTailSamples;
+	struct tsf_fx_state fxState;
+	TSF_BOOL fxActive;
 };
+
+static void tsf_fx_free_state(struct tsf_fx_state* s)
+{
+	int i;
+	for (i = 0; i < 16; i++) { TSF_FREE(s->combBuffers[i]); s->combBuffers[i] = TSF_NULL; }
+	for (i = 0; i < 8; i++) { TSF_FREE(s->allpassBuffers[i]); s->allpassBuffers[i] = TSF_NULL; }
+	for (i = 0; i < 2; i++) { TSF_FREE(s->chorusBuffers[i]); s->chorusBuffers[i] = TSF_NULL; }
+	s->initialized = TSF_FALSE;
+}
+
+static TSF_BOOL tsf_fx_init_state(struct tsf_fx_state* s, float sampleRate)
+{
+	static const int combTunings[8] = { 1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617 };
+	static const int allpassTunings[4] = { 556, 441, 341, 225 };
+	float scale = sampleRate / 44100.0f;
+	int i;
+	tsf_fx_free_state(s);
+	for (i = 0; i < 8; i++)
+	{
+		s->combLengths[i * 2]     = (int)(combTunings[i] * scale);
+		s->combLengths[i * 2 + 1] = (int)((combTunings[i] + 23) * scale);
+		s->combBuffers[i * 2]     = (float*)TSF_MALLOC(sizeof(float) * s->combLengths[i * 2]);
+		s->combBuffers[i * 2 + 1] = (float*)TSF_MALLOC(sizeof(float) * s->combLengths[i * 2 + 1]);
+		if (!s->combBuffers[i * 2] || !s->combBuffers[i * 2 + 1]) { tsf_fx_free_state(s); return TSF_FALSE; }
+		TSF_MEMSET(s->combBuffers[i * 2], 0, sizeof(float) * s->combLengths[i * 2]);
+		TSF_MEMSET(s->combBuffers[i * 2 + 1], 0, sizeof(float) * s->combLengths[i * 2 + 1]);
+		s->combIndices[i * 2] = s->combIndices[i * 2 + 1] = 0;
+		s->combFilterStore[i * 2] = s->combFilterStore[i * 2 + 1] = 0.0f;
+	}
+	for (i = 0; i < 4; i++)
+	{
+		s->allpassLengths[i * 2]     = (int)(allpassTunings[i] * scale);
+		s->allpassLengths[i * 2 + 1] = (int)((allpassTunings[i] + 23) * scale);
+		s->allpassBuffers[i * 2]     = (float*)TSF_MALLOC(sizeof(float) * s->allpassLengths[i * 2]);
+		s->allpassBuffers[i * 2 + 1] = (float*)TSF_MALLOC(sizeof(float) * s->allpassLengths[i * 2 + 1]);
+		if (!s->allpassBuffers[i * 2] || !s->allpassBuffers[i * 2 + 1]) { tsf_fx_free_state(s); return TSF_FALSE; }
+		TSF_MEMSET(s->allpassBuffers[i * 2], 0, sizeof(float) * s->allpassLengths[i * 2]);
+		TSF_MEMSET(s->allpassBuffers[i * 2 + 1], 0, sizeof(float) * s->allpassLengths[i * 2 + 1]);
+		s->allpassIndices[i * 2] = s->allpassIndices[i * 2 + 1] = 0;
+	}
+	s->chorusLength = (int)(0.060f * sampleRate);
+	for (i = 0; i < 2; i++)
+	{
+		s->chorusBuffers[i] = (float*)TSF_MALLOC(sizeof(float) * s->chorusLength);
+		if (!s->chorusBuffers[i]) { tsf_fx_free_state(s); return TSF_FALSE; }
+		TSF_MEMSET(s->chorusBuffers[i], 0, sizeof(float) * s->chorusLength);
+	}
+	s->chorusWriteIndex = 0;
+	s->chorusPhase = 0.0f;
+	s->sampleRate = sampleRate;
+	s->initialized = TSF_TRUE;
+	return TSF_TRUE;
+}
 
 #ifndef TSF_NO_STDIO
 static int tsf_stream_stdio_read(FILE* f, void* ptr, unsigned int size) { return (int)fread(ptr, 1, size, f); }
@@ -457,6 +539,7 @@ struct tsf_region
 	unsigned int group, offset, end, loop_start, loop_end;
 	int transpose, tune, pitch_keycenter, pitch_keytrack;
 	float attenuation, pan;
+	float chorusEffectsSend, reverbEffectsSend; //0..1000 in 0.1% units
 	struct tsf_envelope ampenv, modenv;
 	int initialFilterQ, initialFilterFc;
 	int modEnvToPitch, modEnvToFilterFc, modLfoToFilterFc, modLfoToVolume;
@@ -490,6 +573,7 @@ struct tsf_voice
 	struct tsf_region regionStorage; //per-voice copy of the region, adjusted by modulators at note start
 	struct tsf_modulator liveMods[8]; //modulators with realtime sources driving LFO depths, re-evaluated per render
 	unsigned char liveModNum;
+	float reverbSend, chorusSend; //effects sends 0..1, set by tsf_voice_apply_modulators
 };
 
 struct tsf_channel
@@ -600,8 +684,8 @@ static void tsf_region_operator(struct tsf_region* region, tsf_u16 genOper, unio
 		{ GEN_UINT_ADD15                   , _TSFREGIONOFFSET(unsigned int, end                  ) }, //12 EndAddrsCoarseOffset
 		{ GEN_INT   | GEN_INT_LIMIT960     , _TSFREGIONOFFSET(         int, modLfoToVolume       ) }, //13 ModLfoToVolume
 		{ 0                                , (0                                                  ) }, //   Unused
-		{ 0                                , (0                                                  ) }, //15 ChorusEffectsSend (unsupported)
-		{ 0                                , (0                                                  ) }, //16 ReverbEffectsSend (unsupported)
+		{ GEN_FLOAT | GEN_FLOAT_MAX1000    , _TSFREGIONOFFSET(       float, chorusEffectsSend    ) }, //15 ChorusEffectsSend
+		{ GEN_FLOAT | GEN_FLOAT_MAX1000    , _TSFREGIONOFFSET(       float, reverbEffectsSend    ) }, //16 ReverbEffectsSend
 		{ GEN_FLOAT | GEN_FLOAT_LIMITPAN   , _TSFREGIONOFFSET(       float, pan                  ) }, //17 Pan
 		{ 0                                , (0                                                  ) }, //   Unused
 		{ 0                                , (0                                                  ) }, //   Unused
@@ -1526,6 +1610,8 @@ static float tsf_voice_apply_modulators(tsf* f, struct tsf_voice* voice, int key
 	float sums[60];
 	int i;
 	voice->liveModNum = 0;
+	voice->chorusSend = r->chorusEffectsSend * 0.001f;
+	voice->reverbSend = r->reverbEffectsSend * 0.001f;
 	if (!r->modulatorNum) return 0.0f;
 	in.key = key;
 	in.velocity = velocity;
@@ -1535,7 +1621,7 @@ static float tsf_voice_apply_modulators(tsf* f, struct tsf_voice* voice, int key
 	{
 		const struct tsf_modulator* mod = &r->modulators[i];
 		int dest = mod->destOper;
-		if (dest >= 60 || dest == 15 || dest == 16) continue; //effects sends have no unit to feed yet
+		if (dest >= 60) continue;
 		//The CC7/CC11 attenuation and CC10 pan defaults are realized live by
 		//the channel volume/pan paths, so do not snapshot them here as well.
 		if (mod->amtSrcOper == 0 && ((dest == 48 && (mod->srcOper == 0x0587 || mod->srcOper == 0x058B)) || (dest == 17 && mod->srcOper == 0x028A))) continue;
@@ -1608,6 +1694,11 @@ static float tsf_voice_apply_modulators(tsf* f, struct tsf_voice* voice, int key
 	//Tuning: coarse tune arrives in semitones, fine tune in cents
 	if (sums[51] || sums[52]) r->tune += (int)(sums[51] * 100.0f + sums[52]);
 
+	//Effects sends (0.1% units onto the 0..1 range); like the other
+	//static destinations they are evaluated once at note start.
+	if (sums[15]) { float s = r->chorusEffectsSend + sums[15]; voice->chorusSend = (s < 0.0f ? 0.0f : (s > 1000.0f ? 1.0f : s * 0.001f)); }
+	if (sums[16]) { float s = r->reverbEffectsSend + sums[16]; voice->reverbSend = (s < 0.0f ? 0.0f : (s > 1000.0f ? 1.0f : s * 0.001f)); }
+
 	return sums[48];
 }
 
@@ -1643,6 +1734,8 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 	float* input = f->fontSamples;
 	float* outL = outputBuffer;
 	float* outR = (f->outputmode == TSF_STEREO_UNWEAVED ? outL + numSamples : TSF_NULL);
+	float* sendReverb = (f->fxActive && v->reverbSend > 0.0f) ? f->fxReverbBuffer : TSF_NULL;
+	float* sendChorus = (f->fxActive && v->chorusSend > 0.0f) ? f->fxChorusBuffer : TSF_NULL;
 
 	// Effective LFO depth values: region values plus realtime modulator offsets.
 	int live5, live6, live10, live11, live13;
@@ -1729,6 +1822,8 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 
 					*outL++ += val * gainLeft;
 					*outL++ += val * gainRight;
+					if (sendReverb) { sendReverb[0] += val * gainLeft * v->reverbSend; sendReverb[1] += val * gainRight * v->reverbSend; sendReverb += 2; }
+					if (sendChorus) { sendChorus[0] += val * gainLeft * v->chorusSend; sendChorus[1] += val * gainRight * v->chorusSend; sendChorus += 2; }
 
 					// Next sample.
 					tmpSourceSamplePosition += pitchRatio;
@@ -1750,6 +1845,8 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 
 					*outL++ += val * gainLeft;
 					*outR++ += val * gainRight;
+					if (sendReverb) { sendReverb[0] += val * gainLeft * v->reverbSend; sendReverb[1] += val * gainRight * v->reverbSend; sendReverb += 2; }
+					if (sendChorus) { sendChorus[0] += val * gainLeft * v->chorusSend; sendChorus[1] += val * gainRight * v->chorusSend; sendChorus += 2; }
 
 					// Next sample.
 					tmpSourceSamplePosition += pitchRatio;
@@ -1769,6 +1866,8 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
 
 					*outL++ += val * gainMono;
+					if (sendReverb) { float sendVal = val * gainMono * v->reverbSend; sendReverb[0] += sendVal; sendReverb[1] += sendVal; sendReverb += 2; }
+					if (sendChorus) { float sendVal = val * gainMono * v->chorusSend; sendChorus[0] += sendVal; sendChorus[1] += sendVal; sendChorus += 2; }
 
 					// Next sample.
 					tmpSourceSamplePosition += pitchRatio;
@@ -1921,6 +2020,9 @@ TSFDEF void tsf_close(tsf* f)
 		TSF_FREE(f->fontSamples);
 		TSF_FREE(f->refCount);
 	}
+	TSF_FREE(f->fxReverbBuffer);
+	TSF_FREE(f->fxChorusBuffer);
+	tsf_fx_free_state(&f->fxState);
 	TSF_FREE(f->channels);
 	TSF_FREE(f->voices);
 	TSF_FREE(f);
@@ -2151,6 +2253,141 @@ TSFDEF int tsf_active_voice_count(tsf* f)
 	return count;
 }
 
+// Effects parameters (LOCAL EXTENSION). The reverb follows the Freeverb
+// design (Jezar Wakefield, public domain): parallel damped combs into
+// series allpasses. The chorus is a stereo modulated delay pair.
+#define TSF_FX_REVERB_FEEDBACK 0.86f
+#define TSF_FX_REVERB_DAMPING 0.2f
+#define TSF_FX_REVERB_INPUT_GAIN 0.35f
+#define TSF_FX_REVERB_WET_GAIN 0.6f
+#define TSF_FX_CHORUS_BASE_MS 17.0f
+#define TSF_FX_CHORUS_DEPTH_MS 5.0f
+#define TSF_FX_CHORUS_RATE_HZ 0.8f
+#define TSF_FX_CHORUS_WET_GAIN 1.0f
+
+static TSF_BOOL tsf_fx_prepare(tsf* f, int samples)
+{
+	if (!f->fxState.initialized || f->fxState.sampleRate != f->outSampleRate)
+		if (!tsf_fx_init_state(&f->fxState, f->outSampleRate)) return TSF_FALSE;
+	if (f->fxBufferCapacity < samples)
+	{
+		TSF_FREE(f->fxReverbBuffer);
+		TSF_FREE(f->fxChorusBuffer);
+		f->fxReverbBuffer = (float*)TSF_MALLOC(sizeof(float) * 2 * samples);
+		f->fxChorusBuffer = (float*)TSF_MALLOC(sizeof(float) * 2 * samples);
+		if (!f->fxReverbBuffer || !f->fxChorusBuffer)
+		{
+			TSF_FREE(f->fxReverbBuffer);
+			TSF_FREE(f->fxChorusBuffer);
+			f->fxReverbBuffer = f->fxChorusBuffer = TSF_NULL;
+			f->fxBufferCapacity = 0;
+			return TSF_FALSE;
+		}
+		f->fxBufferCapacity = samples;
+	}
+	return TSF_TRUE;
+}
+
+static float tsf_fx_triangle(float phase)
+{
+	return (phase < 0.5f ? -1.0f + 4.0f * phase : 3.0f - 4.0f * phase);
+}
+
+static float tsf_fx_delay_read(const float* buffer, int length, int writeIndex, float delay)
+{
+	float pos = (float)writeIndex - delay;
+	int posInt;
+	float frac;
+	while (pos < 0.0f) pos += (float)length;
+	posInt = (int)pos;
+	frac = pos - (float)posInt;
+	return buffer[posInt] * (1.0f - frac) + buffer[posInt + 1 < length ? posInt + 1 : 0] * frac;
+}
+
+static void tsf_fx_process(tsf* f, float* buffer, int samples)
+{
+	struct tsf_fx_state* s = &f->fxState;
+	float* rev = f->fxReverbBuffer;
+	float* cho = f->fxChorusBuffer;
+	int n, c;
+
+	// Reverb.
+	for (n = 0; n < samples; n++)
+	{
+		float input = (rev[n * 2] + rev[n * 2 + 1]) * (0.5f * TSF_FX_REVERB_INPUT_GAIN);
+		float wetL = 0.0f, wetR = 0.0f;
+		for (c = 0; c < 8; c++)
+		{
+			int idxL = s->combIndices[c * 2], idxR = s->combIndices[c * 2 + 1];
+			float outL = s->combBuffers[c * 2][idxL], outR = s->combBuffers[c * 2 + 1][idxR];
+			s->combFilterStore[c * 2]     = outL * (1.0f - TSF_FX_REVERB_DAMPING) + s->combFilterStore[c * 2]     * TSF_FX_REVERB_DAMPING;
+			s->combFilterStore[c * 2 + 1] = outR * (1.0f - TSF_FX_REVERB_DAMPING) + s->combFilterStore[c * 2 + 1] * TSF_FX_REVERB_DAMPING;
+			s->combBuffers[c * 2][idxL]     = input + s->combFilterStore[c * 2]     * TSF_FX_REVERB_FEEDBACK;
+			s->combBuffers[c * 2 + 1][idxR] = input + s->combFilterStore[c * 2 + 1] * TSF_FX_REVERB_FEEDBACK;
+			s->combIndices[c * 2]     = (idxL + 1 == s->combLengths[c * 2]     ? 0 : idxL + 1);
+			s->combIndices[c * 2 + 1] = (idxR + 1 == s->combLengths[c * 2 + 1] ? 0 : idxR + 1);
+			wetL += outL;
+			wetR += outR;
+		}
+		for (c = 0; c < 4; c++)
+		{
+			int idxL = s->allpassIndices[c * 2], idxR = s->allpassIndices[c * 2 + 1];
+			float bufL = s->allpassBuffers[c * 2][idxL], bufR = s->allpassBuffers[c * 2 + 1][idxR];
+			s->allpassBuffers[c * 2][idxL]     = wetL + bufL * 0.5f;
+			s->allpassBuffers[c * 2 + 1][idxR] = wetR + bufR * 0.5f;
+			wetL = bufL - wetL;
+			wetR = bufR - wetR;
+			s->allpassIndices[c * 2]     = (idxL + 1 == s->allpassLengths[c * 2]     ? 0 : idxL + 1);
+			s->allpassIndices[c * 2 + 1] = (idxR + 1 == s->allpassLengths[c * 2 + 1] ? 0 : idxR + 1);
+		}
+		rev[n * 2]     = wetL;
+		rev[n * 2 + 1] = wetR;
+	}
+
+	// Chorus.
+	{
+		float baseSamples = TSF_FX_CHORUS_BASE_MS * 0.001f * f->outSampleRate;
+		float depthSamples = TSF_FX_CHORUS_DEPTH_MS * 0.001f * f->outSampleRate;
+		float phaseStep = TSF_FX_CHORUS_RATE_HZ / f->outSampleRate;
+		for (n = 0; n < samples; n++)
+		{
+			float inL = cho[n * 2], inR = cho[n * 2 + 1];
+			float phaseR = s->chorusPhase + 0.25f;
+			float wetL, wetR;
+			if (phaseR >= 1.0f) phaseR -= 1.0f;
+			wetL = tsf_fx_delay_read(s->chorusBuffers[0], s->chorusLength, s->chorusWriteIndex, baseSamples + depthSamples * tsf_fx_triangle(s->chorusPhase));
+			wetR = tsf_fx_delay_read(s->chorusBuffers[1], s->chorusLength, s->chorusWriteIndex, baseSamples + depthSamples * tsf_fx_triangle(phaseR));
+			s->chorusBuffers[0][s->chorusWriteIndex] = inL;
+			s->chorusBuffers[1][s->chorusWriteIndex] = inR;
+			if (++s->chorusWriteIndex >= s->chorusLength) s->chorusWriteIndex = 0;
+			s->chorusPhase += phaseStep;
+			if (s->chorusPhase >= 1.0f) s->chorusPhase -= 1.0f;
+			cho[n * 2]     = wetL;
+			cho[n * 2 + 1] = wetR;
+		}
+	}
+
+	// Mix the processed sends back into the output.
+	if (f->outputmode == TSF_STEREO_INTERLEAVED)
+	{
+		for (n = 0; n < samples * 2; n++)
+			buffer[n] += rev[n] * TSF_FX_REVERB_WET_GAIN + cho[n] * TSF_FX_CHORUS_WET_GAIN;
+	}
+	else if (f->outputmode == TSF_STEREO_UNWEAVED)
+	{
+		for (n = 0; n < samples; n++)
+		{
+			buffer[n]           += rev[n * 2]     * TSF_FX_REVERB_WET_GAIN + cho[n * 2]     * TSF_FX_CHORUS_WET_GAIN;
+			buffer[samples + n] += rev[n * 2 + 1] * TSF_FX_REVERB_WET_GAIN + cho[n * 2 + 1] * TSF_FX_CHORUS_WET_GAIN;
+		}
+	}
+	else //TSF_MONO
+	{
+		for (n = 0; n < samples; n++)
+			buffer[n] += (rev[n * 2] + rev[n * 2 + 1]) * (0.5f * TSF_FX_REVERB_WET_GAIN) + (cho[n * 2] + cho[n * 2 + 1]) * (0.5f * TSF_FX_CHORUS_WET_GAIN);
+	}
+}
+
 TSFDEF void tsf_render_short(tsf* f, short* buffer, int samples, int flag_mixing)
 {
 	float outputSamples[TSF_RENDER_SHORTBUFFERBLOCK];
@@ -2182,10 +2419,27 @@ TSFDEF void tsf_render_short(tsf* f, short* buffer, int samples, int flag_mixing
 TSFDEF void tsf_render_float(tsf* f, float* buffer, int samples, int flag_mixing)
 {
 	struct tsf_voice *v = f->voices, *vEnd = v + f->voiceNum;
+	TSF_BOOL useFx = TSF_FALSE;
 	if (!flag_mixing) TSF_MEMSET(buffer, 0, (f->outputmode == TSF_MONO ? 1 : 2) * sizeof(float) * samples);
-	for (; v != vEnd; v++)
+	for (v = f->voices; v != vEnd; v++)
+		if (v->playingPreset != -1 && (v->reverbSend > 0.0f || v->chorusSend > 0.0f)) { useFx = TSF_TRUE; break; }
+	if (useFx) f->fxTailSamples = (int)(f->outSampleRate * 2.0f);
+	f->fxActive = TSF_FALSE;
+	if ((useFx || f->fxTailSamples > 0) && tsf_fx_prepare(f, samples))
+	{
+		TSF_MEMSET(f->fxReverbBuffer, 0, sizeof(float) * 2 * samples);
+		TSF_MEMSET(f->fxChorusBuffer, 0, sizeof(float) * 2 * samples);
+		f->fxActive = TSF_TRUE;
+	}
+	for (v = f->voices; v != vEnd; v++)
 		if (v->playingPreset != -1)
 			tsf_voice_render(f, v, buffer, samples);
+	if (f->fxActive)
+	{
+		tsf_fx_process(f, buffer, samples);
+		f->fxActive = TSF_FALSE;
+		if (!useFx && f->fxTailSamples > 0) f->fxTailSamples -= samples;
+	}
 }
 
 static void tsf_channel_setup_voice(tsf* f, struct tsf_voice* v)

@@ -12,7 +12,7 @@ struct MidiSynth {
     tsf* font = nullptr;
     std::vector<float> scratch;
     uint64_t messageCount = 0, noteOnCount = 0;
-    float gain = 0.5f;
+    float gain = 1.0f;   // モジュレータ実装で減衰スケールが仕様準拠になり全体が下がった分の補償（+6dB）。試聴で要調整
     int outputRate = 0;
 
     MidiSynth() = default;
