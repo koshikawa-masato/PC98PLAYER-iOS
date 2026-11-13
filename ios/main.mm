@@ -24,6 +24,11 @@
 #include <deque>
 #include <memory>
 #include <set>
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <thread>
+#include <pthread.h>
 #include <algorithm>
 #ifdef PC98PLAYER_TESTING
 #import "AudioCaptureProbe.h"
@@ -800,7 +805,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     MidiDispatch midiDispatch;
     BOOL midiFontLoaded;
     BOOL midiExternal;
-    double nextFrame;
+    std::atomic<double> nextFrame;
     double fpsSampleStart;
     int fpsSampleFrames;
     struct FPSSample {
@@ -808,11 +813,19 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         int frames;
     };
     std::deque<FPSSample> fpsHistory;
-    BOOL bossMode, hingeClosed;
-    BOOL paused, fetching, pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
+    BOOL bossMode;
+    std::atomic<bool> hingeClosed;
+    std::atomic<bool> paused, fetching;
+    BOOL pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
     int mouseButtons;
     int filterFrameHeight;
     CFTimeInterval lastMonitorCapture;
+    std::thread producerThread;
+    std::mutex playerMutex;
+    std::atomic<bool> producerStop;
+    std::atomic<bool> manualDrive;
+    std::atomic<uint64_t> producedFrames;
+    uint64_t lastProducedSeen;
     std::set<NSInteger> physicalKeys;
     std::set<int> touchKeys;
     std::bitset<128> controllerKeys;
@@ -852,6 +865,14 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 @property AudioCaptureProbe* audioProbe;
 #endif
 @end
+@interface PlayerController (Producer)
+- (void)producerMain;
+- (void)startProducer;
+- (void)stopProducer;
+@end
+static void PC98ProducerEntry(void* context) {
+    [(__bridge PlayerController*)context producerMain];
+}
 @implementation PlayerController
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
     if(self.traitCollection.userInterfaceIdiom==UIUserInterfaceIdiomPhone && !manualDuo && !hingeDuo && !duoHardware)
@@ -1230,11 +1251,11 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     NSMutableDictionary* result=[@{@"schema_version":@1,@"capture_id":NSUUID.UUID.UUIDString,
         @"captured_at":[[NSISO8601DateFormatter new] stringFromDate:NSDate.date],
         @"event":event,@"app_version":PC98FeedbackAppVersion(),@"os_version":UIDevice.currentDevice.systemVersion,
-        @"device_class":UIDevice.currentDevice.model,@"paused":@(paused),@"import_in_progress":@(fetching),
+        @"device_class":UIDevice.currentDevice.model,@"paused":@(paused.load()),@"import_in_progress":@(fetching.load()),
         @"source_mode":self.currentCache?(self.readingOriginal?@"direct":@"cache"):@"none",
         @"view_points":rect(self.view.bounds),@"monitor_points":rect([self.monitor convertRect:self.monitor.bounds toView:self.view]),
         @"display_scale":@(self.traitCollection.displayScale),@"fullscreen":@(fullScreen),
-        @"hardware_keyboard_layout":@(self.keyboard.hardwareLayout),@"hinge_closed":@(hingeClosed),
+        @"hardware_keyboard_layout":@(self.keyboard.hardwareLayout),@"hinge_closed":@(hingeClosed.load()),
         @"controller_count":@(GCController.controllers.count),
         @"thermal_state":@(NSProcessInfo.processInfo.thermalState),
         @"low_power_mode":@(NSProcessInfo.processInfo.lowPowerModeEnabled)} mutableCopy];
@@ -1334,13 +1355,14 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
             (failure==GuestFailure::Command?@"Bad command or file name":failure==GuestFailure::Memory?@"Not enough memory":summary):text(player->m->status);
         [self reportError:message code:code summary:summary];
     }
-    paused=YES;[self releaseKeys];audio.close(); midiOut.allSoundOff();
+    paused=YES;[self releaseKeys]; { std::lock_guard<std::mutex> lock(playerMutex); audio.close(); midiOut.allSoundOff(); }
     self.status.text=player->m->quit>=2?text(player->m->status):@"実行が終了しました";
 }
 - (void)updateScan:(int)scan {
     if(!player || paused) return;
     BOOL down=touchKeys.count(scan)>0 || controllerKeys.test(scan);
     for(NSInteger u:physicalKeys) if(pc98_scan_from_hid(u)==scan) down=YES;
+    std::lock_guard<std::mutex> lock(playerMutex);
     machine_key(player->m,(uint8_t)scan,down);
 }
 - (void)updateGameControllerInput:(NSArray<GCController*>*)controllers {
@@ -1369,7 +1391,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 - (void)releaseKeys {
     controllerKeys.reset();
     [self.keyboard releaseAll]; touchKeys.clear(); physicalKeys.clear(); mouseButtons=0;
-    if(player) { for(int i=0;i<128;++i) if(player->m->kb_down[i]) machine_key(player->m,i,false); machine_mouse(player->m,0,0,0); }
+    if(player) { std::lock_guard<std::mutex> lock(playerMutex); for(int i=0;i<128;++i) if(player->m->kb_down[i]) machine_key(player->m,i,false); machine_mouse(player->m,0,0,0); }
 }
 - (void)pressesBegan:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event {
     if(fullScreen) return;
@@ -1388,13 +1410,13 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 // モニタ上のパンとタッチパッド面で共有する相対移動。感度はモニタの表示倍率（画面上の指の移動量＝カーソルの移動量）
 - (void)moveMouseBy:(CGPoint)delta {
     CGFloat scale=MIN(self.monitor.bounds.size.width/640,self.monitor.bounds.size.height/(player?player->fb_h:400));
-    if(player && !paused && scale>0) machine_mouse(player->m,(int)(delta.x/scale),(int)(delta.y/scale),mouseButtons);
+    if(player && !paused && scale>0) { std::lock_guard<std::mutex> lock(playerMutex); machine_mouse(player->m,(int)(delta.x/scale),(int)(delta.y/scale),mouseButtons); }
 }
 - (void)click:(int)button {
     if(!player || paused) return;
-    machine_mouse(player->m,0,0,button);
+    { std::lock_guard<std::mutex> lock(playerMutex); machine_mouse(player->m,0,0,button); }
     __weak PlayerController* weak=self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,60*NSEC_PER_MSEC),dispatch_get_main_queue(),^{ PlayerController* s=weak; if(s && s->player) machine_mouse(s->player->m,0,0,0); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,60*NSEC_PER_MSEC),dispatch_get_main_queue(),^{ PlayerController* s=weak; if(s && s->player) { std::lock_guard<std::mutex> lock(s->playerMutex); machine_mouse(s->player->m,0,0,0); } });
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer*)gesture shouldReceiveTouch:(UITouch*)touch {
     if(![gesture isKindOfClass:UILongPressGestureRecognizer.class]) return YES;
@@ -1543,21 +1565,15 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         return;
     }
     constexpr double seconds=(double)FRAME_TICKS/MASTER_CLOCK;
-    double now=CACurrentMediaTime(); if(now-nextFrame>seconds*3) nextFrame=now;
+    double now=CACurrentMediaTime();
     [self.keyboard repeatHeldKeys];
-    // Match macOS: advance the guest on elapsed time. Audio output consumes
-    // the generated samples without deciding when the guest runs.
-    int frames=0;
-    while(now>=nextFrame && frames<3) {
-        player->run_frame();
-        ++frames;
-#ifdef PC98PLAYER_TESTING
-        [self.audioProbe appendReference:player->audio rate:player->ps.sample_rate];
-#endif
-        if(midiFontLoaded && !midiExternal) midiSynth.renderMix(player->audio.data(), player->audio.size()/2);
-        audio.push(player->audio); nextFrame+=seconds;
-        if(player->m->quit) { [self handleGuestTermination]; break; }
-    }
+    // Guest frames and audio are produced on the producer thread (see
+    // producerMain), so main-thread work such as layout transactions and
+    // rotation can no longer starve the audio queue. The display link only
+    // presents the newest frame and counts what the producer made.
+    uint64_t produced=producedFrames.load();
+    int frames=(int)std::min<uint64_t>(produced-lastProducedSeen,600);
+    lastProducedSeen=produced;
     // Keep guest timing and audio independent of the filtered presentation rate.
     if(frames && (!self.contentFilter.settings.enabled() || player->m->quit ||
                   filterFrameHeight!=player->fb_h || (self.titleReference && !self.titleCaptureAttempted) ||
@@ -1589,19 +1605,24 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 }
 - (void)refreshMonitor {
     if(!player)return;
-    if(filterFrameHeight!=player->fb_h) {
-        [self.contentFilter reset];
-        self.monitor.image=nil;
-        filterFrameHeight=player->fb_h;
-        [self.view setNeedsLayout];
-    }
-    lastMonitorCapture=CACurrentMediaTime();
-    UIImage* image=frameImage(player.get());
-    uint64_t imageFrame=player->m->frame_count;
+    // The producer thread writes the framebuffer; snapshot it under the lock.
     NSData* reference=self.titleReference;
-    BOOL matchesTitle=reference && !self.titleCaptureAttempted &&
-        !(bossMode && hingeClosed) &&
-        [reference isEqualToData:titleFrameDigest(player->fb, 640 * player->fb_h * sizeof(uint32_t))];
+    UIImage* image=nil; uint64_t imageFrame=0; BOOL matchesTitle=NO;
+    {
+        std::lock_guard<std::mutex> lock(playerMutex);
+        if(filterFrameHeight!=player->fb_h) {
+            [self.contentFilter reset];
+            self.monitor.image=nil;
+            filterFrameHeight=player->fb_h;
+            [self.view setNeedsLayout];
+        }
+        lastMonitorCapture=CACurrentMediaTime();
+        image=frameImage(player.get());
+        imageFrame=player->m->frame_count;
+        matchesTitle=reference && !self.titleCaptureAttempted &&
+            !(bossMode && hingeClosed) &&
+            [reference isEqualToData:titleFrameDigest(player->fb, 640 * player->fb_h * sizeof(uint32_t))];
+    }
     if(self.contentFilter.settings.enabled() && !self.monitor.image)
         self.status.text=self.contentFilter.lastError?[@"保護フィルター: " stringByAppendingString:self.contentFilter.lastError]:@"保護フィルター: 判定中…";
     __weak PlayerController* weak=self;
@@ -1627,7 +1648,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.titleReference=nil;
     self.titleCaptureAttempted=NO;
     [self.contentFilter reset];self.monitor.image=nil;filterFrameHeight=0;
-    fullscreenMenuPaused=NO; paused=YES; [self releaseKeys]; audio.close(); midiSynth.reset(); midiOut.reset();
+    fullscreenMenuPaused=NO; paused=YES; [self stopProducer]; [self releaseKeys]; audio.close(); midiSynth.reset(); midiOut.reset();
     if(player) {
         // 作ったディスクは実ファイルを入れているので、終える前に書き戻す
         for(int unit=0;unit<2;++unit) [self writeBackUserDiskForUnit:unit];
@@ -1638,6 +1659,51 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.scopedGameFolder=nil;
     self.readingOriginal=NO;
 }
+- (void)startProducer {
+    [self stopProducer];
+    producerStop.store(false);
+    producerThread=std::thread(PC98ProducerEntry,(__bridge void*)self);
+}
+- (void)stopProducer {
+    producerStop.store(true);
+    manualDrive.store(false);
+    if(producerThread.joinable()) producerThread.join();
+}
+// Guest execution, MIDI rendering and PCM production run on this thread, off
+// the main thread, so UI work (layout transactions, rotation, sheets) can
+// never starve the audio queue. playerMutex serializes guest state against
+// main-thread input, presentation snapshots and lifecycle changes.
+- (void)producerMain {
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE,0);
+    pthread_setname_np("PC98PLAYER producer");
+    constexpr double seconds=(double)FRAME_TICKS/MASTER_CLOCK;
+    constexpr double lead=0.020; // keep ~20 ms of audio produced ahead
+    while(!producerStop.load()) {
+        BOOL worked=NO;
+        {
+            std::lock_guard<std::mutex> lock(playerMutex);
+            if(player && !player->m->quit && !paused.load() && !fetching.load() && !manualDrive.load() &&
+               !(bossMode && hingeClosed.load()) && audio.queue) {
+                double now=CACurrentMediaTime();
+                double nf=nextFrame.load();
+                if(now-nf>seconds*3) nf=now; // resync after a long stall
+                int frames=0;
+                while(now+lead>=nf && frames<3) {
+                    player->run_frame();
+                    ++frames;
+#ifdef PC98PLAYER_TESTING
+                    [self.audioProbe appendReference:player->audio rate:player->ps.sample_rate];
+#endif
+                    if(midiFontLoaded && !midiExternal) midiSynth.renderMix(player->audio.data(), player->audio.size()/2);
+                    audio.push(player->audio); nf+=seconds;
+                    if(player->m->quit) break;
+                }
+                if(frames) { nextFrame.store(nf); producedFrames.fetch_add((uint64_t)frames); worked=YES; }
+            }
+        }
+        if(!worked) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+}
 - (void)togglePause {
     if(bossMode && hingeClosed) return;
     if(!player || fetching || player->m->quit) return;
@@ -1646,17 +1712,18 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 #ifdef PC98PLAYER_TESTING
     [self.audioProbe event:paused?@"pause":@"resume"];
 #endif
-    if(paused) { audio.pause(); midiSynth.allSoundOff(); midiOut.allSoundOff(); self.status.text=@"一時停止"; }
+    if(paused) { { std::lock_guard<std::mutex> lock(playerMutex); audio.pause(); midiSynth.allSoundOff(); midiOut.allSoundOff(); } self.status.text=@"一時停止"; }
     else { [self startAudio]; nextFrame=CACurrentMediaTime(); self.status.text=@"実行中"; }
 }
 - (void)startAudio {
     if(bossMode && hingeClosed) { [self suspend];return; }
     NSError* error=nil; AVAudioSession* session=AVAudioSession.sharedInstance;
     [session setCategory:AVAudioSessionCategoryPlayback error:&error]; [session setActive:YES error:&error];
-    if(error || !audio.open(player->ps.sample_rate)) self.status.text=@"音声を開始できませんでした（映像のみ）";
+    BOOL opened; { std::lock_guard<std::mutex> lock(playerMutex); opened=audio.open(player->ps.sample_rate); }
+    if(error || !opened) self.status.text=@"音声を開始できませんでした（映像のみ）";
 }
 - (void)suspend {
-    [self releaseKeys]; paused=YES; audio.pause(); midiOut.allSoundOff();
+    [self releaseKeys]; { std::lock_guard<std::mutex> lock(playerMutex); paused=YES; audio.pause(); midiOut.allSoundOff(); }
     self.status.text=@"一時停止 — ▶︎で再開";
 }
 - (void)showFloppyDrives {
@@ -2025,6 +2092,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     launch[@"cpu_mhz"]=@(settings.cfg.cpu_mhz);launch[@"video_colors"]=@(settings.cfg.video_colors);
     launch[@"sound_board"]=@(settings.cfg.sound_board);launch[@"floppy_boot"]=@(settings.cfg.boot_fd);
     launch[@"program_selected"]=@(!settings.cfg.start.empty());self.launchDiagnostics=launch;
+    [self stopProducer];
     midiSynth.reset();   // 前のゲームの発音・チャンネル設定を残さない
     if(midiFontLoaded && midiSynth.outputRate!=settings.sample_rate) midiSynth.setOutputRate(settings.sample_rate);
     midiDispatch.synth=&midiSynth; midiDispatch.out=&midiOut; midiDispatch.external=midiExternal;
@@ -2048,23 +2116,23 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     if(self.currentID.length && ![self.currentID isEqualToString:@"demo"])
         self.titleReference=[NSUserDefaults.standardUserDefaults dataForKey:titleReferenceKey(self.currentID)];
     self.titleCaptureAttempted=NO;
-    [self startAudio]; [self becomeFirstResponder];
+    [self startAudio]; [self startProducer]; [self becomeFirstResponder];
     NSString* warnings=@"";
     for(auto* e:{&player->floppy_error,&player->cd_error,&player->rhythm_error}) if(!e->empty()) warnings=[warnings stringByAppendingFormat:@"%@\n",text(*e)];
     if(warnings.length) [self reportError:warnings code:@"media_load" summary:@"ディスクまたは音源データを読み込めませんでした"];
 }
 - (void)slots:(BOOL)load {
     if(!player || fetching) return;
-    [self releaseKeys]; audio.clear();
+    [self releaseKeys]; { std::lock_guard<std::mutex> lock(playerMutex); audio.clear(); }
     UIAlertController* menu=[UIAlertController alertControllerWithTitle:load?@"ステート読込":@"ステート保存" message:nil preferredStyle:UIAlertControllerStyleAlert];
     __weak PlayerController* weak=self;
     for(int slot=0;slot<STATE_SLOTS;++slot) [menu addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"スロット %d",slot+1] style:UIAlertActionStyleDefault handler:^(UIAlertAction* a) {
         PlayerController* s=weak; if(!s || !s->player) return;
         [s.reportedErrorCodes removeObject:load?@"state_load":@"state_save"];
-        std::string error; BOOL ok=load?s->player->load_state(slot,&error):s->player->save_state(slot,&error);
+        std::string error; BOOL ok; { std::lock_guard<std::mutex> lock(s->playerMutex); ok=load?s->player->load_state(slot,&error):s->player->save_state(slot,&error); }
         // A failed load preserves the current state and its filtered screenshot.
         if(load && ok) { [s.contentFilter reset];s.monitor.image=nil; }
-        [s releaseKeys]; s->audio.clear(); s->nextFrame=CACurrentMediaTime();
+        [s releaseKeys]; { std::lock_guard<std::mutex> lock(s->playerMutex); s->audio.clear(); } s->nextFrame=CACurrentMediaTime();
         if(!ok) [s reportError:text(error) code:load?@"state_load":@"state_save" summary:load?@"ステートを読み込めませんでした":@"ステートを保存できませんでした"]; else s.status.text=load?@"ステートを読み込みました":@"ステートを保存しました";
         if(s->player) [s refreshMonitor];
     }]];
@@ -2409,11 +2477,11 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 // Debug-only, input-driven compatibility check inside the real simulator app.
 - (void)verifyGameFrames:(int)total {
     if(!player) return;
-    [self suspend];
+    [self suspend]; manualDrive.store(true);
     __weak PlayerController* weak=self;
     __block int frame=0,peak=0;
     [NSTimer scheduledTimerWithTimeInterval:0.001 repeats:YES block:^(NSTimer* timer) {
-        PlayerController* s=weak;if(!s || !s->player) { [timer invalidate];return; }
+        PlayerController* s=weak;if(!s || !s->player) { [timer invalidate];if(s) s->manualDrive.store(false);return; }
         for(int n=0;n<60 && frame<total && !s->player->m->quit;++n,++frame) {
             for(int keyFrame : {300,600,900,1200,1800,2400,3000,3600,5000,8000,11000,14000}) {
                 if(frame==keyFrame) machine_key(s->player->m,0x1c,true);
@@ -2430,7 +2498,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         }
         [s refreshMonitor];
         if(frame<total && !s->player->m->quit) return;
-        [timer invalidate];[s releaseKeys];
+        [timer invalidate];s->manualDrive.store(false);[s releaseKeys];
         Machine* m=s->player->m;std::set<uint32_t> colors;
         for(int i=0;i<640*s->player->fb_h;++i) colors.insert(s->player->fb[i]);
         int imageHeight=s.monitor.image.CGImage? (int)CGImageGetHeight(s.monitor.image.CGImage):0;
@@ -2486,7 +2554,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 }
 - (void)smokeTest {
     NSMutableDictionary* result=[NSMutableDictionary new];
-    [self suspend]; paused=NO;
+    [self suspend]; paused=NO; manualDrive.store(true);
     for(int i=0;i<8;++i) player->run_frame();
     result[@"touchKeyDispatch"]=@([self.keyboard tapScanForTesting:29]); // A key, plain 'a'
     for(int i=0;i<4;++i) player->run_frame();
@@ -2625,9 +2693,9 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     UIAlertController* menu=[self fullscreenMenu];
     result[@"fullscreenMenuActions"]=@(menu.actions.count==7 && [menu.actions[5].title isEqualToString:@"フィードバックする"] && [menu.actions[3].title isEqualToString:@"FDD"] && [menu.actions[2].title isEqualToString:@"コントローラーを非表示"] && [menu.actions[0].title isEqualToString:@"一時停止"] && [menu.actions[1].title isEqualToString:@"リセット"]);
     [self pauseFromFullscreenMenu];
-    result[@"fullscreenMenuPauses"]=@(paused && fullscreenMenuPaused && audio.paused);
+    result[@"fullscreenMenuPauses"]=@(paused.load() && fullscreenMenuPaused && audio.paused);
     [self rightClick];
-    result[@"rightClickDoesNotResume"]=@(paused && player->m->mouse.buttons==0);
+    result[@"rightClickDoesNotResume"]=@(paused.load() && player->m->mouse.buttons==0);
     [self leftClick:nil];
     result[@"fullscreenTapResumesWithoutGuestClick"]=@(!paused && !fullscreenMenuPaused && player->m->mouse.buttons==0);
     [self leftClick:nil];
@@ -2635,7 +2703,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     [self pauseFromFullscreenMenu];
     [self toggleFullScreen];
     [self leftClick:nil];
-    result[@"normalViewDoesNotTapResume"]=@(paused && !fullscreenMenuPaused);
+    result[@"normalViewDoesNotTapResume"]=@(paused.load() && !fullscreenMenuPaused);
     [self togglePause];
     result[@"fullscreenRestoresLayout"]=@(!fullScreen && !self.topPanel.hidden && !self.keyboard.hidden && !self.toolbar.hidden && !self.statusRow.hidden && self.monitor.superview==self.topPanel && CGRectEqualToRect(previousMonitor,self.monitor.frame));
     manualDuo=YES; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
@@ -2673,6 +2741,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     result[@"passed"]=@(success);
     NSData* report=[NSJSONSerialization dataWithJSONObject:result options:NSJSONWritingPrettyPrinted error:nil];
     [report writeToURL:area(NSDocumentDirectory,@"smoke-result.json") atomically:YES];
+    manualDrive.store(false);
     NSLog(@"PC98 IOS SMOKE %@",success?@"PASS":@"FAIL");
 }
 #endif

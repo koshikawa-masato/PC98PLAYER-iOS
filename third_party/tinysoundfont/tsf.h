@@ -35,6 +35,17 @@
        ReverbEffectsSend generators and their modulators (including the
        CC91/CC93 default modulators) feed a Freeverb-style reverb and a
        stereo chorus, which are mixed back into the rendered output.
+     - Sample playback uses Catmull-Rom cubic interpolation instead of
+       linear interpolation.
+     - The effects unit can be retuned at runtime
+       (tsf_set_reverb_parameters / tsf_set_chorus_parameters), which
+       the host drives from Roland GS SysEx effect blocks; zeroed
+       parameters keep the original fixed tuning.
+     - The voice lowpass is two cascaded biquads (24 dB/octave)
+       instead of upstream's single biquad (12 dB/octave), matching
+       the filter steepness of hardware GS modules and FluidSynth;
+       the voice QInv is split between the sections in the
+       Butterworth-4 ratio, so font resonance scales proportionally.
 
    LICENSE (MIT)
 
@@ -240,6 +251,13 @@ TSFDEF int tsf_channel_set_sustain(tsf* f, int channel, int flag_sustain);
 // Set the channel pressure (monophonic aftertouch) value 0 to 127 for a channel
 TSFDEF int tsf_channel_set_pressure(tsf* f, int channel, int pressure);
 
+// Retune the effects unit at runtime (LOCAL EXTENSION). Any argument set
+// to 0 or below restores the built-in default for that parameter, so the
+// defaults reproduce the original fixed tuning exactly.
+TSFDEF void tsf_set_reverb_parameters(tsf* f, float feedback, float damping, float wetGain, float size);
+TSFDEF void tsf_set_chorus_parameters(tsf* f, float baseMs, float depthMs, float rateHz, float wetGain, float feedback);
+TSFDEF void tsf_reset_effect_parameters(tsf* f);
+
 // Start or stop playing notes on a channel (needs channel preset to be set)
 //   channel: channel number
 //   key: note value between 0 and 127 (60 being middle C)
@@ -391,6 +409,12 @@ struct tsf
 	int fxTailSamples;
 	struct tsf_fx_state fxState;
 	TSF_BOOL fxActive;
+
+	// GS-controllable effect parameters (LOCAL EXTENSION). Zero selects the
+	// built-in default (the original fixed tuning), so a font that never
+	// receives effect parameters sounds exactly as before.
+	float fxReverbFeedback, fxReverbDamping, fxReverbWetGain, fxReverbSize;
+	float fxChorusBaseMs, fxChorusDepthMs, fxChorusRateHz, fxChorusWetGain, fxChorusFeedback;
 };
 
 static void tsf_fx_free_state(struct tsf_fx_state* s)
@@ -521,7 +545,7 @@ static void tsf_hydra_read_shdr(struct tsf_hydra_shdr* i, struct tsf_stream* str
 struct tsf_riffchunk { tsf_fourcc id; tsf_u32 size; };
 struct tsf_envelope { float delay, attack, hold, decay, sustain, release, keynumToHold, keynumToDecay; };
 struct tsf_voice_envelope { unsigned char segment, segmentIsExponential : 1, isAmpEnv : 1; short midiVelocity; float level, slope; int samplesUntilNextSegment; struct tsf_envelope parameters; };
-struct tsf_voice_lowpass { double QInv, a0, a1, b1, b2, z1, z2; TSF_BOOL active; };
+struct tsf_voice_lowpass { double QInv, a0, a1, b1, b2, z1, z2; double c0, c1, d1, d2, z3, z4; TSF_BOOL active; }; //c*/d*/z3/z4: second cascaded biquad section (24 dB/oct, see tsf_voice_lowpass_setup)
 struct tsf_voice_lfo { int samplesUntil; float level, delta; };
 
 struct tsf_modulator
@@ -1392,18 +1416,31 @@ static void tsf_voice_envelope_process(struct tsf_voice_envelope* e, int numSamp
 
 static void tsf_voice_lowpass_setup(struct tsf_voice_lowpass* e, float Fc)
 {
-	// Lowpass filter from http://www.earlevel.com/main/2012/11/26/biquad-c-source-code/
+	// Two cascaded lowpass biquads (http://www.earlevel.com/main/2012/11/26/biquad-c-source-code/)
+	// for a 24 dB/octave slope, matching the steepness of hardware GS modules
+	// and of FluidSynth; a single biquad (12 dB/oct) leaves low-velocity
+	// layers far too bright. The voice QInv is split between the sections in
+	// the Butterworth-4 ratio (x1.3065 / x0.5412), so a voice QInv of sqrt(2)
+	// yields an exact Butterworth 4-pole response and the font's resonance
+	// (initialFilterQ) scales both sections proportionally.
 	double K = TSF_TAN(TSF_PI * Fc), KK = K * K;
-	double norm = 1 / (1 + K * e->QInv + KK);
+	double q1 = e->QInv * 1.3065, q2 = e->QInv * 0.5412;
+	double norm = 1 / (1 + K * q1 + KK);
 	e->a0 = KK * norm;
 	e->a1 = 2 * e->a0;
 	e->b1 = 2 * (KK - 1) * norm;
-	e->b2 = (1 - K * e->QInv + KK) * norm;
+	e->b2 = (1 - K * q1 + KK) * norm;
+	norm = 1 / (1 + K * q2 + KK);
+	e->c0 = KK * norm;
+	e->c1 = 2 * e->c0;
+	e->d1 = 2 * (KK - 1) * norm;
+	e->d2 = (1 - K * q2 + KK) * norm;
 }
 
 static float tsf_voice_lowpass_process(struct tsf_voice_lowpass* e, double In)
 {
-	double Out = In * e->a0 + e->z1; e->z1 = In * e->a1 + e->z2 - e->b1 * Out; e->z2 = In * e->a0 - e->b2 * Out; return (float)Out;
+	double Out = In * e->a0 + e->z1; e->z1 = In * e->a1 + e->z2 - e->b1 * Out; e->z2 = In * e->a0 - e->b2 * Out;
+	In = Out; Out = In * e->c0 + e->z3; e->z3 = In * e->c1 + e->z4 - e->d1 * Out; e->z4 = In * e->c0 - e->d2 * Out; return (float)Out;
 }
 
 static void tsf_voice_lfo_setup(struct tsf_voice_lfo* e, float delay, int freqCents, float outSampleRate)
@@ -1814,8 +1851,15 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 				{
 					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
 
-					// Simple linear interpolation.
-					float alpha = (float)(tmpSourceSamplePosition - pos), val = (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
+					// Catmull-Rom cubic interpolation: cleaner than linear on
+					// transposed samples. The outer neighbours wrap around the
+					// loop points and clamp at the region edges.
+					unsigned int prevPos = (isLooping && pos == tmpLoopStart) ? tmpLoopEnd : (pos > (unsigned int)region->offset ? pos - 1 : pos);
+					unsigned int afterPos = (isLooping && nextPos >= tmpLoopEnd) ? tmpLoopStart : (nextPos < (unsigned int)region->end ? nextPos + 1 : nextPos);
+					float alpha = (float)(tmpSourceSamplePosition - pos);
+					float p0 = input[prevPos], p1 = input[pos], p2 = input[nextPos], p3 = input[afterPos];
+					float alpha2 = alpha * alpha;
+					float val = 0.5f * ((2.0f * p1) + (-p0 + p2) * alpha + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * alpha2 + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * alpha2 * alpha);
 
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
@@ -1837,8 +1881,15 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 				{
 					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
 
-					// Simple linear interpolation.
-					float alpha = (float)(tmpSourceSamplePosition - pos), val = (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
+					// Catmull-Rom cubic interpolation: cleaner than linear on
+					// transposed samples. The outer neighbours wrap around the
+					// loop points and clamp at the region edges.
+					unsigned int prevPos = (isLooping && pos == tmpLoopStart) ? tmpLoopEnd : (pos > (unsigned int)region->offset ? pos - 1 : pos);
+					unsigned int afterPos = (isLooping && nextPos >= tmpLoopEnd) ? tmpLoopStart : (nextPos < (unsigned int)region->end ? nextPos + 1 : nextPos);
+					float alpha = (float)(tmpSourceSamplePosition - pos);
+					float p0 = input[prevPos], p1 = input[pos], p2 = input[nextPos], p3 = input[afterPos];
+					float alpha2 = alpha * alpha;
+					float val = 0.5f * ((2.0f * p1) + (-p0 + p2) * alpha + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * alpha2 + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * alpha2 * alpha);
 
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
@@ -1859,8 +1910,15 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 				{
 					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
 
-					// Simple linear interpolation.
-					float alpha = (float)(tmpSourceSamplePosition - pos), val = (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
+					// Catmull-Rom cubic interpolation: cleaner than linear on
+					// transposed samples. The outer neighbours wrap around the
+					// loop points and clamp at the region edges.
+					unsigned int prevPos = (isLooping && pos == tmpLoopStart) ? tmpLoopEnd : (pos > (unsigned int)region->offset ? pos - 1 : pos);
+					unsigned int afterPos = (isLooping && nextPos >= tmpLoopEnd) ? tmpLoopStart : (nextPos < (unsigned int)region->end ? nextPos + 1 : nextPos);
+					float alpha = (float)(tmpSourceSamplePosition - pos);
+					float p0 = input[prevPos], p1 = input[pos], p2 = input[nextPos], p3 = input[afterPos];
+					float alpha2 = alpha * alpha;
+					float val = 0.5f * ((2.0f * p1) + (-p0 + p2) * alpha + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * alpha2 + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * alpha2 * alpha);
 
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
@@ -2192,7 +2250,7 @@ TSFDEF int tsf_note_on(tsf* f, int preset_index, int key, float vel)
 		lowpassFc = (vregion->initialFilterFc <= 13500 ? tsf_cents2Hertz((float)vregion->initialFilterFc) / f->outSampleRate : 1.0f);
 		lowpassFilterQDB = vregion->initialFilterQ / 10.0f;
 		voice->lowpass.QInv = 1.0 / TSF_POW(10.0, (lowpassFilterQDB / 20.0));
-		voice->lowpass.z1 = voice->lowpass.z2 = 0;
+		voice->lowpass.z1 = voice->lowpass.z2 = voice->lowpass.z3 = voice->lowpass.z4 = 0;
 		voice->lowpass.active = (lowpassFc < 0.499f);
 		if (voice->lowpass.active) tsf_voice_lowpass_setup(&voice->lowpass, lowpassFc);
 
@@ -2265,6 +2323,33 @@ TSFDEF int tsf_active_voice_count(tsf* f)
 #define TSF_FX_CHORUS_RATE_HZ 0.8f
 #define TSF_FX_CHORUS_WET_GAIN 1.0f
 
+TSFDEF void tsf_set_reverb_parameters(tsf* f, float feedback, float damping, float wetGain, float size)
+{
+	if (feedback > 0.98f) feedback = 0.98f;
+	if (damping < 0.0f) damping = 0.0f; else if (damping > 0.95f) damping = 0.95f;
+	if (wetGain < 0.0f) wetGain = 0.0f;
+	if (size < 0.0f) size = 0.0f; else if (size > 1.0f) size = 1.0f;
+	f->fxReverbFeedback = feedback; f->fxReverbDamping = damping;
+	f->fxReverbWetGain = wetGain; f->fxReverbSize = size;
+}
+
+TSFDEF void tsf_set_chorus_parameters(tsf* f, float baseMs, float depthMs, float rateHz, float wetGain, float feedback)
+{
+	if (baseMs < 0.0f) baseMs = 0.0f; else if (baseMs > 55.0f) baseMs = 55.0f;
+	if (depthMs < 0.0f) depthMs = 0.0f; else if (depthMs > 20.0f) depthMs = 20.0f;
+	if (rateHz < 0.0f) rateHz = 0.0f; else if (rateHz > 8.0f) rateHz = 8.0f;
+	if (wetGain < 0.0f) wetGain = 0.0f;
+	if (feedback < 0.0f) feedback = 0.0f; else if (feedback > 0.9f) feedback = 0.9f;
+	f->fxChorusBaseMs = baseMs; f->fxChorusDepthMs = depthMs; f->fxChorusRateHz = rateHz;
+	f->fxChorusWetGain = wetGain; f->fxChorusFeedback = feedback;
+}
+
+TSFDEF void tsf_reset_effect_parameters(tsf* f)
+{
+	f->fxReverbFeedback = f->fxReverbDamping = f->fxReverbWetGain = f->fxReverbSize = 0.0f;
+	f->fxChorusBaseMs = f->fxChorusDepthMs = f->fxChorusRateHz = f->fxChorusWetGain = f->fxChorusFeedback = 0.0f;
+}
+
 static TSF_BOOL tsf_fx_prepare(tsf* f, int samples)
 {
 	if (!f->fxState.initialized || f->fxState.sampleRate != f->outSampleRate)
@@ -2311,6 +2396,17 @@ static void tsf_fx_process(tsf* f, float* buffer, int samples)
 	float* cho = f->fxChorusBuffer;
 	int n, c;
 
+	// Effective parameters: host-set values win, zero keeps the default.
+	float reverbFeedback = (f->fxReverbFeedback > 0.0f ? f->fxReverbFeedback : TSF_FX_REVERB_FEEDBACK);
+	float reverbDamping  = (f->fxReverbDamping  > 0.0f ? f->fxReverbDamping  : TSF_FX_REVERB_DAMPING);
+	float reverbWetGain  = (f->fxReverbWetGain  > 0.0f ? f->fxReverbWetGain  : TSF_FX_REVERB_WET_GAIN);
+	float reverbSize     = (f->fxReverbSize     > 0.0f ? f->fxReverbSize     : 1.0f);
+	float chorusBaseMs   = (f->fxChorusBaseMs   > 0.0f ? f->fxChorusBaseMs   : TSF_FX_CHORUS_BASE_MS);
+	float chorusDepthMs  = (f->fxChorusDepthMs  > 0.0f ? f->fxChorusDepthMs  : TSF_FX_CHORUS_DEPTH_MS);
+	float chorusRateHz   = (f->fxChorusRateHz   > 0.0f ? f->fxChorusRateHz   : TSF_FX_CHORUS_RATE_HZ);
+	float chorusWetGain  = (f->fxChorusWetGain  > 0.0f ? f->fxChorusWetGain  : TSF_FX_CHORUS_WET_GAIN);
+	float chorusFeedback = f->fxChorusFeedback;
+
 	// Reverb.
 	for (n = 0; n < samples; n++)
 	{
@@ -2319,13 +2415,21 @@ static void tsf_fx_process(tsf* f, float* buffer, int samples)
 		for (c = 0; c < 8; c++)
 		{
 			int idxL = s->combIndices[c * 2], idxR = s->combIndices[c * 2 + 1];
-			float outL = s->combBuffers[c * 2][idxL], outR = s->combBuffers[c * 2 + 1][idxR];
-			s->combFilterStore[c * 2]     = outL * (1.0f - TSF_FX_REVERB_DAMPING) + s->combFilterStore[c * 2]     * TSF_FX_REVERB_DAMPING;
-			s->combFilterStore[c * 2 + 1] = outR * (1.0f - TSF_FX_REVERB_DAMPING) + s->combFilterStore[c * 2 + 1] * TSF_FX_REVERB_DAMPING;
-			s->combBuffers[c * 2][idxL]     = input + s->combFilterStore[c * 2]     * TSF_FX_REVERB_FEEDBACK;
-			s->combBuffers[c * 2 + 1][idxR] = input + s->combFilterStore[c * 2 + 1] * TSF_FX_REVERB_FEEDBACK;
-			s->combIndices[c * 2]     = (idxL + 1 == s->combLengths[c * 2]     ? 0 : idxL + 1);
-			s->combIndices[c * 2 + 1] = (idxR + 1 == s->combLengths[c * 2 + 1] ? 0 : idxR + 1);
+			int lenL = (int)(s->combLengths[c * 2] * reverbSize), lenR = (int)(s->combLengths[c * 2 + 1] * reverbSize);
+			float outL, outR;
+			if (lenL < 1) lenL = 1;
+			if (lenL > s->combLengths[c * 2]) lenL = s->combLengths[c * 2];
+			if (lenR < 1) lenR = 1;
+			if (lenR > s->combLengths[c * 2 + 1]) lenR = s->combLengths[c * 2 + 1];
+			if (idxL >= lenL) idxL = 0;
+			if (idxR >= lenR) idxR = 0;
+			outL = s->combBuffers[c * 2][idxL]; outR = s->combBuffers[c * 2 + 1][idxR];
+			s->combFilterStore[c * 2]     = outL * (1.0f - reverbDamping) + s->combFilterStore[c * 2]     * reverbDamping;
+			s->combFilterStore[c * 2 + 1] = outR * (1.0f - reverbDamping) + s->combFilterStore[c * 2 + 1] * reverbDamping;
+			s->combBuffers[c * 2][idxL]     = input + s->combFilterStore[c * 2]     * reverbFeedback;
+			s->combBuffers[c * 2 + 1][idxR] = input + s->combFilterStore[c * 2 + 1] * reverbFeedback;
+			s->combIndices[c * 2]     = (idxL + 1 == lenL ? 0 : idxL + 1);
+			s->combIndices[c * 2 + 1] = (idxR + 1 == lenR ? 0 : idxR + 1);
 			wetL += outL;
 			wetR += outR;
 		}
@@ -2346,9 +2450,9 @@ static void tsf_fx_process(tsf* f, float* buffer, int samples)
 
 	// Chorus.
 	{
-		float baseSamples = TSF_FX_CHORUS_BASE_MS * 0.001f * f->outSampleRate;
-		float depthSamples = TSF_FX_CHORUS_DEPTH_MS * 0.001f * f->outSampleRate;
-		float phaseStep = TSF_FX_CHORUS_RATE_HZ / f->outSampleRate;
+		float baseSamples = chorusBaseMs * 0.001f * f->outSampleRate;
+		float depthSamples = chorusDepthMs * 0.001f * f->outSampleRate;
+		float phaseStep = chorusRateHz / f->outSampleRate;
 		for (n = 0; n < samples; n++)
 		{
 			float inL = cho[n * 2], inR = cho[n * 2 + 1];
@@ -2357,8 +2461,8 @@ static void tsf_fx_process(tsf* f, float* buffer, int samples)
 			if (phaseR >= 1.0f) phaseR -= 1.0f;
 			wetL = tsf_fx_delay_read(s->chorusBuffers[0], s->chorusLength, s->chorusWriteIndex, baseSamples + depthSamples * tsf_fx_triangle(s->chorusPhase));
 			wetR = tsf_fx_delay_read(s->chorusBuffers[1], s->chorusLength, s->chorusWriteIndex, baseSamples + depthSamples * tsf_fx_triangle(phaseR));
-			s->chorusBuffers[0][s->chorusWriteIndex] = inL;
-			s->chorusBuffers[1][s->chorusWriteIndex] = inR;
+			s->chorusBuffers[0][s->chorusWriteIndex] = inL + wetL * chorusFeedback;
+			s->chorusBuffers[1][s->chorusWriteIndex] = inR + wetR * chorusFeedback;
 			if (++s->chorusWriteIndex >= s->chorusLength) s->chorusWriteIndex = 0;
 			s->chorusPhase += phaseStep;
 			if (s->chorusPhase >= 1.0f) s->chorusPhase -= 1.0f;
@@ -2371,20 +2475,20 @@ static void tsf_fx_process(tsf* f, float* buffer, int samples)
 	if (f->outputmode == TSF_STEREO_INTERLEAVED)
 	{
 		for (n = 0; n < samples * 2; n++)
-			buffer[n] += rev[n] * TSF_FX_REVERB_WET_GAIN + cho[n] * TSF_FX_CHORUS_WET_GAIN;
+			buffer[n] += rev[n] * reverbWetGain + cho[n] * chorusWetGain;
 	}
 	else if (f->outputmode == TSF_STEREO_UNWEAVED)
 	{
 		for (n = 0; n < samples; n++)
 		{
-			buffer[n]           += rev[n * 2]     * TSF_FX_REVERB_WET_GAIN + cho[n * 2]     * TSF_FX_CHORUS_WET_GAIN;
-			buffer[samples + n] += rev[n * 2 + 1] * TSF_FX_REVERB_WET_GAIN + cho[n * 2 + 1] * TSF_FX_CHORUS_WET_GAIN;
+			buffer[n]           += rev[n * 2]     * reverbWetGain + cho[n * 2]     * chorusWetGain;
+			buffer[samples + n] += rev[n * 2 + 1] * reverbWetGain + cho[n * 2 + 1] * chorusWetGain;
 		}
 	}
 	else //TSF_MONO
 	{
 		for (n = 0; n < samples; n++)
-			buffer[n] += (rev[n * 2] + rev[n * 2 + 1]) * (0.5f * TSF_FX_REVERB_WET_GAIN) + (cho[n * 2] + cho[n * 2 + 1]) * (0.5f * TSF_FX_CHORUS_WET_GAIN);
+			buffer[n] += (rev[n * 2] + rev[n * 2 + 1]) * (0.5f * reverbWetGain) + (cho[n * 2] + cho[n * 2 + 1]) * (0.5f * chorusWetGain);
 	}
 }
 
