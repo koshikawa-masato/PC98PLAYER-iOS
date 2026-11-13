@@ -156,7 +156,6 @@ static std::vector<HardwareKey> hardwareKeys() {
     std::set<int> modifierChords;
     std::map<int,double> repeatAt;
     __weak UITouch* stickTouch;
-    NSHashTable<UITouch*>* panelSwipeBlockedTouches;   // 除外域で始まった指（押している間は切替スワイプを始めない）
     CGRect stickFrame;
     CGRect actionChordFrame;
     std::map<UITouch*,unsigned> actionTouches;
@@ -171,6 +170,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     CGPoint touchpadTouchStart, touchpadTouchLast;
     NSTimeInterval touchpadTouchTime;
     BOOL touchpadTouchTravelled;     // タップの許容量を超えて動いた（＝タップではなく移動）
+    BOOL touchpadTapCancelled;       // 2本目以降の指が触れた（＝マルチタッチ操作の始まり）のでタップにしない
 }
 @property(strong) NSArray<NSArray<UIButton*>*>* keys;
 @property(strong) UIImpactFeedbackGenerator* keyFeedback;
@@ -269,34 +269,11 @@ static std::vector<HardwareKey> hardwareKeys() {
         swipe.minimumNumberOfTouches=3;
         swipe.maximumNumberOfTouches=3;
         [self addGestureRecognizer:swipe];
-        panelSwipeBlockedTouches=[NSHashTable weakObjectsHashTable];
     }
     return self;
 }
-- (BOOL)gestureRecognizer:(UIGestureRecognizer*)gesture shouldReceiveTouch:(UITouch*)touch {
-    BOOL accepted=[self panelSwipeAcceptsTouch:touch];
-    // どれか一本でも除外域で始まったら、その指を離すまで切替スワイプを始めない
-    if(!accepted) [panelSwipeBlockedTouches addObject:touch];
-    return accepted;
-}
-- (BOOL)panelSwipeAcceptsTouch:(UITouch*)touch {
-    if(self.touchpadMode) {
-        // パッド面とクリックボタンの上で始まった操作はマウス操作とし、切替スワイプにしない
-        CGPoint location=[touch locationInView:self];
-        if(CGRectContainsPoint(touchpadFrame,location)) return NO;
-        for(UIButton* button in self.touchpadButtons) if(CGRectContainsPoint(button.frame,location)) return NO;
-        return YES;
-    }
-    // キーボード／ゲームパッドでは場所を問わず受け付ける。キーやボタンの上で始めた
-    // スワイプが入力として漏れないよう、発火の抑制は保留の仕組み（pendingTouches）で行う
-    return YES;
-}
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer*)gesture {
     UIPanGestureRecognizer* swipe=(UIPanGestureRecognizer*)gesture;
-    for(UITouch* touch in panelSwipeBlockedTouches.allObjects) {
-        if(touch.phase==UITouchPhaseEnded || touch.phase==UITouchPhaseCancelled) [panelSwipeBlockedTouches removeObject:touch];
-        else return NO;
-    }
     // 複数指では重心が指の追加でずれるため、原点ではなく認識器の移動量（translation）で判定する
     CGPoint movement=[swipe translationInView:self.superview];
     if(CGPointEqualToPoint(movement,CGPointZero)) movement=[swipe velocityInView:self.superview];
@@ -430,7 +407,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     if(self.mouseClicked) self.mouseClicked((int)sender.tag);
 }
 - (CGFloat)touchpadHeaderBottom {
-    // 上端の帯（パッド面の外）は三本指の切替スワイプとモード表示に使う
+    // 上端の帯はモード表示に使う（三本指の切替スワイプはパッド面の上からでも可能）
     return self.touchpadTopInset+MAX(1,MIN(28,self.bounds.size.height*.12));
 }
 - (void)layoutTouchpad {
@@ -905,12 +882,16 @@ static std::vector<HardwareKey> hardwareKeys() {
     for(UITouch* t in set) {
         CGPoint point=[t locationInView:self];
         if(self.touchpadMode) {
+            // 2本目以降の指が触れたらマルチタッチ操作（三本指スワイプ等）の始まりなので、
+            // 1本目のタッチをタップ（左クリック）としては扱わない
+            if(touchpadTouch && event.allTouches.count>1) touchpadTapCancelled=YES;
             // パッド面の1本目のタッチだけを扱う（上端の帯などパッド外は何もしない）
             if(!touchpadTouch && CGRectContainsPoint(touchpadFrame,point)) {
                 touchpadTouch=t;
                 touchpadTouchStart=touchpadTouchLast=point;
                 touchpadTouchTime=t.timestamp;
                 touchpadTouchTravelled=NO;
+                touchpadTapCancelled=NO;
             }
             continue;
         }
@@ -984,10 +965,11 @@ static std::vector<HardwareKey> hardwareKeys() {
     for(UITouch* t in set) {
         if(t==touchpadTouch) {
             // 動かさずに短く離したらタップ＝左クリック
-            if(!cancelled && !touchpadTouchTravelled && t.timestamp-touchpadTouchTime<.35 && self.mouseClicked)
+            if(!cancelled && !touchpadTouchTravelled && !touchpadTapCancelled && t.timestamp-touchpadTouchTime<.35 && self.mouseClicked)
                 self.mouseClicked(1);
             touchpadTouch=nil;
             touchpadTouchTravelled=NO;
+            touchpadTapCancelled=NO;
             continue;
         }
         if(t==stickTouch) {
@@ -1193,6 +1175,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     stickTouch=nil;
     touchpadTouch=nil;
     touchpadTouchTravelled=NO;
+    touchpadTapCancelled=NO;
     stickDirections=0;
     self.stickKnob.center=CGPointMake(CGRectGetMidX(stickFrame),CGRectGetMidY(stickFrame));
     actionTouches.clear();
