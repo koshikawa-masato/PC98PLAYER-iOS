@@ -58,6 +58,7 @@ struct MidiSynth {
             break;
         case 0xB0: tsf_channel_midi_control(font, channel, data1, data2); break;
         case 0xC0: tsf_channel_set_presetnumber(font, channel, data1, channel == 9); break;
+        case 0xD0: tsf_channel_set_pressure(font, channel, data1); break;
         case 0xE0: tsf_channel_set_pitchwheel(font, channel, data1 | (data2 << 7)); break;   // 0..16383、8192 が中央
         }
     }
