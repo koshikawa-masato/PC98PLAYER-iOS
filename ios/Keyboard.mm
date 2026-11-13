@@ -148,8 +148,12 @@ static std::vector<HardwareKey> hardwareKeys() {
     CGRect stickFrame;
     CGRect actionChordFrame;
     std::map<UITouch*,unsigned> actionTouches;
+    // 切替スワイプ候補の保留：何も押されていない状態から着地した指は、スワイプ確定・
+    // タップ終了・短時間経過のいずれかまでキー／ボタン／スティックとして発火しない。
+    struct PendingTouch { CGPoint start; };
+    std::map<UITouch*,PendingTouch> pendingTouches;
     unsigned stickDirections;
-    CGFloat panelSwipeDirection;     // 二本指切替スワイプの向き（+1=右=次のモード、-1=左=前のモード）
+    CGFloat panelSwipeDirection;     // 三本指切替スワイプの向き（+1=右=次のモード、-1=左=前のモード）
     CGRect touchpadFrame;            // タッチパッド面
     __weak UITouch* touchpadTouch;   // パッド面を操作中のタッチ（1本のみ）
     CGPoint touchpadTouchStart, touchpadTouchLast;
@@ -178,7 +182,7 @@ static std::vector<HardwareKey> hardwareKeys() {
 // 全画面（outlinesOnly）中は従来どおりコントローラーの枠表示を使い、タッチパッドは通常表示に戻ったとき復帰する
 - (BOOL)touchpadMode { return _touchpadMode && !self.outlinesOnly; }
 - (NSInteger)inputModeIndex { return _touchpadMode ? 2 : _controllerMode ? 1 : 0; }
-// 二本指で右スワイプ＝次のモード（+1）、左スワイプ＝前のモード（-1）。両端では止まる
+// 三本指で右スワイプ＝次のモード（+1）、左スワイプ＝前のモード（-1）。両端では止まる
 - (void)stepInputMode:(NSInteger)step {
     NSInteger mode=std::clamp<NSInteger>([self inputModeIndex]+step,0,2);
     self.controllerMode=mode==1;
@@ -249,9 +253,9 @@ static std::vector<HardwareKey> hardwareKeys() {
         self.keys=groups;
         UIPanGestureRecognizer* swipe=[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(swipeInputPanel:)];
         swipe.delegate=self;
-        // 一本指はタイピング・パッド操作に使うため、モード切替は二本指スワイプのみ
-        swipe.minimumNumberOfTouches=2;
-        swipe.maximumNumberOfTouches=2;
+        // 一本指はタイピング・パッド操作、二本指は右クリック等に使うため、モード切替は三本指スワイプのみ
+        swipe.minimumNumberOfTouches=3;
+        swipe.maximumNumberOfTouches=3;
         [self addGestureRecognizer:swipe];
         panelSwipeBlockedTouches=[NSHashTable weakObjectsHashTable];
     }
@@ -259,7 +263,7 @@ static std::vector<HardwareKey> hardwareKeys() {
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer*)gesture shouldReceiveTouch:(UITouch*)touch {
     BOOL accepted=[self panelSwipeAcceptsTouch:touch];
-    // 二本のうちどちらかが除外域で始まったら、その指を離すまで切替スワイプを始めない
+    // どれか一本でも除外域で始まったら、その指を離すまで切替スワイプを始めない
     if(!accepted) [panelSwipeBlockedTouches addObject:touch];
     return accepted;
 }
@@ -271,11 +275,9 @@ static std::vector<HardwareKey> hardwareKeys() {
         for(UIButton* button in self.touchpadButtons) if(CGRectContainsPoint(button.frame,location)) return NO;
         return YES;
     }
-    if(!self.controllerMode) return YES;
-    CGPoint point=[touch locationInView:self];
-    return !CGRectContainsPoint(stickFrame,point) && ![self actionButtonsAt:point] &&
-           !CGRectContainsPoint(self.controllerPause.frame,point) &&
-           !CGRectContainsPoint(self.controllerSettings.frame,point);
+    // キーボード／ゲームパッドでは場所を問わず受け付ける。キーやボタンの上で始めた
+    // スワイプが入力として漏れないよう、発火の抑制は保留の仕組み（pendingTouches）で行う
+    return YES;
 }
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer*)gesture {
     UIPanGestureRecognizer* swipe=(UIPanGestureRecognizer*)gesture;
@@ -283,7 +285,7 @@ static std::vector<HardwareKey> hardwareKeys() {
         if(touch.phase==UITouchPhaseEnded || touch.phase==UITouchPhaseCancelled) [panelSwipeBlockedTouches removeObject:touch];
         else return NO;
     }
-    // 二本指では重心が指の追加でずれるため、原点ではなく認識器の移動量（translation）で判定する
+    // 複数指では重心が指の追加でずれるため、原点ではなく認識器の移動量（translation）で判定する
     CGPoint movement=[swipe translationInView:self.superview];
     if(CGPointEqualToPoint(movement,CGPointZero)) movement=[swipe velocityInView:self.superview];
     // 全モードで左右どちらも受け付ける（右＝次、左＝前）。端では stepInputMode: のクランプで止まる
@@ -291,6 +293,9 @@ static std::vector<HardwareKey> hardwareKeys() {
     return !self.outlinesOnly && !self.switchingInputMode && std::abs(movement.x)>=std::abs(movement.y)*1.4;
 }
 - (void)swipeInputPanel:(UIPanGestureRecognizer*)gesture {
+    // スワイプが始まったら保留中の指は入力にしない。認識に失敗したら通常入力として確定する
+    if(gesture.state==UIGestureRecognizerStateBegan) [self discardPendingTouches];
+    if(gesture.state==UIGestureRecognizerStateFailed) [self commitPendingTouches];
     CGFloat direction=panelSwipeDirection;
     CGFloat distance=MIN(64,self.bounds.size.width*.18);
     CGFloat drag=MAX(0,[gesture translationInView:self.superview].x*direction);
@@ -411,7 +416,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     if(self.mouseClicked) self.mouseClicked((int)sender.tag);
 }
 - (CGFloat)touchpadHeaderBottom {
-    // 上端の帯（パッド面の外）は二本指の切替スワイプとモード表示に使う
+    // 上端の帯（パッド面の外）は三本指の切替スワイプとモード表示に使う
     return self.touchpadTopInset+MAX(1,MIN(28,self.bounds.size.height*.12));
 }
 - (void)layoutTouchpad {
@@ -432,7 +437,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     CGFloat headerTop=self.touchpadTopInset, headerHeight=[self touchpadHeaderBottom]-headerTop;
     NSDictionary* header=@{NSFontAttributeName:[UIFont systemFontOfSize:MAX(6,MIN(11,headerHeight*.45)) weight:UIFontWeightMedium],
         NSForegroundColorAttributeName:PC98Plastic(.30),NSParagraphStyleAttributeName:centered};
-    [@"タッチパッド　◀ 二本指スワイプで切替" drawInRect:CGRectMake(0,headerTop+headerHeight*.25,self.bounds.size.width,headerHeight*.75) withAttributes:header];
+    [@"タッチパッド　◀ 三本指スワイプで切替" drawInRect:CGRectMake(0,headerTop+headerHeight*.25,self.bounds.size.width,headerHeight*.75) withAttributes:header];
     NSDictionary* hint=@{NSFontAttributeName:[UIFont systemFontOfSize:11],
         NSForegroundColorAttributeName:[UIColor colorWithWhite:1 alpha:.45],NSParagraphStyleAttributeName:centered};
     [@"ドラッグでカーソル移動・タップで左クリック" drawInRect:CGRectMake(touchpadFrame.origin.x,CGRectGetMidY(touchpadFrame)-7,touchpadFrame.size.width,16) withAttributes:hint];
@@ -820,6 +825,43 @@ static std::vector<HardwareKey> hardwareKeys() {
     return [super pointInside:point withEvent:event] && (!self.outlinesOnly || CGRectContainsPoint(stickFrame,point) || [self actionButtonsAt:point]!=0 ||
         (!self.controllerPause.hidden && CGRectContainsPoint(self.controllerPause.frame,point)));
 }
+// 保留中の指があるか、または確定済みの入力が何も無い状態から着地した指は、切替スワイプの
+// 候補として保留する。確定済みの入力（キー保持・スティック操作）がある状態で追加された指は
+// コンボ入力として即時に確定する（遅延ゼロ）。
+- (BOOL)hasActiveInputTouches { return !touches.empty() || !actionTouches.empty() || stickTouch!=nil; }
+- (void)armPendingTimer {
+    // 最後に保留へ加わった指から 0.15 秒で確定する（押し続け＝同時長押しとして救済）
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(commitPendingTouches) object:nil];
+    [self performSelector:@selector(commitPendingTouches) withObject:nil afterDelay:0.15];
+}
+- (void)commitPendingTouches {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(commitPendingTouches) object:nil];
+    if(pendingTouches.empty()) return;
+    std::map<UITouch*,PendingTouch> pending; pending.swap(pendingTouches);
+    NSMutableArray* pressed=[NSMutableArray new];
+    for(auto& pair:pending) {
+        UITouch* t=pair.first;
+        CGPoint point=[t locationInView:self];
+        if(self.controllerMode) {
+            if(CGRectContainsPoint(stickFrame,point)) {
+                if(!stickTouch) { stickTouch=t; [self moveStickTo:point]; }
+            } else {
+                unsigned buttons=[self actionButtonsAt:point];
+                actionTouches[t]=buttons;
+                [self changeActionButtonsFrom:0 to:buttons];
+            }
+            continue;
+        }
+        UIButton* key=[self keyAtPoint:point];
+        touches[t]=key;
+        if(key) [pressed addObject:key];
+    }
+    [self pressKeys:pressed];
+}
+- (void)discardPendingTouches {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(commitPendingTouches) object:nil];
+    pendingTouches.clear();
+}
 - (void)touchesBegan:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
     NSMutableArray* pressed=[NSMutableArray new];
     for(UITouch* t in set) {
@@ -832,6 +874,11 @@ static std::vector<HardwareKey> hardwareKeys() {
                 touchpadTouchTime=t.timestamp;
                 touchpadTouchTravelled=NO;
             }
+            continue;
+        }
+        if(!pendingTouches.empty() || ![self hasActiveInputTouches]) {
+            pendingTouches[t]={point};
+            [self armPendingTimer];
             continue;
         }
         if(self.controllerMode) {
@@ -853,6 +900,17 @@ static std::vector<HardwareKey> hardwareKeys() {
 - (void)touchesMoved:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
     NSMutableArray* pressed=[NSMutableArray new];
     for(UITouch* t in set) {
+        auto pending=pendingTouches.find(t);
+        if(pending!=pendingTouches.end()) {
+            // 保留が1本だけで大きく動いたらスワイプではなくドラッグ（スティック操作・キーなぞり）
+            if(pendingTouches.size()==1) {
+                CGPoint point=[t locationInView:self];
+                CGFloat dx=point.x-pending->second.start.x, dy=point.y-pending->second.start.y;
+                CGFloat threshold=(self.controllerMode && CGRectContainsPoint(stickFrame,pending->second.start)) ? 6 : 10;
+                if(dx*dx+dy*dy>=threshold*threshold) [self commitPendingTouches];
+                else continue;
+            } else continue;
+        }
         if(t==touchpadTouch) { [self moveTouchpadTouch:t]; continue; }
         if(t==stickTouch) { [self moveStickTo:[t locationInView:self]]; continue; }
         auto action=actionTouches.find(t);
@@ -874,6 +932,15 @@ static std::vector<HardwareKey> hardwareKeys() {
     [self pressKeys:pressed];
 }
 - (void)endTouches:(NSSet<UITouch*>*)set cancelled:(BOOL)cancelled {
+    if(cancelled) {
+        for(UITouch* t in set) pendingTouches.erase(t);
+        if(pendingTouches.empty())
+            [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(commitPendingTouches) object:nil];
+    } else {
+        // 保留中の指が離れる＝タップ。先に全ての保留を確定してから通常の終了処理に回すことで、
+        // 「修飾キーを保留したまま文字キーを離す」ようなコード入力の順序も保たれる
+        for(UITouch* t in set) if(pendingTouches.count(t)) { [self commitPendingTouches]; break; }
+    }
     for(UITouch* t in set) {
         if(t==touchpadTouch) {
             // 動かさずに短く離したらタップ＝左クリック
@@ -980,12 +1047,12 @@ static std::vector<HardwareKey> hardwareKeys() {
     // 右＝次、左＝前の一方向チェーン：キーボード→ゲームパッド→タッチパッド（端では止まる）→…→キーボード
     const NSInteger steps[]={1,1,1,-1,-1,-1}, expected[]={1,2,2,1,0,0};
     BOOL passed=[probe inputModeIndex]==0;
-    // モード切替のパン認識器は二本指専用（一本指のタイピング・パッド操作と競合しない）
+    // モード切替のパン認識器は三本指専用（一本指のタイピング・パッド操作、二本指の右クリック等と競合しない）
     NSUInteger switchPans=0;
     for(UIGestureRecognizer* gesture in probe.gestureRecognizers) {
         if(![gesture isKindOfClass:UIPanGestureRecognizer.class] || gesture.delegate!=probe) continue;
         UIPanGestureRecognizer* pan=(UIPanGestureRecognizer*)gesture;
-        passed=passed && pan.minimumNumberOfTouches==2 && pan.maximumNumberOfTouches==2;
+        passed=passed && pan.minimumNumberOfTouches==3 && pan.maximumNumberOfTouches==3;
         ++switchPans;
     }
     passed=passed && switchPans==1;
@@ -1088,6 +1155,8 @@ static std::vector<HardwareKey> hardwareKeys() {
     stickDirections=0;
     self.stickKnob.center=CGPointMake(CGRectGetMidX(stickFrame),CGRectGetMidY(stickFrame));
     actionTouches.clear();
+    pendingTouches.clear();
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(commitPendingTouches) object:nil];
     touches.clear(); counts.clear(); latched.clear(); modifierChords.clear(); repeatAt.clear();
     for(NSArray* row in self.keys) for(PC98KeyButton* b in row) b.retroPressed=NO;
     for(PC98KeyButton* key in self.controllerKeys) key.retroPressed=NO;
