@@ -51,6 +51,7 @@ static std::vector<HardwareKey> hardwareKeys() {
 @interface PC98KeyButton : UIButton
 @property(copy) BOOL (^activate)(void);
 @property(nonatomic) BOOL retroPressed;
+@property(nonatomic) BOOL retroCandidate;   // 保留中（指は触れているが、まだ入力になっていない）
 @property BOOL modifier;
 @property BOOL steppedReturn;
 @property BOOL alignedLegend;
@@ -64,6 +65,11 @@ static std::vector<HardwareKey> hardwareKeys() {
 - (void)setRetroPressed:(BOOL)value {
     if(_retroPressed==value) return;
     _retroPressed=value;
+    [self setNeedsDisplay];
+}
+- (void)setRetroCandidate:(BOOL)value {
+    if(_retroCandidate==value) return;
+    _retroCandidate=value;
     [self setNeedsDisplay];
 }
 - (UIBezierPath*)capPath:(CGRect)r {
@@ -107,8 +113,9 @@ static std::vector<HardwareKey> hardwareKeys() {
         [[UIColor colorWithWhite:0 alpha:.7] setStroke];
         outline.lineWidth=3;
         [outline stroke];
-        [[UIColor colorWithWhite:1 alpha:self.retroPressed?1:.65] setStroke];
-        outline.lineWidth=self.retroPressed?2:1;
+        if(self.retroCandidate && !self.retroPressed) [[UIColor colorWithRed:1 green:.80 blue:.35 alpha:1] setStroke];
+        else [[UIColor colorWithWhite:1 alpha:self.retroPressed?1:.65] setStroke];
+        outline.lineWidth=(self.retroPressed || self.retroCandidate)?2:1;
         [outline stroke];
         return;
     }
@@ -120,6 +127,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     CGRect face=CGRectMake(2*detail,(self.retroPressed?4:1.5)*detail,MAX(1,r.size.width-3*detail),MAX(1,r.size.height-(self.retroPressed?5:6)*detail));
     CGFloat tone=self.modifier?.75:.95;
     if(self.retroPressed) tone-=.13;
+    else if(self.retroCandidate) tone=MIN(1,tone+.06);
     CGContextSaveGState(context); [[self capPath:face] addClip];
     PC98Gradient(face,PC98Plastic(tone),PC98Plastic(tone-.10),2*detail); CGContextRestoreGState(context);
     [PC98Plastic(MIN(1,tone+.08)) setStroke];
@@ -131,6 +139,10 @@ static std::vector<HardwareKey> hardwareKeys() {
         [self.kana drawAtPoint:CGPointMake(CGRectGetMaxX(face)-label.width-2*detail,CGRectGetMaxY(face)-label.height-detail) withAttributes:style];
     }
     CGContextRestoreGState(context);
+    if(self.retroCandidate && !self.retroPressed) {
+        [[UIColor colorWithRed:1 green:.80 blue:.35 alpha:1] setStroke];
+        UIBezierPath* rim=[self capPath:CGRectInset(r,1.2*detail,1.2*detail)]; rim.lineWidth=1.6*detail; [rim stroke];
+    }
     if(self.retroPressed && self.tag>=0x70 && self.tag<=0x74) {
         [[UIColor colorWithRed:.55 green:.29 blue:.08 alpha:1] setFill];
         UIRectFill(CGRectMake(CGRectGetMaxX(face)-5,CGRectGetMinY(face)+2,3,2));
@@ -302,7 +314,8 @@ static std::vector<HardwareKey> hardwareKeys() {
     BOOL reduceMotion=UIAccessibilityIsReduceMotionEnabled();
     if(gesture.state==UIGestureRecognizerStateBegan) [self releaseAll];
     if(gesture.state==UIGestureRecognizerStateBegan || gesture.state==UIGestureRecognizerStateChanged) {
-        if(!reduceMotion) self.transform=CGAffineTransformMakeTranslation(direction*MIN(distance,drag*.55),0);
+        // スワイプが始まった瞬間からパネルが指に 1:1 で追従してスクロールする
+        if(!reduceMotion) self.transform=CGAffineTransformMakeTranslation(direction*MIN(drag,self.bounds.size.width*.45),0);
         return;
     }
 
@@ -317,9 +330,10 @@ static std::vector<HardwareKey> hardwareKeys() {
     }
 
     self.switchingInputMode=YES;
+    CGFloat exitOffset=MAX(distance,MIN(drag,self.bounds.size.width*.45));
     [UIView animateWithDuration:reduceMotion ? 0 : .10 animations:^{
         if(!reduceMotion) {
-            self.transform=CGAffineTransformMakeTranslation(direction*distance,0);
+            self.transform=CGAffineTransformMakeTranslation(direction*exitOffset,0);
         }
     } completion:^(BOOL finished) {
         if(self.outlinesOnly) {
@@ -838,6 +852,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(commitPendingTouches) object:nil];
     if(pendingTouches.empty()) return;
     std::map<UITouch*,PendingTouch> pending; pending.swap(pendingTouches);
+    [self refreshPendingCandidates];
     NSMutableArray* pressed=[NSMutableArray new];
     for(auto& pair:pending) {
         UITouch* t=pair.first;
@@ -861,6 +876,29 @@ static std::vector<HardwareKey> hardwareKeys() {
 - (void)discardPendingTouches {
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(commitPendingTouches) object:nil];
     pendingTouches.clear();
+    [self refreshPendingCandidates];
+}
+// 保留中の指が触れているキー／ボタン／スティックを「候補」表示にする。押下表示（retroPressed）
+// とは別の見た目で、「触れているがまだ入力ではない」ことを目で見て分かるようにする。
+- (void)refreshPendingCandidates {
+    for(NSArray* row in self.keys) for(PC98KeyButton* b in row) b.retroCandidate=NO;
+    for(PC98KeyButton* b in self.controllerKeys) b.retroCandidate=NO;
+    BOOL stick=NO;
+    for(auto& pair:pendingTouches) {
+        CGPoint point=[pair.first locationInView:self];
+        if(self.controllerMode) {
+            if(CGRectContainsPoint(stickFrame,point)) stick=YES;
+            else {
+                unsigned mask=[self actionButtonsAt:point];
+                for(unsigned i=0;i<2;++i) if(mask&(1u<<i)) self.controllerKeys[4+i].retroCandidate=YES;
+            }
+        } else {
+            PC98KeyButton* key=(PC98KeyButton*)[self keyAtPoint:point];
+            if(key) key.retroCandidate=YES;
+        }
+    }
+    self.stickKnob.backgroundColor=PC98Plastic(stick ? .72 : .55);
+    self.stickKnob.layer.borderColor=(stick ? [UIColor colorWithRed:1 green:.80 blue:.35 alpha:1] : PC98Plastic(.40)).CGColor;
 }
 - (void)touchesBegan:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
     NSMutableArray* pressed=[NSMutableArray new];
@@ -896,6 +934,7 @@ static std::vector<HardwareKey> hardwareKeys() {
         if(key) [pressed addObject:key];
     }
     [self pressKeys:pressed];
+    [self refreshPendingCandidates];
 }
 - (void)touchesMoved:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event {
     NSMutableArray* pressed=[NSMutableArray new];
@@ -930,6 +969,7 @@ static std::vector<HardwareKey> hardwareKeys() {
         if(next) [pressed addObject:next];
     }
     [self pressKeys:pressed];
+    [self refreshPendingCandidates];
 }
 - (void)endTouches:(NSSet<UITouch*>*)set cancelled:(BOOL)cancelled {
     if(cancelled) {
@@ -965,6 +1005,7 @@ static std::vector<HardwareKey> hardwareKeys() {
         if(it->second) [self updateKey:it->second down:NO cancelled:cancelled];
         touches.erase(it);
     }
+    [self refreshPendingCandidates];
 }
 - (void)touchesEnded:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event { [self endTouches:set cancelled:NO]; }
 - (void)touchesCancelled:(NSSet<UITouch*>*)set withEvent:(UIEvent*)event { [self endTouches:set cancelled:YES]; }
@@ -1157,6 +1198,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     actionTouches.clear();
     pendingTouches.clear();
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(commitPendingTouches) object:nil];
+    [self refreshPendingCandidates];
     touches.clear(); counts.clear(); latched.clear(); modifierChords.clear(); repeatAt.clear();
     for(NSArray* row in self.keys) for(PC98KeyButton* b in row) b.retroPressed=NO;
     for(PC98KeyButton* key in self.controllerKeys) key.retroPressed=NO;
