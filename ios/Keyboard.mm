@@ -281,6 +281,11 @@ static std::vector<HardwareKey> hardwareKeys() {
     panelSwipeDirection=movement.x<0 ? -1 : 1;
     return !self.outlinesOnly && !self.switchingInputMode && std::abs(movement.x)>=std::abs(movement.y)*1.4;
 }
+- (void)applySwipeSlide:(CGAffineTransform)slide {
+    self.transform=slide;
+    // ゲーム画面もパネルと同じ量だけスライドさせ、画面全体で切り替わる見た目にする
+    self.swipeCompanionView.transform=slide;
+}
 - (void)swipeInputPanel:(UIPanGestureRecognizer*)gesture {
     // スワイプが始まったら保留中の指は入力にしない。認識に失敗したら通常入力として確定する
     if(gesture.state==UIGestureRecognizerStateBegan) [self discardPendingTouches];
@@ -292,7 +297,7 @@ static std::vector<HardwareKey> hardwareKeys() {
     if(gesture.state==UIGestureRecognizerStateBegan) [self releaseAll];
     if(gesture.state==UIGestureRecognizerStateBegan || gesture.state==UIGestureRecognizerStateChanged) {
         // スワイプが始まった瞬間からパネルが指に 1:1 で追従してスクロールする
-        if(!reduceMotion) self.transform=CGAffineTransformMakeTranslation(direction*MIN(drag,self.bounds.size.width*.45),0);
+        if(!reduceMotion) [self applySwipeSlide:CGAffineTransformMakeTranslation(direction*MIN(drag,self.bounds.size.width*.45),0)];
         return;
     }
 
@@ -301,7 +306,7 @@ static std::vector<HardwareKey> hardwareKeys() {
                 (drag>=MIN(70,self.bounds.size.width*.22) || (drag>=20 && velocity>450));
     if(!change) {
         [UIView animateWithDuration:reduceMotion ? 0 : .18 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
-            self.transform=CGAffineTransformIdentity;
+            [self applySwipeSlide:CGAffineTransformIdentity];
         } completion:nil];
         return;
     }
@@ -310,11 +315,11 @@ static std::vector<HardwareKey> hardwareKeys() {
     CGFloat exitOffset=MAX(distance,MIN(drag,self.bounds.size.width*.45));
     [UIView animateWithDuration:reduceMotion ? 0 : .10 animations:^{
         if(!reduceMotion) {
-            self.transform=CGAffineTransformMakeTranslation(direction*exitOffset,0);
+            [self applySwipeSlide:CGAffineTransformMakeTranslation(direction*exitOffset,0)];
         }
     } completion:^(BOOL finished) {
         if(self.outlinesOnly) {
-            self.transform=CGAffineTransformIdentity;
+            [self applySwipeSlide:CGAffineTransformIdentity];
             self.switchingInputMode=NO;
             return;
         }
@@ -325,9 +330,9 @@ static std::vector<HardwareKey> hardwareKeys() {
         [self setNeedsDisplay];
         // Keep the slide on the same side of the resting position, avoiding
         // a full-panel fade and the intermediate offscreen composition.
-        self.transform=reduceMotion ? CGAffineTransformIdentity : CGAffineTransformMakeTranslation(direction*distance,0);
+        [self applySwipeSlide:reduceMotion ? CGAffineTransformIdentity : CGAffineTransformMakeTranslation(direction*distance,0)];
         [UIView animateWithDuration:reduceMotion ? 0 : .18 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
-            self.transform=CGAffineTransformIdentity;
+            [self applySwipeSlide:CGAffineTransformIdentity];
         } completion:^(BOOL completed) {
             self.switchingInputMode=NO;
         }];

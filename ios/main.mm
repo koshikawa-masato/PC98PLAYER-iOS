@@ -946,6 +946,8 @@ static void PC98ProducerEntry(void* context) {
     };
     self.bluetoothBindings=pc98_controller_bindings([NSUserDefaults.standardUserDefaults arrayForKey:bluetoothBindingsKey]);
     [self.keyboard loadControllerBindingsForGame:@"demo"];
+    // モード切替スワイプでは、ゲーム画面（モニタのキャビネット）もパネルと一緒にスライドする
+    self.keyboard.swipeCompanionView=self.topPanel;
     [self.view addSubview:self.keyboard];
     self.spinner=[[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge]; self.spinner.color=PC98Plastic(.8); [self.topPanel addSubview:self.spinner];
     self.displayLink=[CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
