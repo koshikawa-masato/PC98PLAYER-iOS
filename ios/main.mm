@@ -1278,7 +1278,7 @@ static void PC98ProducerEntry(void* context) {
         result[@"audio"]=@{@"sample_rate":@(audio.sampleRate),@"queued_samples":@(audio.samples.size()),
             @"underrun_frames":@(audio.underrunFrames),@"started":@(audio.started),@"paused":@(audio.paused)}; }
     result[@"midi"]=@{@"fontLoaded":@(midiFontLoaded),@"mpuEnabled":@(player ? player->ps.cfg.midi : 0),
-        @"messages":@(midiSynth.messageCount),@"noteOns":@(midiSynth.noteOnCount),
+        @"messages":@(midiSynth.messageCount),@"noteOns":@(midiSynth.noteOnCount),@"limiterGain":@(midiSynth.limiterGain),
         @"externalOut":@(midiExternal),@"outConnected":@(midiOut.connected()),
         @"outDestination":midiOut.connectedName.empty()?@"":@(midiOut.connectedName.c_str()),
         @"outMessages":@(midiOut.messageCount),@"outSent":@(midiOut.sentCount),@"outErrors":@(midiOut.errorCount)};
@@ -1355,7 +1355,7 @@ static void PC98ProducerEntry(void* context) {
             (failure==GuestFailure::Command?@"Bad command or file name":failure==GuestFailure::Memory?@"Not enough memory":summary):text(player->m->status);
         [self reportError:message code:code summary:summary];
     }
-    paused=YES;[self releaseKeys]; { std::lock_guard<std::mutex> lock(playerMutex); audio.close(); midiOut.allSoundOff(); }
+    paused=YES;[self releaseKeys]; { std::lock_guard<std::mutex> lock(playerMutex); audio.close(); midiSynth.allSoundOff(); midiOut.allSoundOff(); }
     self.status.text=player->m->quit>=2?text(player->m->status):@"実行が終了しました";
 }
 - (void)updateScan:(int)scan {
@@ -1723,7 +1723,7 @@ static void PC98ProducerEntry(void* context) {
     if(error || !opened) self.status.text=@"音声を開始できませんでした（映像のみ）";
 }
 - (void)suspend {
-    [self releaseKeys]; { std::lock_guard<std::mutex> lock(playerMutex); paused=YES; audio.pause(); midiOut.allSoundOff(); }
+    [self releaseKeys]; { std::lock_guard<std::mutex> lock(playerMutex); paused=YES; audio.pause(); midiSynth.allSoundOff(); midiOut.allSoundOff(); }
     self.status.text=@"一時停止 — ▶︎で再開";
 }
 - (void)showFloppyDrives {
@@ -2129,7 +2129,7 @@ static void PC98ProducerEntry(void* context) {
     for(int slot=0;slot<STATE_SLOTS;++slot) [menu addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"スロット %d",slot+1] style:UIAlertActionStyleDefault handler:^(UIAlertAction* a) {
         PlayerController* s=weak; if(!s || !s->player) return;
         [s.reportedErrorCodes removeObject:load?@"state_load":@"state_save"];
-        std::string error; BOOL ok; { std::lock_guard<std::mutex> lock(s->playerMutex); ok=load?s->player->load_state(slot,&error):s->player->save_state(slot,&error); }
+        std::string error; BOOL ok; { std::lock_guard<std::mutex> lock(s->playerMutex); ok=load?s->player->load_state(slot,&error):s->player->save_state(slot,&error); if(load && ok) { s->midiSynth.allSoundOff(); s->midiOut.allSoundOff(); } }
         // A failed load preserves the current state and its filtered screenshot.
         if(load && ok) { [s.contentFilter reset];s.monitor.image=nil; }
         [s releaseKeys]; { std::lock_guard<std::mutex> lock(s->playerMutex); s->audio.clear(); } s->nextFrame=CACurrentMediaTime();

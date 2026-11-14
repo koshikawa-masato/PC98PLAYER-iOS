@@ -14,6 +14,8 @@ struct MidiSynth {
     std::vector<float> scratch;
     uint64_t messageCount = 0, noteOnCount = 0;
     float gain = 1.0f;   // モジュレータ実装で減衰スケールが仕様準拠になり全体が下がった分の補償（+6dB）。試聴で要調整
+    float limiterGain = 1.0f;   // 出力段リミッタの現在ゲイン（診断用に公開）
+    uint32_t ditherState = 0x2545F491u;
     int outputRate = 0;
     // Roland GS エフェクトパラメータ（SysEx で受信）。リバーブは既定値
     // （Hall 2 / Time 64 / Level 127）が従来の固定チューニングと一致する。
@@ -100,8 +102,39 @@ struct MidiSynth {
         if (!font || !interleaved || !frames) return;
         scratch.assign(frames * 2, 0.0f);
         tsf_render_float(font, scratch.data(), (int)frames, 1);
+        // 出力段リミッタ（MIDI バス専用）：ブロックのピークを先に測り、天井を超える分だけ
+        // バス全体のゲインを下げる。アタックはブロック単位で即時（＝先行測定なので
+        // ピークを通さない）、リリースは約 120ms かけて滑らかに戻す。波形整形ではないので
+        // 倍音歪みは出ない。エミュレータ側（ドライ）の音には一切触れない。
+        const float ceiling = 0.92f;
+        float peak = 0.0f;
         for (size_t i = 0; i < frames * 2; ++i) {
-            float v = interleaved[i] + scratch[i] * 32767.0f;
+            float a = scratch[i] < 0 ? -scratch[i] : scratch[i];
+            if (a > peak) peak = a;
+        }
+        float target = peak > ceiling ? ceiling / peak : 1.0f;
+        // アタックは即時：ブロック先頭から target 以下のゲインで描く（先行測定なので
+        // ランプを掛けるとブロック前半でピークを通してしまう）。リリースだけを
+        // ランプにし、かつこのブロックの上限 target は決して超えない。
+        float gFrom = limiterGain < target ? limiterGain : target;
+        float gTo = gFrom;
+        if (target > gFrom) {   // 回復方向：ブロック時間に応じて 1.0 へ部分的に戻す
+            float blockSec = outputRate > 0 ? (float)frames / (float)outputRate : 0.02f;
+            float step = blockSec / 0.12f; if (step > 1.0f) step = 1.0f;
+            gTo = gFrom + (1.0f - gFrom) * step;
+            if (gTo > target) gTo = target;
+        }
+        limiterGain = gTo;
+        for (size_t i = 0; i < frames * 2; ++i) {
+            float s = scratch[i];
+            if (s == 0.0f) continue;   // MIDI が無音のサンプルは従来と完全一致させる
+            float g = gFrom + (gTo - gFrom) * (float)(i / 2 + 1) / (float)frames;
+            // TPDF ディザ（±1 LSB）で切り捨ての量子化バイアスを消す
+            ditherState ^= ditherState << 13; ditherState ^= ditherState >> 17; ditherState ^= ditherState << 5;
+            float r1 = (float)(ditherState >> 8) * (1.0f / 16777216.0f);
+            ditherState ^= ditherState << 13; ditherState ^= ditherState >> 17; ditherState ^= ditherState << 5;
+            float r2 = (float)(ditherState >> 8) * (1.0f / 16777216.0f);
+            float v = interleaved[i] + s * 32767.0f * g + (r1 - r2);
             interleaved[i] = (int16_t)(v < -32768.0f ? -32768.0f : v > 32767.0f ? 32767.0f : v);
         }
     }
