@@ -113,11 +113,12 @@ struct MidiSynth {
             if (a > peak) peak = a;
         }
         float target = peak > ceiling ? ceiling / peak : 1.0f;
-        // アタックは即時：ブロック先頭から target 以下のゲインで描く（先行測定なので
-        // ランプを掛けるとブロック前半でピークを通してしまう）。リリースだけを
-        // ランプにし、かつこのブロックの上限 target は決して超えない。
-        float gFrom = limiterGain < target ? limiterGain : target;
-        float gTo = gFrom;
+        // アタックはブロック先頭の約1msで target まで滑らかに下げる。ブロック境界で
+        // ゲインを一段に切り替えると、前の曲の残響など鳴っている音に段差が乗り
+        // 「ブツッ」というクリックになるため。ピークは先行測定できているので、
+        // 1ms のランプでも天井の超過はその間の立ち上がり分だけで済む。
+        // リリースはブロック全体でランプし、このブロックの上限 target は超えない。
+        float gFrom = limiterGain, gTo = target;
         if (target > gFrom) {   // 回復方向：ブロック時間に応じて 1.0 へ部分的に戻す
             float blockSec = outputRate > 0 ? (float)frames / (float)outputRate : 0.02f;
             float step = blockSec / 0.12f; if (step > 1.0f) step = 1.0f;
@@ -125,10 +126,16 @@ struct MidiSynth {
             if (gTo > target) gTo = target;
         }
         limiterGain = gTo;
+        const size_t attackFrames = outputRate > 0 ? (size_t)(outputRate / 1000) : 44;
         for (size_t i = 0; i < frames * 2; ++i) {
             float s = scratch[i];
             if (s == 0.0f) continue;   // MIDI が無音のサンプルは従来と完全一致させる
-            float g = gFrom + (gTo - gFrom) * (float)(i / 2 + 1) / (float)frames;
+            size_t frame = i / 2;
+            float g;
+            if (gTo < gFrom)   // アタック：先頭の約1msだけランプ、残りは gTo 一定
+                g = frame < attackFrames ? gFrom + (gTo - gFrom) * (float)(frame + 1) / (float)attackFrames : gTo;
+            else
+                g = gFrom + (gTo - gFrom) * (float)(frame + 1) / (float)frames;
             // TPDF ディザ（±1 LSB）で切り捨ての量子化バイアスを消す
             ditherState ^= ditherState << 13; ditherState ^= ditherState >> 17; ditherState ^= ditherState << 5;
             float r1 = (float)(ditherState >> 8) * (1.0f / 16777216.0f);
