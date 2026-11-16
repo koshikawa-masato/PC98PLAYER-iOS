@@ -16,6 +16,8 @@ struct MidiSynth {
     float gain = 1.0f;   // モジュレータ実装で減衰スケールが仕様準拠になり全体が下がった分の補償（+6dB）。試聴で要調整
     float limiterGain = 1.0f;   // 出力段リミッタの現在ゲイン（診断用に公開）
     uint32_t ditherState = 0x2545F491u;
+    // CC7／CC11 の現在値と目標値。ハードな跳びをスルーレート制限で滑らかにする
+    int volCur[16], volTgt[16], expCur[16], expTgt[16];
     int outputRate = 0;
     // Roland GS エフェクトパラメータ（SysEx で受信）。リバーブは既定値
     // （Hall 2 / Time 64 / Level 127）が従来の固定チューニングと一致する。
@@ -92,7 +94,14 @@ struct MidiSynth {
             if (data2) { tsf_channel_note_on(font, channel, data1, data2 / 127.0f); ++noteOnCount; }
             else tsf_channel_note_off(font, channel, data1);
             break;
-        case 0xB0: tsf_channel_midi_control(font, channel, data1, data2); break;
+        case 0xB0:
+            if (data1 == 7) volTgt[channel] = data2;         // 音量はランプ経由で反映（renderMix 参照）
+            else if (data1 == 11) expTgt[channel] = data2;   // エクスプレッションも同様
+            else {
+                tsf_channel_midi_control(font, channel, data1, data2);
+                if (data1 == 121) volCur[channel] = volTgt[channel] = expCur[channel] = expTgt[channel] = 127;
+            }
+            break;
         case 0xC0: tsf_channel_set_presetnumber(font, channel, data1, channel == 9); break;
         case 0xD0: tsf_channel_set_pressure(font, channel, data1); break;
         case 0xE0: tsf_channel_set_pitchwheel(font, channel, data1 | (data2 << 7)); break;   // 0..16383、8192 が中央
@@ -101,7 +110,13 @@ struct MidiSynth {
     void renderMix(int16_t* interleaved, size_t frames) {
         if (!font || !interleaved || !frames) return;
         scratch.assign(frames * 2, 0.0f);
-        tsf_render_float(font, scratch.data(), (int)frames, 1);
+        // CC7／CC11 のランプを効かせるため、ブロックを細かく刻んで描く
+        for (size_t done = 0; done < frames;) {
+            size_t n = frames - done; if (n > 128) n = 128;
+            advanceCcRamps((int)n);
+            tsf_render_float(font, scratch.data() + done * 2, (int)n, 1);
+            done += n;
+        }
         // 出力段リミッタ（MIDI バス専用）：ブロックのピークを先に測り、天井を超える分だけ
         // バス全体のゲインを下げる。アタックはブロック単位で即時（＝先行測定なので
         // ピークを通さない）、リリースは約 120ms かけて滑らかに戻す。波形整形ではないので
@@ -198,5 +213,22 @@ private:
     // tsf は設定されたことのないチャンネルのノートオンを捨てるため、最初に全チャンネルを作る
     void initChannels() {
         for (int ch = 0; ch < 16; ++ch) tsf_channel_set_presetnumber(font, ch, 0, ch == 9);
+        for (int ch = 0; ch < 16; ++ch) volCur[ch] = volTgt[ch] = expCur[ch] = expTgt[ch] = 127;
+    }
+    // CC7／CC11 を目標値へ少しずつ寄せ、tsf へ中間値を送る（フルスイングで約12ms）。
+    // チャンネル音量は発音中のノートにも即効くため、値の跳びがそのまま波形の段差になる。
+    void advanceCcRamps(int chunkFrames) {
+        int step = outputRate > 0 ? (int)(127.0 * chunkFrames / (outputRate * 0.012) + 0.5) : 32;
+        if (step < 1) step = 1;
+        for (int ch = 0; ch < 16; ++ch) {
+            if (volCur[ch] != volTgt[ch]) {
+                int d = volTgt[ch] - volCur[ch]; if (d > step) d = step; else if (d < -step) d = -step;
+                volCur[ch] += d; tsf_channel_midi_control(font, ch, 7, volCur[ch]);
+            }
+            if (expCur[ch] != expTgt[ch]) {
+                int d = expTgt[ch] - expCur[ch]; if (d > step) d = step; else if (d < -step) d = -step;
+                expCur[ch] += d; tsf_channel_midi_control(font, ch, 11, expCur[ch]);
+            }
+        }
     }
 };
