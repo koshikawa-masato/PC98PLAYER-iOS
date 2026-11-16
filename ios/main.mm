@@ -193,7 +193,12 @@ struct MidiDispatch {
     BOOL external=NO;
     void handleMessage(const uint8_t* msg, int len) {
         g_midiLog.message(g_midiLogFrame.load(std::memory_order_relaxed), msg, len);
-        if(external) { if(out) out->handleMessage(msg, len); }
+        if(external) {
+            if(out) out->handleMessage(msg, len);
+            // 外部出力時も内蔵シンセへ状態だけ通しておく（描画はしない）。
+            // ステート保存時の音色スナップショットを両モードで同じに保つため
+            if(synth) synth->handleMessage(msg, len);
+        }
         else if(synth) synth->handleMessage(msg, len);
     }
 };
@@ -2361,7 +2366,29 @@ static void PC98ProducerEntry(void* context) {
             }
         }
         [s.reportedErrorCodes removeObject:load?@"state_load":@"state_save"];
-        std::string error; BOOL ok; { std::lock_guard<std::mutex> lock(s->playerMutex); ok=load?s->player->load_state((int)slot,&error):s->player->save_state((int)slot,&error); if(load && ok) { s->midiSynth.allSoundOff(); s->midiOut.allSoundOff(); } }
+        std::string error; BOOL ok;
+        { std::lock_guard<std::mutex> lock(s->playerMutex);
+          ok=load?s->player->load_state((int)slot,&error):s->player->save_state((int)slot,&error);
+          if(ok && !load) {
+              // 音色・コントローラー・GS設定もステートと一緒に保存する
+              std::vector<uint8_t> blob; s->midiSynth.snapshotState(blob);
+              state_slot_midi_save(s->player->ps.cfg.root,(int)slot,blob);
+          }
+          if(load && ok) {
+              // 保存時点の音色へ戻す。スナップショットが無い旧ステートでは
+              // 現セッションの音色が漏れないよう初期状態へ戻す
+              std::vector<uint8_t> blob;
+              BOOL restored=state_slot_midi_load(s->player->ps.cfg.root,(int)slot,&blob) && s->midiSynth.restoreState(blob.data(),blob.size());
+              if(!restored) s->midiSynth.reset();
+              if(s->midiExternal) {
+                  s->midiOut.reset();
+                  if(restored) {
+                      std::vector<std::vector<uint8_t>> msgs;
+                      if(s->midiSynth.stateReplayMessages(blob.data(),blob.size(),msgs))
+                          for(auto& m: msgs) s->midiOut.handleMessage(m.data(),(int)m.size());
+                  }
+              } else s->midiOut.allSoundOff();
+          } }
         // A failed load preserves the current state and its filtered screenshot.
         if(load && ok) { [s.contentFilter reset];s.monitor.image=nil; }
         [s releaseKeys]; { std::lock_guard<std::mutex> lock(s->playerMutex); s->audio.clear(); } s->nextFrame=CACurrentMediaTime();
@@ -2887,6 +2914,28 @@ static void PC98ProducerEntry(void* context) {
     bool deleteDone=state_slot_delete(player->ps.cfg.root,7);
     SlotInfo deletedInfo; bool deletedGone=!state_slot_info(player->ps.cfg.root,7,&deletedInfo);
     result[@"stateSlotLock"]=@(lockSet && lockedSaveBlocked && lockedSeen && lockedDeleteBlocked && lockCleared && deleteDone && deletedGone);
+    bool midiStateOk=false;
+    if(midiSynth.font) {
+        const uint8_t pc42[]={0xC0,42}, ccVol40[]={0xB0,7,40}, pcDrum25[]={0xC9,8};
+        const uint8_t gsRev1[]={0xF0,0x41,0x10,0x42,0x12,0x40,0x01,0x30,0x01,0x0E,0xF7};
+        midiSynth.handleMessage(pc42,2); midiSynth.handleMessage(ccVol40,3);
+        midiSynth.handleMessage(pcDrum25,2); midiSynth.handleMessage(gsRev1,(int)sizeof(gsRev1));
+        std::vector<uint8_t> blob; bool snapped=midiSynth.snapshotState(blob);
+        bool sidecarSaved=snapped && state_slot_midi_save(player->ps.cfg.root,7,blob);
+        const uint8_t pc3[]={0xC0,3}, ccVol121[]={0xB0,7,121}, pcDrum0[]={0xC9,0};
+        const uint8_t gsRev6[]={0xF0,0x41,0x10,0x42,0x12,0x40,0x01,0x30,0x06,0x09,0xF7};
+        midiSynth.handleMessage(pc3,2); midiSynth.handleMessage(ccVol121,3);
+        midiSynth.handleMessage(pcDrum0,2); midiSynth.handleMessage(gsRev6,(int)sizeof(gsRev6));
+        std::vector<uint8_t> blob2; bool sidecarLoaded=state_slot_midi_load(player->ps.cfg.root,7,&blob2);
+        bool restored=sidecarLoaded && midiSynth.restoreState(blob2.data(),blob2.size());
+        bool valuesBack=tsf_channel_get_preset_number(midiSynth.font,0)==42 && midiSynth.volTgt[0]==40
+                     && midiSynth.gsReverbType==1 && tsf_channel_get_preset_number(midiSynth.font,9)==8;
+        std::vector<std::vector<uint8_t>> replay; bool replayOk=midiSynth.stateReplayMessages(blob2.data(),blob2.size(),replay) && replay.size()>16;
+        bool replayHasPc=false; for(auto& m: replay) if(m.size()==2 && m[0]==0xC0 && m[1]==42) replayHasPc=true;
+        bool deleteClears=state_slot_delete(player->ps.cfg.root,7) && !state_slot_midi_load(player->ps.cfg.root,7,&blob2);
+        midiStateOk=snapped && sidecarSaved && restored && valuesBack && replayOk && replayHasPc && deleteClears;
+    }
+    result[@"stateMidiState"]=@(midiStateOk);
     manualDuo=NO; hingeDuo=NO; duoHardware=NO; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     result[@"phoneRotationSupported"]=@((self.supportedInterfaceOrientations & UIInterfaceOrientationMaskPortrait) && (self.supportedInterfaceOrientations & UIInterfaceOrientationMaskLandscapeLeft) && (self.supportedInterfaceOrientations & UIInterfaceOrientationMaskLandscapeRight));
     bool landscape=true;

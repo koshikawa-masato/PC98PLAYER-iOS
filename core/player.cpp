@@ -795,6 +795,10 @@ static std::string state_slot_lock_path(const std::string& root, int slot) {
     char n[32]; snprintf(n, sizeof(n), "SLOT%d.LOCK", slot + 1);
     return hostfs::join(hostfs::join(root, "PC98PLAYER.SAV"), n);
 }
+static std::string state_slot_midi_path(const std::string& root, int slot) {
+    char n[32]; snprintf(n, sizeof(n), "SLOT%d.MID", slot + 1);
+    return hostfs::join(hostfs::join(root, "PC98PLAYER.SAV"), n);
+}
 static bool slot_is_locked(const std::string& root, int slot) {
     void* h = hostfs::open(state_slot_lock_path(root, slot), 0, false, false);
     if (!h) return false;
@@ -814,6 +818,7 @@ bool state_slot_delete(const std::string& root, int slot) {
     if (slot_is_locked(root, slot)) return false;
     hostfs::remove(state_slot_path(root, slot));
     hostfs::remove(state_slot_lock_path(root, slot));
+    hostfs::remove(state_slot_midi_path(root, slot));
     void* h = hostfs::open(state_slot_path(root, slot), 0, false, false);
     if (h) { hostfs::close(h); return false; }
     return true;
@@ -934,6 +939,23 @@ bool state_slot_info(const std::string& root, int slot, SlotInfo* info) {
     info->used = r.ok;
     info->locked = slot_is_locked(root, slot);
     return r.ok;
+}
+
+bool state_slot_midi_save(const std::string& root, int slot, const std::vector<uint8_t>& blob) {
+    std::string path = state_slot_midi_path(root, slot);
+    if (blob.empty()) { hostfs::remove(path); return true; }   // 状態が無い保存では旧ファイルを残さない
+    hostfs::mkdir(hostfs::join(root, "PC98PLAYER.SAV"));
+    std::string tmp = path + ".tmp";
+    void* h = hostfs::open(tmp, 1, true, true);
+    if (!h) return false;
+    int wr = hostfs::write(h, blob.data(), (int)blob.size());
+    hostfs::close(h);
+    if (wr != (int)blob.size()) { hostfs::remove(tmp); return false; }
+    hostfs::remove(path);
+    return hostfs::rename(tmp, path);
+}
+bool state_slot_midi_load(const std::string& root, int slot, std::vector<uint8_t>* blob) {
+    return blob && read_all(state_slot_midi_path(root, slot), *blob);
 }
 
 bool Player::load_state(int slot, std::string* err) {

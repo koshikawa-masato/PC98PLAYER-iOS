@@ -43,6 +43,9 @@ std::string state_slot_path(const std::string& root, int slot);
 bool state_slot_info(const std::string& root, int slot, SlotInfo* info);
 bool state_slot_set_locked(const std::string& root, int slot, bool locked);
 bool state_slot_delete(const std::string& root, int slot);   // 保護中は false
+// ステートに添える MIDI 状態スナップショット（SLOT<n>.MID）。中身は音源層が作る
+bool state_slot_midi_save(const std::string& root, int slot, const std::vector<uint8_t>& blob);
+bool state_slot_midi_load(const std::string& root, int slot, std::vector<uint8_t>* blob);
 
 std::string floppy_host_path(const std::string& root, const std::string& name);
 bool player_settings_from_ini(const Ini& ini, const std::string& root, PlayerSettings* ps);

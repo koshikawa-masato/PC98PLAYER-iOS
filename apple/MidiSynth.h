@@ -5,6 +5,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 #define TSF_IMPLEMENTATION
 #include "../third_party/tinysoundfont/tsf.h"
@@ -173,6 +174,91 @@ struct MidiSynth {
         gsReverbType = 4; gsReverbChar = 4; gsReverbTime = 64; gsReverbLevel = 127;
         gsChorusType = 2; gsChorusRate = gsChorusDepth = gsChorusFeedback = gsChorusLevel = -1;
         applyGsEffects();
+    }
+    // ステートセーブ用の MIDI 状態スナップショット。チャンネル状態（音色・
+    // コントローラー・ピッチ等）は tsf_channel が素のデータなので丸ごと写し、
+    // ランプ目標値と GS パラメータを添える。形式: "MSST" 版(4) チャンネル
+    // バイト数(4) tsf_channel×16 volCur/volTgt/expCur/expTgt（各 int×16）GS×10。
+    bool snapshotState(std::vector<uint8_t>& out) {
+        out.clear();
+        if (!font || !font->channels || font->channels->channelNum < 16) return false;
+        auto put = [&](const void* p, size_t n) { const uint8_t* b = (const uint8_t*)p; out.insert(out.end(), b, b + n); };
+        uint32_t version = 1, chanBytes = (uint32_t)sizeof(tsf_channel);
+        put("MSST", 4); put(&version, 4); put(&chanBytes, 4);
+        put(font->channels->channels, sizeof(tsf_channel) * 16);
+        put(volCur, sizeof(volCur)); put(volTgt, sizeof(volTgt)); put(expCur, sizeof(expCur)); put(expTgt, sizeof(expTgt));
+        int gs[10] = {gsReverbType, gsReverbChar, gsReverbTime, gsReverbLevel, gsChorusType,
+                      gsChorusRate, gsChorusDepth, gsChorusFeedback, gsChorusLevel, 0};
+        put(gs, sizeof(gs));
+        return true;
+    }
+    // スナップショットの検証。data/len が正しければ channels へのポインタを返す
+    const tsf_channel* stateChannels(const uint8_t* data, size_t len) {
+        if (!data || len < 12 + sizeof(tsf_channel) * 16 + sizeof(volCur) * 4 + 40) return nullptr;
+        if (memcmp(data, "MSST", 4) != 0) return nullptr;
+        uint32_t version, chanBytes;
+        memcpy(&version, data + 4, 4); memcpy(&chanBytes, data + 8, 4);
+        if (version != 1 || chanBytes != sizeof(tsf_channel)) return nullptr;
+        return (const tsf_channel*)(data + 12);
+    }
+    bool restoreState(const uint8_t* data, size_t len) {
+        if (!font || !font->channels || font->channels->channelNum < 16) return false;
+        const tsf_channel* chans = stateChannels(data, len);
+        if (!chans) return false;
+        const uint8_t* p = (const uint8_t*)(chans + 16);
+        allSoundOff();
+        memcpy(font->channels->channels, chans, sizeof(tsf_channel) * 16);
+        memcpy(volCur, p, sizeof(volCur)); p += sizeof(volCur);
+        memcpy(volTgt, p, sizeof(volTgt)); p += sizeof(volTgt);
+        memcpy(expCur, p, sizeof(expCur)); p += sizeof(expCur);
+        memcpy(expTgt, p, sizeof(expTgt)); p += sizeof(expTgt);
+        int gs[10]; memcpy(gs, p, sizeof(gs));
+        gsReverbType = gs[0]; gsReverbChar = gs[1]; gsReverbTime = gs[2]; gsReverbLevel = gs[3];
+        gsChorusType = gs[4]; gsChorusRate = gs[5]; gsChorusDepth = gs[6]; gsChorusFeedback = gs[7]; gsChorusLevel = gs[8];
+        // CC7/CC11 は保存時の目標値へ即時に合わせ、チャンネル側の派生値も作り直す
+        for (int ch = 0; ch < 16; ++ch) {
+            volCur[ch] = volTgt[ch]; expCur[ch] = expTgt[ch];
+            tsf_channel_midi_control(font, ch, 7, volTgt[ch]);
+            tsf_channel_midi_control(font, ch, 11, expTgt[ch]);
+        }
+        applyGsEffects();
+        return true;
+    }
+    // 外部 MIDI 音源へ状態を送り直すためのメッセージ列をスナップショットから作る
+    bool stateReplayMessages(const uint8_t* data, size_t len, std::vector<std::vector<uint8_t>>& out) {
+        out.clear();
+        if (!font) return false;
+        const tsf_channel* chans = stateChannels(data, len);
+        if (!chans) return false;
+        const int* ramps = (const int*)(chans + 16);          // volCur, volTgt, expCur, expTgt の順
+        const int* volTgtP = ramps + 16, * expTgtP = ramps + 48;
+        const int* gs = ramps + 64;
+        auto dt1 = [&](uint8_t addr3, const std::vector<uint8_t>& payload) {
+            std::vector<uint8_t> m = {0xF0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x01, addr3};
+            int sum = 0x40 + 0x01 + addr3;
+            for (uint8_t v : payload) { m.push_back(v & 0x7F); sum += v & 0x7F; }
+            m.push_back((uint8_t)((128 - (sum & 0x7F)) & 0x7F));
+            m.push_back(0xF7);
+            out.push_back(m);
+        };
+        dt1(0x30, {(uint8_t)gs[0], (uint8_t)gs[1], (uint8_t)gs[2], (uint8_t)gs[3]});   // リバーブ
+        dt1(0x38, {(uint8_t)gs[4]});                                                  // コーラスタイプ
+        if (gs[5] >= 0 || gs[6] >= 0 || gs[7] >= 0 || gs[8] >= 0)                    // コーラス詳細（未指定は 0 で埋める）
+            dt1(0x3A, {(uint8_t)(gs[5] < 0 ? 0 : gs[5]), (uint8_t)(gs[6] < 0 ? 0 : gs[6]),
+                       (uint8_t)(gs[7] < 0 ? 0 : gs[7]), (uint8_t)(gs[8] < 0 ? 0 : gs[8])});
+        static const int kCCs[] = {0, 32, 1, 2, 5, 91, 93, 65, 84, 100, 101, 6, 38, 64};
+        for (int ch = 0; ch < 16; ++ch) {
+            const tsf_channel& c = chans[ch];
+            auto cc = [&](int num, int val) { out.push_back({(uint8_t)(0xB0 | ch), (uint8_t)num, (uint8_t)(val & 0x7F)}); };
+            cc(0, c.midiCC[0]); cc(32, c.midiCC[32]);
+            if (c.presetIndex < font->presetNum)
+                out.push_back({(uint8_t)(0xC0 | ch), (uint8_t)(font->presets[c.presetIndex].preset & 0x7F)});
+            for (int num : kCCs) if (num != 0 && num != 32) cc(num, c.midiCC[num]);
+            cc(7, volTgtP[ch]); cc(11, expTgtP[ch]); cc(10, c.midiCC[10]);
+            out.push_back({(uint8_t)(0xE0 | ch), (uint8_t)(c.pitchWheel & 0x7F), (uint8_t)((c.pitchWheel >> 7) & 0x7F)});
+            if (c.midiPressure) out.push_back({(uint8_t)(0xD0 | ch), c.midiPressure});
+        }
+        return !out.empty();
     }
     // GS パラメータをエンジンのエフェクトへ反映する。リバーブの既定値は従来の
     // 固定チューニング（feedback .86 / damping .20 / wet .6 / size 1）と一致する。
