@@ -386,6 +386,7 @@ struct tsf
 {
 	struct tsf_preset* presets;
 	float* fontSamples;
+	unsigned int fontSampleCount;
 	struct tsf_voice* voices;
 	struct tsf_channels* channels;
 
@@ -2026,6 +2027,7 @@ TSFDEF tsf* tsf_load(struct tsf_stream* stream)
 		if (!res || !tsf_load_presets(res, &hydra, smplCount)) goto out_of_memory;
 		res->outSampleRate = 44100.0f;
 		res->fontSamples = floatBuffer;
+		res->fontSampleCount = smplCount;
 		floatBuffer = TSF_NULL; // don't free below
 	}
 	if (0)
@@ -2132,6 +2134,16 @@ TSFDEF void tsf_set_volume(tsf* f, float global_volume)
 	f->globalGainDB = (global_volume == 1.0f ? 0 : -tsf_gainToDecibels(1.0f / global_volume));
 }
 
+static void tsf_voice_fix_region_pointers(tsf* f)
+{
+	// voice->region points at the voice's own regionStorage, which lives
+	// inside the voices array. Reallocating that array therefore leaves
+	// every existing voice holding a dangling region pointer; re-point
+	// all slots after any reallocation.
+	int i;
+	for (i = 0; i < f->voiceNum; i++) f->voices[i].region = &f->voices[i].regionStorage;
+}
+
 TSFDEF int tsf_set_max_voices(tsf* f, int max_voices)
 {
 	int i = f->voiceNum;
@@ -2142,6 +2154,7 @@ TSFDEF int tsf_set_max_voices(tsf* f, int max_voices)
 	f->voiceNum = f->maxVoiceNum = newVoiceNum;
 	for (; i < max_voices; i++)
 		f->voices[i].playingPreset = -1;
+	tsf_voice_fix_region_pointers(f);
 	return 1;
 }
 
@@ -2202,6 +2215,7 @@ TSFDEF int tsf_note_on(tsf* f, int preset_index, int key, float vel)
 				newVoices = (struct tsf_voice*)TSF_REALLOC(f->voices, f->voiceNum * sizeof(struct tsf_voice));
 				if (!newVoices) return 0;
 				f->voices = newVoices;
+				tsf_voice_fix_region_pointers(f);
 				voice = &f->voices[f->voiceNum - 4];
 				voice[1].playingPreset = voice[2].playingPreset = voice[3].playingPreset = -1;
 			}
@@ -2217,6 +2231,13 @@ TSFDEF int tsf_note_on(tsf* f, int preset_index, int key, float vel)
 		voice->playIndex = voicePlayIndex;
 		voice->heldSustain = 0;
 		attenModCB = tsf_voice_apply_modulators(f, voice, key, midiVelocity);
+		// Keep the (possibly modulator-adjusted) sample window inside
+		// the loaded sample data: the render loop trusts these bounds
+		// for its sample reads.
+		if (vregion->end > f->fontSampleCount) vregion->end = f->fontSampleCount;
+		if (vregion->loop_end > vregion->end) vregion->loop_end = vregion->end;
+		if (vregion->loop_start > vregion->loop_end) vregion->loop_start = vregion->loop_end;
+		if (vregion->offset > vregion->end) vregion->offset = vregion->end;
 		//Velocity response comes from the attenuation modulators (the SF2
 		//default of 960 cB concave plus any font-defined ones), not from a
 		//fixed linear velocity gain.
