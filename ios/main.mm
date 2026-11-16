@@ -267,11 +267,19 @@ static UIImage* slotPlaceholderImage() {
     return placeholder;
 }
 
+static NSString* slotDetailText(const SlotInfo& info, BOOL used) {
+    if(!used) return @"（空）";
+    NSString* when=text(info.when);
+    return info.locked ? [when stringByAppendingString:@" ・ 保護中"] : when;
+}
+
 @interface StateSlotsController : UITableViewController
 @property BOOL load;
+@property NSString* rootPath;
 @property NSArray<UIImage*>* thumbnails;
 @property NSArray<NSString*>* details;
 @property NSArray<NSNumber*>* usedFlags;
+@property NSArray<NSNumber*>* lockedFlags;
 @property(copy) void (^selected)(NSInteger slot);
 @end
 @implementation StateSlotsController
@@ -282,6 +290,15 @@ static UIImage* slotPlaceholderImage() {
     self.tableView.rowHeight=64;
 }
 - (void)closeList { [self dismissViewControllerAnimated:YES completion:nil]; }
+- (void)refreshSlot:(NSInteger)slot {
+    SlotInfo info; BOOL used=state_slot_info(self.rootPath.fileSystemRepresentation,(int)slot,&info) && info.used;
+    NSMutableArray<NSNumber*>* usedFlags=[self.usedFlags mutableCopy]; usedFlags[slot]=@(used); self.usedFlags=usedFlags;
+    NSMutableArray<NSNumber*>* lockedFlags=[self.lockedFlags mutableCopy]; lockedFlags[slot]=@(used && info.locked); self.lockedFlags=lockedFlags;
+    NSMutableArray<NSString*>* details=[self.details mutableCopy]; details[slot]=slotDetailText(info,used); self.details=details;
+    UIImage* thumb=used ? slotThumbnailImage(info) : nil;
+    NSMutableArray<UIImage*>* thumbnails=[self.thumbnails mutableCopy]; thumbnails[slot]=thumb ?: slotPlaceholderImage(); self.thumbnails=thumbnails;
+    [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:slot inSection:0]] withRowAnimation:UITableViewRowAnimationAutomatic];
+}
 - (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return (NSInteger)self.details.count; }
 - (UITableViewCell*)tableView:(UITableView*)tableView cellForRowAtIndexPath:(NSIndexPath*)index {
     UITableViewCell* cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
@@ -300,6 +317,53 @@ static UIImage* slotPlaceholderImage() {
     if(self.load && !self.usedFlags[index.row].boolValue) return;
     NSInteger slot=index.row;
     [self dismissViewControllerAnimated:YES completion:^{ if(self.selected) self.selected(slot); }];
+}
+- (UISwipeActionsConfiguration*)tableView:(UITableView*)tableView trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath*)index {
+    NSInteger slot=index.row;
+    if(!self.usedFlags[slot].boolValue || self.lockedFlags[slot].boolValue) return nil;
+    __weak StateSlotsController* weak=self;
+    UIContextualAction* protect=[UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:@"保護" handler:^(UIContextualAction* action, UIView* sourceView, void (^completion)(BOOL)) {
+        StateSlotsController* s=weak; if(!s) { completion(NO); return; }
+        BOOL ok=state_slot_set_locked(s.rootPath.fileSystemRepresentation,(int)slot,true);
+        if(ok) [s refreshSlot:slot];
+        completion(ok);
+    }];
+    protect.backgroundColor=UIColor.systemOrangeColor;
+    protect.image=[UIImage systemImageNamed:@"lock.fill"];
+    return [UISwipeActionsConfiguration configurationWithActions:@[protect]];
+}
+- (UISwipeActionsConfiguration*)tableView:(UITableView*)tableView leadingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath*)index {
+    NSInteger slot=index.row;
+    if(!self.usedFlags[slot].boolValue) return nil;
+    __weak StateSlotsController* weak=self;
+    UIContextualAction* del=[UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive title:@"削除" handler:^(UIContextualAction* action, UIView* sourceView, void (^completion)(BOOL)) {
+        StateSlotsController* s=weak; if(!s) { completion(NO); return; }
+        if(s.lockedFlags[slot].boolValue) {
+            UIAlertController* alert=[UIAlertController alertControllerWithTitle:@"保護中です" message:@"削除するには、先に保護を解除してください。" preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            [s presentViewController:alert animated:YES completion:nil];
+            completion(NO); return;
+        }
+        BOOL ok=state_slot_delete(s.rootPath.fileSystemRepresentation,(int)slot);
+        if(ok) [s refreshSlot:slot];
+        completion(ok);
+    }];
+    del.image=[UIImage systemImageNamed:@"trash"];
+    NSMutableArray<UIContextualAction*>* actions=[NSMutableArray arrayWithObject:del];
+    if(self.lockedFlags[slot].boolValue) {
+        UIContextualAction* unlock=[UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:@"保護解除" handler:^(UIContextualAction* action, UIView* sourceView, void (^completion)(BOOL)) {
+            StateSlotsController* s=weak; if(!s) { completion(NO); return; }
+            BOOL ok=state_slot_set_locked(s.rootPath.fileSystemRepresentation,(int)slot,false);
+            if(ok) [s refreshSlot:slot];
+            completion(ok);
+        }];
+        unlock.backgroundColor=UIColor.systemGrayColor;
+        unlock.image=[UIImage systemImageNamed:@"lock.open.fill"];
+        [actions addObject:unlock];
+    }
+    UISwipeActionsConfiguration* config=[UISwipeActionsConfiguration configurationWithActions:actions];
+    config.performsFirstActionWithFullSwipe=NO;
+    return config;
 }
 @end
 
@@ -2272,18 +2336,30 @@ static void PC98ProducerEntry(void* context) {
     NSMutableArray<UIImage*>* thumbnails=[NSMutableArray array];
     NSMutableArray<NSString*>* details=[NSMutableArray array];
     NSMutableArray<NSNumber*>* usedFlags=[NSMutableArray array];
+    NSMutableArray<NSNumber*>* lockedFlags=[NSMutableArray array];
     for(int slot=0;slot<STATE_SLOTS;++slot) {
         SlotInfo info; BOOL used=state_slot_info(root,slot,&info) && info.used;
         [usedFlags addObject:@(used)];
-        [details addObject:used ? text(info.when) : @"（空）"];
+        [lockedFlags addObject:@(used && info.locked)];
+        [details addObject:slotDetailText(info,used)];
         UIImage* thumb=used ? slotThumbnailImage(info) : nil;
         [thumbnails addObject:thumb ?: slotPlaceholderImage()];
     }
     StateSlotsController* list=[[StateSlotsController alloc] initWithStyle:UITableViewStyleInsetGrouped];
-    list.load=load; list.thumbnails=thumbnails; list.details=details; list.usedFlags=usedFlags;
+    list.load=load; list.rootPath=[NSString stringWithUTF8String:root.c_str()];
+    list.thumbnails=thumbnails; list.details=details; list.usedFlags=usedFlags; list.lockedFlags=lockedFlags;
     __weak PlayerController* weak=self;
     list.selected=^(NSInteger slot) {
         PlayerController* s=weak; if(!s || !s->player) return;
+        if(!load) {
+            SlotInfo current; BOOL lockedNow=state_slot_info(s->player->ps.cfg.root,(int)slot,&current) && current.locked;
+            if(lockedNow) {
+                UIAlertController* alert=[UIAlertController alertControllerWithTitle:@"保護中です" message:@"このスロットは保護されています。保存するには、先に保護を解除してください。" preferredStyle:UIAlertControllerStyleAlert];
+                [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                [s presentViewController:alert animated:YES completion:nil];
+                return;
+            }
+        }
         [s.reportedErrorCodes removeObject:load?@"state_load":@"state_save"];
         std::string error; BOOL ok; { std::lock_guard<std::mutex> lock(s->playerMutex); ok=load?s->player->load_state((int)slot,&error):s->player->save_state((int)slot,&error); if(load && ok) { s->midiSynth.allSoundOff(); s->midiOut.allSoundOff(); } }
         // A failed load preserves the current state and its filtered screenshot.
@@ -2803,6 +2879,14 @@ static void PC98ProducerEntry(void* context) {
     result[@"stateRoundtrip"]=@(saved && loaded && player->m->ram[0x90000]==previous);
     SlotInfo slotInfo; bool slotInfoOk=state_slot_info(player->ps.cfg.root,7,&slotInfo);
     result[@"stateSlotInfo"]=@(slotInfoOk && slotInfo.used && !slotInfo.when.empty() && slotInfo.thumb.size()==(size_t)STATE_THUMB_W*STATE_THUMB_H*3 && slotThumbnailImage(slotInfo)!=nil);
+    bool lockSet=state_slot_set_locked(player->ps.cfg.root,7,true);
+    std::string lockError; bool lockedSaveBlocked=!player->save_state(7,&lockError);
+    SlotInfo lockedInfo; bool lockedSeen=state_slot_info(player->ps.cfg.root,7,&lockedInfo) && lockedInfo.locked;
+    bool lockedDeleteBlocked=!state_slot_delete(player->ps.cfg.root,7);
+    bool lockCleared=state_slot_set_locked(player->ps.cfg.root,7,false);
+    bool deleteDone=state_slot_delete(player->ps.cfg.root,7);
+    SlotInfo deletedInfo; bool deletedGone=!state_slot_info(player->ps.cfg.root,7,&deletedInfo);
+    result[@"stateSlotLock"]=@(lockSet && lockedSaveBlocked && lockedSeen && lockedDeleteBlocked && lockCleared && deleteDone && deletedGone);
     manualDuo=NO; hingeDuo=NO; duoHardware=NO; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     result[@"phoneRotationSupported"]=@((self.supportedInterfaceOrientations & UIInterfaceOrientationMaskPortrait) && (self.supportedInterfaceOrientations & UIInterfaceOrientationMaskLandscapeLeft) && (self.supportedInterfaceOrientations & UIInterfaceOrientationMaskLandscapeRight));
     bool landscape=true;

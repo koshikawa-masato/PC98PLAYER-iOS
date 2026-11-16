@@ -790,6 +790,35 @@ std::string state_slot_path(const std::string& root, int slot) {
     return hostfs::join(hostfs::join(root, "PC98PLAYER.SAV"), n);
 }
 
+// 保護フラグは PC98PLAYER.SAV\SLOT<n>.LOCK の有無で表す（本体形式は変えない）
+static std::string state_slot_lock_path(const std::string& root, int slot) {
+    char n[32]; snprintf(n, sizeof(n), "SLOT%d.LOCK", slot + 1);
+    return hostfs::join(hostfs::join(root, "PC98PLAYER.SAV"), n);
+}
+static bool slot_is_locked(const std::string& root, int slot) {
+    void* h = hostfs::open(state_slot_lock_path(root, slot), 0, false, false);
+    if (!h) return false;
+    hostfs::close(h);
+    return true;
+}
+bool state_slot_set_locked(const std::string& root, int slot, bool locked) {
+    std::string path = state_slot_lock_path(root, slot);
+    if (!locked) { hostfs::remove(path); return !slot_is_locked(root, slot); }
+    hostfs::mkdir(hostfs::join(root, "PC98PLAYER.SAV"));
+    void* h = hostfs::open(path, 1, true, true);
+    if (!h) return false;
+    hostfs::close(h);
+    return slot_is_locked(root, slot);
+}
+bool state_slot_delete(const std::string& root, int slot) {
+    if (slot_is_locked(root, slot)) return false;
+    hostfs::remove(state_slot_path(root, slot));
+    hostfs::remove(state_slot_lock_path(root, slot));
+    void* h = hostfs::open(state_slot_path(root, slot), 0, false, false);
+    if (h) { hostfs::close(h); return false; }
+    return true;
+}
+
 void Player::snapshot(std::vector<uint8_t>& out) {
     StateW w;
     machine_state_save(m, w);
@@ -854,6 +883,7 @@ static bool read_all(const std::string& path, std::vector<uint8_t>& d) {
 }
 
 bool Player::save_state(int slot, std::string* err) {
+    if (slot_is_locked(ps.cfg.root, slot)) { if (err) *err = "このスロットは保護されています"; return false; }
     std::vector<uint8_t> body;
     snapshot(body);
     StateW w;
@@ -902,6 +932,7 @@ bool state_slot_info(const std::string& root, int slot, SlotInfo* info) {
     info->thumb.resize(STATE_THUMB_W * STATE_THUMB_H * 3);
     r.bytes(info->thumb.data(), info->thumb.size());
     info->used = r.ok;
+    info->locked = slot_is_locked(root, slot);
     return r.ok;
 }
 

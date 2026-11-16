@@ -35,11 +35,14 @@ struct PlayerSettings {
 #define STATE_THUMB_H 100
 struct SlotInfo {
     bool used = false;
+    bool locked = false;                   // 保護中（上書き・削除の禁止）
     std::string when;                      // "2026/09/26 12:34"
     std::vector<uint8_t> thumb;            // STATE_THUMB_W*STATE_THUMB_H*3 (RGB)
 };
 std::string state_slot_path(const std::string& root, int slot);
 bool state_slot_info(const std::string& root, int slot, SlotInfo* info);
+bool state_slot_set_locked(const std::string& root, int slot, bool locked);
+bool state_slot_delete(const std::string& root, int slot);   // 保護中は false
 
 std::string floppy_host_path(const std::string& root, const std::string& name);
 bool player_settings_from_ini(const Ini& ini, const std::string& root, PlayerSettings* ps);
