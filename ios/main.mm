@@ -1021,6 +1021,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     };
     std::deque<FPSSample> fpsHistory;
     BOOL bossMode;
+    BOOL pausedByInactive;
     std::atomic<bool> hingeClosed;
     std::atomic<bool> paused, fetching;
     BOOL pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
@@ -1289,7 +1290,17 @@ static void PC98ProducerEntry(void* context) {
 - (void)prepareForInactive {
     // Hide before the system takes its snapshot or switches to the outer display.
     if(bossMode && duoHardware) { hingeClosed=YES;[self updateBossShield]; }
+    // 非アクティブ化で止めた場合だけ、復帰時の自動再開の対象にする。
+    // ユーザーが手動で一時停止していた場合は、その意思を優先して数えない
+    if(!paused) pausedByInactive=YES;
     [self suspend];
+}
+- (void)resumeAfterActivation {
+    if(!pausedByInactive) return;
+    pausedByInactive=NO;
+    if(bossMode) return;   // 「ボスがきた」モードでは開き直しても自動再開しない（従来仕様）
+    if(!player || fetching || player->m->quit || !paused) return;
+    [self togglePause];
 }
 - (void)refreshHingeAfterActivation {
 #if __has_include(<UIKit/UIHingeInteraction.h>)
@@ -1919,6 +1930,7 @@ static void PC98ProducerEntry(void* context) {
 - (void)togglePause {
     if(bossMode && hingeClosed) return;
     if(!player || fetching || player->m->quit) return;
+    pausedByInactive=NO;
     [self releaseKeys]; paused=!paused;
     if(!paused) fullscreenMenuPaused=NO;
 #ifdef PC98PLAYER_TESTING
@@ -3050,7 +3062,7 @@ static void PC98ProducerEntry(void* context) {
     self.controller=[PlayerController new]; self.window.rootViewController=self.controller; [self.window makeKeyAndVisible];
 }
 - (void)sceneWillResignActive:(UIScene*)scene { [self.controller prepareForInactive]; }
-- (void)sceneDidBecomeActive:(UIScene*)scene { [self.controller refreshHingeAfterActivation]; }
+- (void)sceneDidBecomeActive:(UIScene*)scene { [self.controller refreshHingeAfterActivation]; [self.controller resumeAfterActivation]; }
 @end
 @interface PlayerAppDelegate : UIResponder <UIApplicationDelegate>
 @end
