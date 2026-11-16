@@ -244,6 +244,65 @@ static BOOL writeTitleScreenshot(UIImage* image, NSString* identifier) {
 }
 @end
 
+static UIImage* slotThumbnailImage(const SlotInfo& info) {
+    NSData* data=[NSData dataWithBytes:info.thumb.data() length:info.thumb.size()];
+    CGDataProviderRef provider=CGDataProviderCreateWithCFData((__bridge CFDataRef)data);
+    CGColorSpaceRef space=CGColorSpaceCreateDeviceRGB();
+    CGImageRef image=CGImageCreate(STATE_THUMB_W,STATE_THUMB_H,8,24,STATE_THUMB_W*3,space,kCGImageAlphaNone,provider,NULL,false,kCGRenderingIntentDefault);
+    CGColorSpaceRelease(space); CGDataProviderRelease(provider);
+    if(!image) return nil;
+    UIImage* result=[UIImage imageWithCGImage:image scale:2 orientation:UIImageOrientationUp];
+    CGImageRelease(image);
+    return result;
+}
+static UIImage* slotPlaceholderImage() {
+    static UIImage* placeholder=nil;
+    if(!placeholder) {
+        UIGraphicsImageRenderer* renderer=[[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(80,50)];
+        placeholder=[renderer imageWithActions:^(UIGraphicsImageRendererContext* context) {
+            [[UIColor colorWithWhite:.14 alpha:1] setFill];
+            UIRectFill(CGRectMake(0,0,80,50));
+        }];
+    }
+    return placeholder;
+}
+
+@interface StateSlotsController : UITableViewController
+@property BOOL load;
+@property NSArray<UIImage*>* thumbnails;
+@property NSArray<NSString*>* details;
+@property NSArray<NSNumber*>* usedFlags;
+@property(copy) void (^selected)(NSInteger slot);
+@end
+@implementation StateSlotsController
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title=self.load?@"ステート読込":@"ステート保存";
+    self.navigationItem.leftBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"閉じる" style:UIBarButtonItemStylePlain target:self action:@selector(closeList)];
+    self.tableView.rowHeight=64;
+}
+- (void)closeList { [self dismissViewControllerAnimated:YES completion:nil]; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return (NSInteger)self.details.count; }
+- (UITableViewCell*)tableView:(UITableView*)tableView cellForRowAtIndexPath:(NSIndexPath*)index {
+    UITableViewCell* cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+    BOOL used=self.usedFlags[index.row].boolValue;
+    cell.textLabel.text=[NSString stringWithFormat:@"スロット %ld",(long)index.row+1];
+    cell.detailTextLabel.text=self.details[index.row];
+    cell.imageView.image=self.thumbnails[index.row];
+    if(self.load && !used) {
+        cell.textLabel.textColor=UIColor.secondaryLabelColor;
+        cell.detailTextLabel.textColor=UIColor.secondaryLabelColor;
+        cell.selectionStyle=UITableViewCellSelectionStyleNone;
+    }
+    return cell;
+}
+- (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)index {
+    if(self.load && !self.usedFlags[index.row].boolValue) return;
+    NSInteger slot=index.row;
+    [self dismissViewControllerAnimated:YES completion:^{ if(self.selected) self.selected(slot); }];
+}
+@end
+
 @interface LegalTextController : UIViewController
 @property(copy) NSString* resource;
 @end
@@ -2207,22 +2266,35 @@ static void PC98ProducerEntry(void* context) {
     if(warnings.length) [self reportError:warnings code:@"media_load" summary:@"ディスクまたは音源データを読み込めませんでした"];
 }
 - (void)slots:(BOOL)load {
-    if(!player || fetching) return;
+    if(!player || fetching || self.presentedViewController) return;
     [self releaseKeys]; { std::lock_guard<std::mutex> lock(playerMutex); audio.clear(); }
-    UIAlertController* menu=[UIAlertController alertControllerWithTitle:load?@"ステート読込":@"ステート保存" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    std::string root=player->ps.cfg.root;
+    NSMutableArray<UIImage*>* thumbnails=[NSMutableArray array];
+    NSMutableArray<NSString*>* details=[NSMutableArray array];
+    NSMutableArray<NSNumber*>* usedFlags=[NSMutableArray array];
+    for(int slot=0;slot<STATE_SLOTS;++slot) {
+        SlotInfo info; BOOL used=state_slot_info(root,slot,&info) && info.used;
+        [usedFlags addObject:@(used)];
+        [details addObject:used ? text(info.when) : @"（空）"];
+        UIImage* thumb=used ? slotThumbnailImage(info) : nil;
+        [thumbnails addObject:thumb ?: slotPlaceholderImage()];
+    }
+    StateSlotsController* list=[[StateSlotsController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+    list.load=load; list.thumbnails=thumbnails; list.details=details; list.usedFlags=usedFlags;
     __weak PlayerController* weak=self;
-    for(int slot=0;slot<STATE_SLOTS;++slot) [menu addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"スロット %d",slot+1] style:UIAlertActionStyleDefault handler:^(UIAlertAction* a) {
+    list.selected=^(NSInteger slot) {
         PlayerController* s=weak; if(!s || !s->player) return;
         [s.reportedErrorCodes removeObject:load?@"state_load":@"state_save"];
-        std::string error; BOOL ok; { std::lock_guard<std::mutex> lock(s->playerMutex); ok=load?s->player->load_state(slot,&error):s->player->save_state(slot,&error); if(load && ok) { s->midiSynth.allSoundOff(); s->midiOut.allSoundOff(); } }
+        std::string error; BOOL ok; { std::lock_guard<std::mutex> lock(s->playerMutex); ok=load?s->player->load_state((int)slot,&error):s->player->save_state((int)slot,&error); if(load && ok) { s->midiSynth.allSoundOff(); s->midiOut.allSoundOff(); } }
         // A failed load preserves the current state and its filtered screenshot.
         if(load && ok) { [s.contentFilter reset];s.monitor.image=nil; }
         [s releaseKeys]; { std::lock_guard<std::mutex> lock(s->playerMutex); s->audio.clear(); } s->nextFrame=CACurrentMediaTime();
         if(!ok) [s reportError:text(error) code:load?@"state_load":@"state_save" summary:load?@"ステートを読み込めませんでした":@"ステートを保存できませんでした"]; else s.status.text=load?@"ステートを読み込みました":@"ステートを保存しました";
         if(s->player) [s refreshMonitor];
-    }]];
-    [menu addAction:[UIAlertAction actionWithTitle:@"キャンセル" style:UIAlertActionStyleCancel handler:nil]];
-    [self presentViewController:menu animated:YES completion:nil];
+    };
+    UINavigationController* nav=[[UINavigationController alloc] initWithRootViewController:list];
+    nav.modalInPresentation=YES;
+    [self presentViewController:nav animated:YES completion:nil];
 }
 - (void)saveSlot { [self slots:NO]; }
 - (void)loadSlot { [self slots:YES]; }
@@ -2729,6 +2801,8 @@ static void PC98ProducerEntry(void* context) {
     uint8_t previous=player->m->ram[0x90000]; player->m->ram[0x90000]=previous^0xFF;
     bool loaded=player->load_state(7,&error);
     result[@"stateRoundtrip"]=@(saved && loaded && player->m->ram[0x90000]==previous);
+    SlotInfo slotInfo; bool slotInfoOk=state_slot_info(player->ps.cfg.root,7,&slotInfo);
+    result[@"stateSlotInfo"]=@(slotInfoOk && slotInfo.used && !slotInfo.when.empty() && slotInfo.thumb.size()==(size_t)STATE_THUMB_W*STATE_THUMB_H*3 && slotThumbnailImage(slotInfo)!=nil);
     manualDuo=NO; hingeDuo=NO; duoHardware=NO; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     result[@"phoneRotationSupported"]=@((self.supportedInterfaceOrientations & UIInterfaceOrientationMaskPortrait) && (self.supportedInterfaceOrientations & UIInterfaceOrientationMaskLandscapeLeft) && (self.supportedInterfaceOrientations & UIInterfaceOrientationMaskLandscapeRight));
     bool landscape=true;
