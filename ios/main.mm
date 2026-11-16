@@ -139,12 +139,60 @@ static NSString* const midiDestinationNameKey=@"PC98MidiDestinationName";
 static BOOL midiUsesExternalOut(void) {
     return [NSUserDefaults.standardUserDefaults integerForKey:midiModeKey]==1;
 }
+// 診断用 MIDI ログ（ファーランドストーリーの音切れ解析のために追加）:
+// 直近の MIDI ストリームとフレーム処理時間をメモリ上のリングに保持し、
+// オプション画面の「MIDIログを共有」からファイルとして書き出せるようにする。
+// レコード形式（リトルエンディアン）:
+//   'M' u32 frame, u8 len, bytes[len]        … MIDI メッセージ
+//   'T' u32 frame, u32 usec                  … そのフレームの run_frame+描画時間
+//   'S' u32 frame, u32 sampleRate, u32 fpsMilli … ゲーム起動
+static std::atomic<uint64_t> g_midiLogFrame{0};
+struct MidiLogRecorder {
+    std::mutex mutex;
+    std::vector<uint8_t> data;
+    uint64_t generation=0;
+    uint64_t baseFrame=0;
+    void maybeReset(uint64_t frame) {
+        if(data.size()>4u*1024u*1024u) { data.clear(); generation++; baseFrame=frame; }
+    }
+    void putU32(uint32_t v) { for(int i=0;i<4;i++) data.push_back((uint8_t)(v>>(8*i))); }
+    void message(uint64_t frame, const uint8_t* msg, int len) {
+        if(len<=0 || len>250) return;
+        std::lock_guard<std::mutex> lock(mutex);
+        maybeReset(frame);
+        data.push_back(0x4D); putU32((uint32_t)frame); data.push_back((uint8_t)len);
+        data.insert(data.end(), msg, msg+len);
+    }
+    void frameTime(uint64_t frame, uint32_t usec) {
+        std::lock_guard<std::mutex> lock(mutex);
+        maybeReset(frame);
+        data.push_back(0x54); putU32((uint32_t)frame); putU32(usec);
+    }
+    void session(uint64_t frame, uint32_t sampleRate, uint32_t fpsMilli) {
+        std::lock_guard<std::mutex> lock(mutex);
+        maybeReset(frame);
+        data.push_back(0x53); putU32((uint32_t)frame); putU32(sampleRate); putU32(fpsMilli);
+    }
+};
+static MidiLogRecorder g_midiLog;
+static std::vector<uint8_t> MidiLogSnapshot() {
+    std::lock_guard<std::mutex> lock(g_midiLog.mutex);
+    std::vector<uint8_t> out;
+    auto put=[&](const void* p, size_t n) { const uint8_t* b=(const uint8_t*)p; out.insert(out.end(), b, b+n); };
+    auto u64=[&](uint64_t v) { uint8_t b[8]; for(int i=0;i<8;i++) b[i]=(uint8_t)(v>>(8*i)); put(b, 8); };
+    put("MDLG", 4);
+    uint8_t ver=1; put(&ver, 1);
+    u64(g_midiLog.generation); u64(g_midiLog.baseFrame); u64(g_midiLogFrame.load());
+    out.insert(out.end(), g_midiLog.data.begin(), g_midiLog.data.end());
+    return out;
+}
 // Player の MIDI 出口から、設定に応じて内蔵シンセか外部 MIDI OUT へ渡す
 struct MidiDispatch {
     MidiSynth* synth=nullptr;
     MidiOut* out=nullptr;
     BOOL external=NO;
     void handleMessage(const uint8_t* msg, int len) {
+        g_midiLog.message(g_midiLogFrame.load(std::memory_order_relaxed), msg, len);
         if(external) { if(out) out->handleMessage(msg, len); }
         else if(synth) synth->handleMessage(msg, len);
     }
@@ -562,7 +610,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 7; }
-- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==0?5:section==2?7:section==3?6:section==4?1:section==5?5:section==6?3:section==1?5:2; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==0?5:section==2?7:section==3?6:section==4?1:section==5?5:section==6?4:section==1?5:2; }
 - (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数・画面モード",@"表示",@"コンテンツフィルター",@"Bluetoothコントローラー",@"CPUクロックのデフォルト",@"このアプリについて"][section]; }
 - (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section {
     if(section==0)return @"MIDIは内蔵シンセか外部出力のどちらかへ送ります。外部出力は、他の音源アプリの仮想ポートやBluetooth／USB／ネットワークMIDI機器が対象です。MIDIの変更は次回のゲーム起動から適用します。";
@@ -697,6 +745,9 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
         cell.textLabel.text=@"バージョン";
         cell.detailTextLabel.text=[PC98FeedbackAppVersion() stringByAppendingString:@" · 不具合を報告"];
         cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
+    } else if(index.row==3) {
+        cell.textLabel.text=@"MIDIログを共有";
+        cell.detailTextLabel.text=@"診断用：直近のMIDIストリームとフレーム処理時間をファイルに書き出します";
     } else {
         cell.textLabel.text=index.row==0?@"プライバシーポリシー":@"ライセンス";
         cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
@@ -713,6 +764,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     }
     if(index.section==6) {
         [tableView deselectRowAtIndexPath:index animated:YES];
+        if(index.row==3) {
+            [self shareMidiLogFromCell:[tableView cellForRowAtIndexPath:index]];
+            return;
+        }
         if(index.row==2) {
             [self reportIssue];
             return;
@@ -767,6 +822,30 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 - (void)reportIssue {
     UIViewController* form=PC98FeedbackFormWithContext(PC98FeedbackAppVersion(),self.issueScreenshot,self.issueDiagnostics,nil,nil);
     [self.navigationController pushViewController:form animated:YES];
+}
+- (void)shareMidiLogFromCell:(UITableViewCell*)cell {
+    std::vector<uint8_t> bytes=MidiLogSnapshot();
+    NSMutableData* data=[NSMutableData dataWithBytes:bytes.data() length:bytes.size()];
+    if(self.issueDiagnostics) {
+        NSData* json=[NSJSONSerialization dataWithJSONObject:self.issueDiagnostics options:0 error:nil];
+        if(json) {
+            uint8_t tag=0x44; uint32_t n=(uint32_t)json.length; uint8_t nb[4]={(uint8_t)n,(uint8_t)(n>>8),(uint8_t)(n>>16),(uint8_t)(n>>24)};
+            [data appendBytes:&tag length:1]; [data appendBytes:nb length:4]; [data appendData:json];
+        }
+    }
+    NSURL* url=[area(NSDocumentDirectory, @"") URLByAppendingPathComponent:@"midilog.bin"];
+    if(![data writeToURL:url atomically:YES]) {
+        UIAlertController* alert=[UIAlertController alertControllerWithTitle:@"MIDIログ" message:@"ログファイルを書き出せませんでした。" preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    UIActivityViewController* share=[[UIActivityViewController alloc] initWithActivityItems:@[url] applicationActivities:nil];
+    if(share.popoverPresentationController && cell) {
+        share.popoverPresentationController.sourceView=cell;
+        share.popoverPresentationController.sourceRect=cell.bounds;
+    }
+    [self presentViewController:share animated:YES completion:nil];
 }
 - (void)editClock {
     __weak GameOptionsController* weak=self;
@@ -1689,6 +1768,9 @@ static void PC98ProducerEntry(void* context) {
                 if(now-nf>seconds*3) nf=now; // resync after a long stall
                 int frames=0;
                 while(now+lead>=nf && frames<3) {
+                    uint64_t logFrame=g_midiLogFrame.load(std::memory_order_relaxed)+1;
+                    g_midiLogFrame.store(logFrame, std::memory_order_relaxed);
+                    auto logT0=std::chrono::steady_clock::now();
                     player->run_frame();
                     ++frames;
 #ifdef PC98PLAYER_TESTING
@@ -1696,6 +1778,8 @@ static void PC98ProducerEntry(void* context) {
 #endif
                     if(midiFontLoaded && !midiExternal) midiSynth.renderMix(player->audio.data(), player->audio.size()/2);
                     audio.push(player->audio); nf+=seconds;
+                    auto logT1=std::chrono::steady_clock::now();
+                    g_midiLog.frameTime(logFrame, (uint32_t)std::chrono::duration_cast<std::chrono::microseconds>(logT1-logT0).count());
                     if(player->m->quit) break;
                 }
                 if(frames) { nextFrame.store(nf); producedFrames.fetch_add((uint64_t)frames); worked=YES; }
@@ -2106,6 +2190,7 @@ static void PC98ProducerEntry(void* context) {
     player->midi_user=&midiDispatch; player->midi_sink=&MidiSinkTrampoline;
     settings.cfg.start = apple_startup::dos_start_path(settings.cfg.start);
     if(!player->init(settings,&error)) { [self reportError:text(error) code:@"launch_failed" summary:@"ソフトウェアを起動できませんでした"]; [self stopGame]; return; }
+    g_midiLog.session(g_midiLogFrame.load(std::memory_order_relaxed), (uint32_t)settings.sample_rate, (uint32_t)(1000.0*MASTER_CLOCK/FRAME_TICKS+0.5));
     paused=NO; nextFrame=CACurrentMediaTime(); self.status.text=self.readingOriginal ? @"実行中 — 元フォルダを直接読込、保存データは別領域" : @"実行中 — ゲーム本体はキャッシュ、保存データは別領域";
 #if TARGET_OS_SIMULATOR
     NSString* nasPath=[NSUserDefaults.standardUserDefaults stringForKey:@"PC98SimulatorNASRoot"];
