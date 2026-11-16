@@ -220,6 +220,7 @@ struct Config {
     std::string root;            // ゲームのフォルダ（ホストのパス）
     std::string start;           // 最初に実行するもの
     std::string args;
+    std::vector<std::string> pre_start;   // start の前にシェルで実行する行（ALSMIDI 等の常駐ドライバ用）
     char     drive = 'A';
     int      cpu_mhz = 16;
     int      gdc_5mhz = 0;          // DIP SW 2-8: グラフィック GDC を 5MHz で使える（0 = 2.5MHz の機械）

@@ -119,6 +119,18 @@ bool player_settings_from_ini(const Ini& ini, const std::string& root, PlayerSet
     ps->cfg.root = root;
     ps->cfg.start = G("START", "");
     ps->cfg.args = G("ARGS", "");
+    {   // PreStart= は Start= の前にシェルで実行する行（; 区切り）。
+        // ALSMIDI のような常駐ドライバをゲーム本体より先に読み込むために使う
+        std::string pre = G("PRESTART", "");
+        size_t p = 0;
+        while (p <= pre.size()) {
+            size_t e = pre.find(';', p);
+            std::string item = trim(pre.substr(p, e == std::string::npos ? std::string::npos : e - p));
+            if (!item.empty()) ps->cfg.pre_start.push_back(item);
+            if (e == std::string::npos) break;
+            p = e + 1;
+        }
+    }
     std::string drv = G("DRIVE", "A");
     ps->cfg.drive = drv.empty() ? 'A' : (char)toupper((unsigned char)drv[0]);
     ps->cfg.cpu_mhz = I("CPUMHZ", I("CPUCLOCK", 16));

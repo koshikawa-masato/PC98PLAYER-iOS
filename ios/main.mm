@@ -409,11 +409,28 @@ static NSString* catalogNameForFolder(NSURL* folder) {
     return root ? [GameLibrary verifiedDisplayNameInFolder:root] : nil;
 }
 
+static BOOL folderHasDOSFile(NSURL* folder, NSString* name) {
+    if(!folder) return NO;
+    NSFileManager* fm=NSFileManager.defaultManager;
+    if([fm fileExistsAtPath:[folder URLByAppendingPathComponent:name].path]) return YES;
+    return [fm fileExistsAtPath:[folder URLByAppendingPathComponent:name.lowercaseString].path];
+}
+
+// ALSMIDI.COM がゲームのルート（Root= 解決後）にあるか。あれば MIDI 起動の項目を出す
+static BOOL folderHasAlsmidi(NSURL* folder) {
+    if(!folder) return NO;
+    Ini ini;
+    ini.load([folder URLByAppendingPathComponent:@"PC98PLAYER.INI"].fileSystemRepresentation);
+    NSURL* root=[GameLibrary gameRootAtURL:folder relativePath:text(ini.get("PC98PLAYER.ROOT")) error:nil];
+    return folderHasDOSFile(root ?: folder, @"ALSMIDI.COM");
+}
+
 static NSString* const libraryThumbnailModeKey=@"PC98LibraryThumbnailMode";
 
 @interface GameThumbnailCell : UICollectionViewCell
 @property(strong) UIImageView* screenshot;
 @property(strong) UIImageView* cacheBadge;
+@property(strong) UILabel* modeBadge;
 @property(strong) UIButton* infoButton;
 @property(strong) UIButton* gameButton;
 @property(copy) void (^showInfo)(void);
@@ -438,6 +455,15 @@ static NSString* const libraryThumbnailModeKey=@"PC98LibraryThumbnailMode";
     self.cacheBadge.backgroundColor=[UIColor.blackColor colorWithAlphaComponent:0.75];
     self.cacheBadge.layer.cornerRadius=13;
 
+    self.modeBadge=[UILabel new];
+    self.modeBadge.font=[UIFont boldSystemFontOfSize:11];
+    self.modeBadge.textColor=UIColor.whiteColor;
+    self.modeBadge.backgroundColor=[UIColor.blackColor colorWithAlphaComponent:0.75];
+    self.modeBadge.layer.cornerRadius=6;
+    self.modeBadge.clipsToBounds=YES;
+    self.modeBadge.textAlignment=NSTextAlignmentCenter;
+    self.modeBadge.hidden=YES;
+
     self.infoButton=[UIButton buttonWithType:UIButtonTypeSystem];
     [self.infoButton setImage:[UIImage systemImageNamed:@"info.circle.fill"] forState:UIControlStateNormal];
     self.infoButton.tintColor=UIColor.whiteColor;
@@ -447,7 +473,7 @@ static NSString* const libraryThumbnailModeKey=@"PC98LibraryThumbnailMode";
     infoBackground.userInteractionEnabled=NO;
     infoBackground.backgroundColor=[UIColor.blackColor colorWithAlphaComponent:0.75];
     infoBackground.layer.cornerRadius=14;
-    for(UIView* item in @[self.screenshot,self.cacheBadge,self.gameButton,infoBackground,self.infoButton]) {
+    for(UIView* item in @[self.screenshot,self.cacheBadge,self.modeBadge,self.gameButton,infoBackground,self.infoButton]) {
         item.translatesAutoresizingMaskIntoConstraints=NO;
         [self.contentView addSubview:item];
     }
@@ -464,6 +490,10 @@ static NSString* const libraryThumbnailModeKey=@"PC98LibraryThumbnailMode";
         [self.cacheBadge.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:8],
         [self.cacheBadge.widthAnchor constraintEqualToConstant:26],
         [self.cacheBadge.heightAnchor constraintEqualToConstant:26],
+        [self.modeBadge.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:8],
+        [self.modeBadge.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-8],
+        [self.modeBadge.widthAnchor constraintGreaterThanOrEqualToConstant:46],
+        [self.modeBadge.heightAnchor constraintEqualToConstant:20],
         [self.infoButton.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor],
         [self.infoButton.topAnchor constraintEqualToAnchor:self.contentView.topAnchor],
         [self.infoButton.widthAnchor constraintEqualToConstant:44],
@@ -489,6 +519,8 @@ static NSString* const libraryThumbnailModeKey=@"PC98LibraryThumbnailMode";
 @property BOOL showsThumbnails;
 - (void)addGame:(NSString*)title identifier:(NSString*)identifier cached:(BOOL)cached action:(void (^)(void))action
            info:(void (^)(void))info remove:(void (^)(void))remove;
+- (void)addGame:(NSString*)title identifier:(NSString*)identifier cached:(BOOL)cached badge:(NSString*)badge
+         action:(void (^)(void))action info:(void (^)(void))info remove:(void (^)(void))remove;
 @end
 @implementation GameLocationsController
 - (instancetype)init { if((self=[super init])) self.choices=[NSMutableArray new];return self; }
@@ -566,6 +598,9 @@ static NSString* const libraryThumbnailModeKey=@"PC98LibraryThumbnailMode";
     cell.screenshot.contentMode=screenshot ? UIViewContentModeScaleAspectFit : UIViewContentModeCenter;
     BOOL cached=[choice[@"cached"] boolValue];
     cell.cacheBadge.hidden=!cached;
+    NSString* badge=choice[@"badge"];
+    cell.modeBadge.hidden=!badge.length;
+    cell.modeBadge.text=badge.length ? [NSString stringWithFormat:@" %@ ",badge] : nil;
     cell.gameButton.accessibilityLabel=cached ? [choice[@"title"] stringByAppendingString:@"、キャッシュあり"] : choice[@"title"];
     cell.infoButton.accessibilityLabel=[choice[@"title"] stringByAppendingString:@"の作品情報"];
     cell.showInfo=choice[@"info"];
@@ -583,8 +618,12 @@ static NSString* const libraryThumbnailModeKey=@"PC98LibraryThumbnailMode";
 }
 - (void)addGame:(NSString*)title identifier:(NSString*)identifier cached:(BOOL)cached action:(void (^)(void))action
            info:(void (^)(void))info remove:(void (^)(void))remove {
-    [self.choices addObject:@{@"title":title,@"identifier":identifier,@"cached":@(cached),@"action":[action copy],
-                              @"info":[info copy],@"remove":[remove copy]}];
+    [self addGame:title identifier:identifier cached:cached badge:nil action:action info:info remove:remove];
+}
+- (void)addGame:(NSString*)title identifier:(NSString*)identifier cached:(BOOL)cached badge:(NSString*)badge
+         action:(void (^)(void))action info:(void (^)(void))info remove:(void (^)(void))remove {
+    [self.choices addObject:@{@"title":title,@"identifier":identifier,@"cached":@(cached),@"badge":badge ?: @"",
+                              @"action":[action copy],@"info":[info copy],@"remove":[remove copy]}];
 }
 - (UISwipeActionsConfiguration*)tableView:(UITableView*)tableView
  trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath*)index {
@@ -1022,6 +1061,8 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     std::deque<FPSSample> fpsHistory;
     BOOL bossMode;
     BOOL pausedByInactive;
+    BOOL launchAlsMidi;
+    BOOL currentAlsMidi;
     std::atomic<bool> hingeClosed;
     std::atomic<bool> paused, fetching;
     BOOL pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
@@ -2194,7 +2235,7 @@ static void PC98ProducerEntry(void* context) {
                 NSDictionary* report=@{@"sourceName":source.lastPathComponent ?: @"", @"scoped":@(scoped), @"identifier":identifier, @"error":error.localizedDescription ?: @"", @"domain":error.domain ?: @"", @"code":@(error.code), @"usableCache":@([GameLibrary isUsableCacheAtURL:destination])};
                 [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil] writeToURL:area(NSDocumentDirectory,@"cache-import-report.json") atomically:YES];
 #endif
-                if(error) { s.status.text=error.localizedDescription; [s reportError:error.localizedDescription code:@"cache_import" summary:@"ゲームデータを取得できませんでした"]; }
+                if(error) { s->launchAlsMidi=NO; s.status.text=error.localizedDescription; [s reportError:error.localizedDescription code:@"cache_import" summary:@"ゲームデータを取得できませんでした"]; }
                 else [s openCache:destination identifier:identifier];
             });
         }
@@ -2214,6 +2255,14 @@ static void PC98ProducerEntry(void* context) {
 }
 - (void)openCache:(NSURL*)cache identifier:(NSString*)identifier {
     [self openGameFolder:cache identifier:identifier direct:NO];
+}
+- (void)openCacheAlsMidi:(NSURL*)cache identifier:(NSString*)identifier {
+    launchAlsMidi=YES;
+    [self openCache:cache identifier:identifier];
+}
+- (void)openSourceAlsMidi:(NSURL*)source identifier:(NSString*)identifier {
+    launchAlsMidi=YES;
+    [self openSource:source identifier:identifier];
 }
 - (void)openGameFolder:(NSURL*)folder identifier:(NSString*)identifier direct:(BOOL)direct {
     [self resetFeedbackErrors];self.launchDiagnostics=nil;
@@ -2241,6 +2290,21 @@ static void PC98ProducerEntry(void* context) {
         [self reportError:[@"Root= の指定先を開けません。ゲームフォルダ内の相対パスと取得状態を確認してください。\n" stringByAppendingString:error.localizedDescription ?: @""] code:@"invalid_root" summary:@"INIのRoot指定先を開けませんでした"]; return;
     }
     PlayerSettings ps; player_settings_from_ini(ini,root.fileSystemRepresentation,&ps);
+    currentAlsMidi=launchAlsMidi; launchAlsMidi=NO;
+    if(currentAlsMidi) {
+        // ALSMIDI 起動: ゲーム本体の前に常駐ドライバを読み込む。
+        // ALSMIDI は MAKO が常駐していないと起動できない（INT 40h の "MK" 署名と
+        // バージョン照会で確認する）ので、MAKO → ALSMIDI の順に読み込む。
+        // DMC2 は MDA データ（AMUS.MDA）が無いと常駐できないうえ、データ転送に
+        // DRI（INT 41h/61h）の常駐も要るので、揃っている時だけ DRI → DMC2 の順で
+        ps.cfg.pre_start.clear();
+        if(folderHasDOSFile(root,@"MAKO.COM")) ps.cfg.pre_start.push_back("\\MAKO");
+        ps.cfg.pre_start.push_back("\\ALSMIDI");
+        if(folderHasDOSFile(root,@"DMC2.COM") && folderHasDOSFile(root,@"AMUS.MDA")) {
+            if(folderHasDOSFile(root,@"DRI.COM")) ps.cfg.pre_start.push_back("\\DRI -N");
+            ps.cfg.pre_start.push_back("\\DMC2");
+        }
+    }
     NSInteger clock=[NSUserDefaults.standardUserDefaults integerForKey:gameClockKey(identifier)];
     if(!validClockMHz(clock)) clock=[NSUserDefaults.standardUserDefaults integerForKey:defaultClockKey];
     if(validClockMHz(clock)) ps.cfg.cpu_mhz=(int)clock;
@@ -2457,7 +2521,7 @@ static void PC98ProducerEntry(void* context) {
         [s setNeedsUpdateOfSupportedInterfaceOrientations];[s setNeedsStatusBarAppearanceUpdate];[s.view setNeedsLayout];
         [NSUserDefaults.standardUserDefaults setInteger:sound forKey:@"PC98SoundBoard"];
         [NSUserDefaults.standardUserDefaults setInteger:colors forKey:@"PC98VideoColors"];
-        if(restart && s.currentCache && s.currentID) [s openGameFolder:s.currentCache identifier:s.currentID direct:s.readingOriginal];
+        if(restart && s.currentCache && s.currentID) { s->launchAlsMidi=s->currentAlsMidi; [s openGameFolder:s.currentCache identifier:s.currentID direct:s.readingOriginal]; }
         else if(s->player) { s->paused=previousPause;if(!s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime(); }
         else s.status.text=@"オプションを保存しました。ゲームフォルダーを選択してください。";
         [s refreshMonitor];[s updateBossShield];
@@ -2475,19 +2539,21 @@ static void PC98ProducerEntry(void* context) {
         PlayerController* s=weak;if(!s) return;s->paused=previousPause;if(s->player && !s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime();
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"リセット" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
-        PlayerController* s=weak;if(s) [s openGameFolder:s.currentCache identifier:s.currentID direct:s.readingOriginal];
+        PlayerController* s=weak;if(s) { s->launchAlsMidi=s->currentAlsMidi; [s openGameFolder:s.currentCache identifier:s.currentID direct:s.readingOriginal]; }
     }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)addLibraryGameTo:(GameLocationsController*)menu identifier:(NSString*)identifier
                  folder:(NSURL*)folder cache:(NSURL*)cache catalogName:(NSString*)catalogName
-               fallback:(NSString*)fallback action:(void (^)(void))action {
+               fallback:(NSString*)fallback action:(void (^)(void))action
+             midiAction:(void (^)(void))midiAction {
     NSUserDefaults* defaults=NSUserDefaults.standardUserDefaults;
     NSString* hiddenKey=libraryHiddenKey(identifier);
     if([defaults boolForKey:hiddenKey]) return;
     NSString* key=libraryTitleKey(identifier);
     NSString* custom=[defaults stringForKey:key];
     NSString* display=custom ?: catalogName ?: fallback;
+    BOOL alsMidi=folderHasAlsmidi(folder) || (cache && folderHasAlsmidi(cache));
     __weak GameLocationsController* weakMenu=menu;
     __weak PlayerController* weak=self;
     void (^refresh)(void)=^{
@@ -2497,7 +2563,7 @@ static void PC98ProducerEntry(void* context) {
         [defaults setBool:YES forKey:hiddenKey];
         [GameLibrary forgetURL:folder];
     };
-    [menu addGame:display identifier:identifier cached:(cache && [GameLibrary isUsableCacheAtURL:cache]) action:action info:^{
+    void (^infoBlock)(void)=^{
         GameLocationsController* list=weakMenu;
         if(!list) return;
         BOOL cached=cache && [NSFileManager.defaultManager fileExistsAtPath:cache.path];
@@ -2507,8 +2573,8 @@ static void PC98ProducerEntry(void* context) {
         NSString* displayKey=gameDisplayModeKey(identifier);
         NSNumber* gameMode=[defaults objectForKey:displayKey];
         NSString* displayLabel=gameMode ? displayModeLabels[displayModeForGame(identifier)] : @"デフォルト";
-        NSString* info=[NSString stringWithFormat:@"ソフト名  %@\nフォルダ名  %@\n作品DB  %@\nキャッシュ  %@\nCPUクロック  %@\n画面モード  %@",
-            catalogName ?: fallback,folder.lastPathComponent,catalogName ? @"照合済み" : @"未確認",cached ? @"保存済み" : @"なし",clockLabel,displayLabel];
+        NSString* info=[NSString stringWithFormat:@"ソフト名  %@\nフォルダ名  %@\n作品DB  %@\nキャッシュ  %@\nCPUクロック  %@\n画面モード  %@\nALSMIDI  %@",
+            catalogName ?: fallback,folder.lastPathComponent,catalogName ? @"照合済み" : @"未確認",cached ? @"保存済み" : @"なし",clockLabel,displayLabel,alsMidi ? @"対応（MIDI起動あり）" : @"なし"];
         UIAlertController* details=[UIAlertController alertControllerWithTitle:display message:info preferredStyle:UIAlertControllerStyleAlert];
         [details addAction:[UIAlertAction actionWithTitle:@"CPUクロックを設定" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
             UIAlertController* clocks=[UIAlertController alertControllerWithTitle:@"このゲームのCPUクロック"
@@ -2612,7 +2678,12 @@ static void PC98ProducerEntry(void* context) {
         }]];
         [details addAction:[UIAlertAction actionWithTitle:@"閉じる" style:UIAlertActionStyleCancel handler:nil]];
         [list presentViewController:details animated:YES completion:nil];
-    } remove:removeGame];
+    };
+    BOOL cachedFlag=cache && [GameLibrary isUsableCacheAtURL:cache];
+    [menu addGame:display identifier:identifier cached:cachedFlag action:action info:infoBlock remove:removeGame];
+    if(alsMidi && midiAction)
+        [menu addGame:[display stringByAppendingString:@"（MIDI）"] identifier:identifier cached:cachedFlag badge:@"MIDI"
+               action:midiAction info:infoBlock remove:removeGame];
 }
 - (void)showLibrary {
     if(fetching || self.presentedViewController) return;
@@ -2650,6 +2721,9 @@ static void PC98ProducerEntry(void* context) {
                 catalogName:catalogNameForFolder(source) fallback:title action:^{
                 if(usesGameCache() && [GameLibrary isUsableCacheAtURL:cache]) [weak openCache:cache identifier:identifier];
                 else [weak openSource:source identifier:identifier];
+            } midiAction:^{
+                if(usesGameCache() && [GameLibrary isUsableCacheAtURL:cache] && folderHasAlsmidi(cache)) [weak openCacheAlsMidi:cache identifier:identifier];
+                else [weak openSourceAlsMidi:source identifier:identifier];
             }];
         }
     }
@@ -2669,6 +2743,12 @@ static void PC98ProducerEntry(void* context) {
             NSURL* source=[GameLibrary resolveEntry:entry error:&error];
             if(source) [weak openSource:source identifier:gameIdentifier];
             else [weak reportError:@"場所へのアクセスを復元できません。「開く」で再選択してください。" code:@"source_access" summary:@"登録したフォルダへのアクセスを復元できませんでした"];
+        } midiAction:^{
+            if(usesGameCache() && [GameLibrary isUsableCacheAtURL:cached] && folderHasAlsmidi(cached)) { [weak openCacheAlsMidi:cached identifier:gameIdentifier]; return; }
+            NSError* error=nil;
+            NSURL* source=[GameLibrary resolveEntry:entry error:&error];
+            if(source) [weak openSourceAlsMidi:source identifier:gameIdentifier];
+            else [weak reportError:@"場所へのアクセスを復元できません。「開く」で再選択してください。" code:@"source_access" summary:@"登録したフォルダへのアクセスを復元できませんでした"];
         }];
     }
     // Also expose complete caches staged for device testing.
@@ -2687,6 +2767,9 @@ static void PC98ProducerEntry(void* context) {
             catalogName:catalogNameForFolder(cache) fallback:title
             action:^{
                 if(usesGameCache()) [weak openCache:cache identifier:identifier];
+                else [weak reportError:@"元フォルダを「開く」から選び直してください。" code:@"source_access" summary:@"元フォルダを開けませんでした"];
+            } midiAction:^{
+                if(usesGameCache()) [weak openCacheAlsMidi:cache identifier:identifier];
                 else [weak reportError:@"元フォルダを「開く」から選び直してください。" code:@"source_access" summary:@"元フォルダを開けませんでした"];
             }];
     }

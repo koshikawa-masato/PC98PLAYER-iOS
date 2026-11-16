@@ -3006,6 +3006,7 @@ void shell_start(Machine* m, const std::string& cmdline) {
         }
     }
     BatchCtx b;
+    for (const std::string& pre : m->cfg.pre_start) b.lines.push_back(pre);   // 常駐ドライバ等を本体より先に
     b.lines.push_back(cl);
     s_batch.clear();
     s_batch.push_back(b);
