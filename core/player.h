@@ -95,6 +95,8 @@ struct Player {
     void run_frame(bool render_video = true, bool render_audio = true);
     double perf_cpu_ms = 0, perf_audio_ms = 0;   // 直前の run_frame の内訳（CPU と周辺 / 音の合成）
     void shutdown();
+    // 実行中にボード音声のミュートを切り替える（ALSMIDI が常駐できなかった場合のフォールバック用）
+    void set_mute_opna(bool on);
     // PC-98 を起動し直す（電源を入れ直したのと同じ。入っているフロッピーはそのまま）
     bool reboot(std::string* err);
     // 設定を差し替えて起動し直す（INI の読み直し用。フロッピーは s.cfg.floppy_image のとおり）

@@ -221,6 +221,7 @@ struct Config {
     std::string start;           // 最初に実行するもの
     std::string args;
     std::vector<std::string> pre_start;   // start の前にシェルで実行する行（ALSMIDI 等の常駐ドライバ用）
+    bool     mute_opna = false;  // OPNA（FM・SSG・リズム・ADPCM）の音声出力だけを止める。チップとタイマーは動かし続ける（ALSMIDI 起動時: 実機でボード出力を繋がないのと同じ状態にする）
     char     drive = 'A';
     int      cpu_mhz = 16;
     int      gdc_5mhz = 0;          // DIP SW 2-8: グラフィック GDC を 5MHz で使える（0 = 2.5MHz の機械）

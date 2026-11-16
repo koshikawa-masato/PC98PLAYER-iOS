@@ -131,6 +131,7 @@ bool player_settings_from_ini(const Ini& ini, const std::string& root, PlayerSet
             p = e + 1;
         }
     }
+    ps->cfg.mute_opna = I("MUTEOPNA", 0) != 0;   // MuteOPNA=1 でボード音声だけを止める（ALSMIDI 用）
     std::string drv = G("DRIVE", "A");
     ps->cfg.drive = drv.empty() ? 'A' : (char)toupper((unsigned char)drv[0]);
     ps->cfg.cpu_mhz = I("CPUMHZ", I("CPUCLOCK", 16));
@@ -678,6 +679,7 @@ void Player::run_frame(bool render_video, bool render_audio) {
         // Volume=100 ではほとんど聞こえない。+12dB 持ち上げて、ふつうの音量で聞こえる大きさにする
         //（大きな山は下のソフトリミッタで丸める）。
         l *= k_opna_makeup; r *= k_opna_makeup;
+        if (ps.cfg.mute_opna) { l = 0; r = 0; }   // ALSMIDI 起動時: ボードの音は出さない（演奏データの進行とチップ状態はそのまま）
         if (pi < m->pcm_out.size() || pcm_l || pcm_r) {
             // PCM86: この標本の時刻までに出た PCM 標本の平均（無ければ直前の値を保つ）
             int n = 0; int32_t sl = 0, sr = 0;
@@ -776,6 +778,10 @@ void Player::shutdown() {
     }
     delete opna; opna = nullptr;
     machine_destroy(m); m = nullptr;
+}
+
+void Player::set_mute_opna(bool on) {
+    ps.cfg.mute_opna = on;   // 音の合成ループが毎標本読むので、次のフレームから効く
 }
 
 bool Player::reboot(std::string* err) {

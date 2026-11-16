@@ -139,6 +139,11 @@ static NSString* const midiDestinationNameKey=@"PC98MidiDestinationName";
 static BOOL midiUsesExternalOut(void) {
     return [NSUserDefaults.standardUserDefaults integerForKey:midiModeKey]==1;
 }
+// ALSMIDI 対応ゲームの演奏方法（YES = ALSMIDI があれば MIDI で演奏、NO = FM で演奏）。グローバル設定のみ
+static NSString* const alsMidiKey=@"PC98AlsMidi";
+static BOOL alsMidiPreferred(void) {
+    return [NSUserDefaults.standardUserDefaults boolForKey:alsMidiKey];
+}
 // 診断用 MIDI ログ（ファーランドストーリーの音切れ解析のために追加）:
 // 直近の MIDI ストリームとフレーム処理時間をメモリ上のリングに保持し、
 // オプション画面の「MIDIログを共有」からファイルとして書き出せるようにする。
@@ -187,11 +192,13 @@ static std::vector<uint8_t> MidiLogSnapshot() {
     return out;
 }
 // Player の MIDI 出口から、設定に応じて内蔵シンセか外部 MIDI OUT へ渡す
+static std::atomic<uint64_t> g_midiMessageCount{0};   // 起動後に MIDI が流れたかの判定用（ALSMIDI フォールバック）
 struct MidiDispatch {
     MidiSynth* synth=nullptr;
     MidiOut* out=nullptr;
     BOOL external=NO;
     void handleMessage(const uint8_t* msg, int len) {
+        g_midiMessageCount.fetch_add(1, std::memory_order_relaxed);
         g_midiLog.message(g_midiLogFrame.load(std::memory_order_relaxed), msg, len);
         if(external) {
             if(out) out->handleMessage(msg, len);
@@ -752,6 +759,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 @property(nonatomic, copy) NSDictionary* issueDiagnostics;
 @property NSInteger soundBoard;
 @property NSInteger midiMode;
+@property BOOL alsMidi;
 @property NSInteger midiDestinationID;
 @property(copy) NSString* midiDestinationName;
 @property NSInteger videoColors;
@@ -777,7 +785,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 7; }
-- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==0?5:section==2?7:section==3?6:section==4?1:section==5?5:section==6?4:section==1?5:2; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==0?6:section==2?7:section==3?6:section==4?1:section==5?5:section==6?4:section==1?5:2; }
 - (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数・画面モード",@"表示",@"コンテンツフィルター",@"Bluetoothコントローラー",@"CPUクロックのデフォルト",@"このアプリについて"][section]; }
 - (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section {
     if(section==0)return @"MIDIは内蔵シンセか外部出力のどちらかへ送ります。外部出力は、他の音源アプリの仮想ポートやBluetooth／USB／ネットワークMIDI機器が対象です。MIDIの変更は次回のゲーム起動から適用します。";
@@ -803,10 +811,19 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
             cell.textLabel.text=@"MIDI：外部へ出力";
             cell.detailTextLabel.text=@"他の音源アプリやMIDI機器へ送る（MIDI OUT）";
             cell.accessoryType=self.midiMode==1?UITableViewCellAccessoryCheckmark:UITableViewCellAccessoryNone;
-        } else {
+        } else if(index.row==4) {
             cell.textLabel.text=@"外部MIDIの送り先";
             cell.detailTextLabel.text=self.midiDestinationName.length?self.midiDestinationName:@"自動（最初に見つかったポート）";
             cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
+        } else {
+            cell.textLabel.text=@"ALSMIDI対応ゲームはMIDIで演奏";
+            cell.detailTextLabel.text=@"オン：ALSMIDIがあればMIDIで演奏します（ボード音声は止まります）。オフ：FMで演奏します";
+            UISwitch* toggle=[UISwitch new];
+            toggle.on=self.alsMidi;
+            toggle.accessibilityLabel=cell.textLabel.text;
+            [toggle addTarget:self action:@selector(changeAlsMidi:) forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView=toggle;
+            cell.selectionStyle=UITableViewCellSelectionStyleNone;
         }
     } else if(index.section==1) {
         cell.textLabel.text=index.row==0?@"16色":@"256色";
@@ -1026,6 +1043,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 - (void)changeLandscapeControllerDefault:(UISwitch*)sender { self.landscapeControllerDefault=sender.on; }
 - (void)changeLaunchFullscreen:(UISwitch*)sender { self.launchFullscreen=sender.on; }
 - (void)changeBossMode:(UISwitch*)sender { self.bossMode=sender.on; }
+- (void)changeAlsMidi:(UISwitch*)sender { self.alsMidi=sender.on; }
 - (void)changeFilter:(UISwitch*)sender { auto settings=self.filterSettings;if(sender.tag==0)settings.adult=sender.on;else settings.harm=sender.on;self.filterSettings=settings; }
 - (void)changeSensitivity:(UISegmentedControl*)sender { auto settings=self.filterSettings;settings.sensitivity=(int)sender.selectedSegmentIndex;self.filterSettings=settings; }
 - (void)cancel { [self dismissViewControllerAnimated:YES completion:^{if(self.cancelled)self.cancelled();}]; }
@@ -1037,6 +1055,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     [NSUserDefaults.standardUserDefaults setBool:self.cacheOnLaunch forKey:cacheOnLaunchKey];
     [NSUserDefaults.standardUserDefaults setInteger:self.clockMHz forKey:defaultClockKey];
     [NSUserDefaults.standardUserDefaults setInteger:self.midiMode forKey:midiModeKey];
+    [NSUserDefaults.standardUserDefaults setBool:self.alsMidi forKey:alsMidiKey];
     [NSUserDefaults.standardUserDefaults setInteger:self.midiDestinationID forKey:midiDestinationIDKey];
     if(self.midiDestinationName.length) [NSUserDefaults.standardUserDefaults setObject:self.midiDestinationName forKey:midiDestinationNameKey];
     else [NSUserDefaults.standardUserDefaults removeObjectForKey:midiDestinationNameKey];
@@ -1061,8 +1080,10 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     std::deque<FPSSample> fpsHistory;
     BOOL bossMode;
     BOOL pausedByInactive;
-    BOOL launchAlsMidi;
     BOOL currentAlsMidi;
+    BOOL alsMidiFallbackDone;
+    double alsMidiLaunchTime;
+    uint64_t alsMidiMidiBase;
     std::atomic<bool> hingeClosed;
     std::atomic<bool> paused, fetching;
     BOOL pickerPreviousPause, manualDuo, hingeDuo, duoHardware, fullScreen, fullscreenMenuPaused;
@@ -1864,6 +1885,12 @@ static void PC98ProducerEntry(void* context) {
 }
 - (void)refreshMonitor {
     if(!player)return;
+    // ALSMIDI 起動から 20 秒経っても MIDI が 1 件も来なければ、ALSMIDI が常駐できなかった
+    // （MAKO が古い等）とみなしてボード音声に戻す。無音のまま固まらないためのフォールバック
+    if(currentAlsMidi && !alsMidiFallbackDone && CACurrentMediaTime()-alsMidiLaunchTime>20.0) {
+        alsMidiFallbackDone=YES;
+        if(g_midiMessageCount.load()==alsMidiMidiBase) player->set_mute_opna(false);
+    }
     // The producer thread writes the framebuffer; snapshot it under the lock.
     NSData* reference=self.titleReference;
     UIImage* image=nil; uint64_t imageFrame=0; BOOL matchesTitle=NO;
@@ -2235,7 +2262,7 @@ static void PC98ProducerEntry(void* context) {
                 NSDictionary* report=@{@"sourceName":source.lastPathComponent ?: @"", @"scoped":@(scoped), @"identifier":identifier, @"error":error.localizedDescription ?: @"", @"domain":error.domain ?: @"", @"code":@(error.code), @"usableCache":@([GameLibrary isUsableCacheAtURL:destination])};
                 [[NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil] writeToURL:area(NSDocumentDirectory,@"cache-import-report.json") atomically:YES];
 #endif
-                if(error) { s->launchAlsMidi=NO; s.status.text=error.localizedDescription; [s reportError:error.localizedDescription code:@"cache_import" summary:@"ゲームデータを取得できませんでした"]; }
+                if(error) { s.status.text=error.localizedDescription; [s reportError:error.localizedDescription code:@"cache_import" summary:@"ゲームデータを取得できませんでした"]; }
                 else [s openCache:destination identifier:identifier];
             });
         }
@@ -2255,14 +2282,6 @@ static void PC98ProducerEntry(void* context) {
 }
 - (void)openCache:(NSURL*)cache identifier:(NSString*)identifier {
     [self openGameFolder:cache identifier:identifier direct:NO];
-}
-- (void)openCacheAlsMidi:(NSURL*)cache identifier:(NSString*)identifier {
-    launchAlsMidi=YES;
-    [self openCache:cache identifier:identifier];
-}
-- (void)openSourceAlsMidi:(NSURL*)source identifier:(NSString*)identifier {
-    launchAlsMidi=YES;
-    [self openSource:source identifier:identifier];
 }
 - (void)openGameFolder:(NSURL*)folder identifier:(NSString*)identifier direct:(BOOL)direct {
     [self resetFeedbackErrors];self.launchDiagnostics=nil;
@@ -2290,7 +2309,10 @@ static void PC98ProducerEntry(void* context) {
         [self reportError:[@"Root= の指定先を開けません。ゲームフォルダ内の相対パスと取得状態を確認してください。\n" stringByAppendingString:error.localizedDescription ?: @""] code:@"invalid_root" summary:@"INIのRoot指定先を開けませんでした"]; return;
     }
     PlayerSettings ps; player_settings_from_ini(ini,root.fileSystemRepresentation,&ps);
-    currentAlsMidi=launchAlsMidi; launchAlsMidi=NO;
+    // ALSMIDI 起動はグローバルオプションで決める: オプションが MIDI で、フォルダに
+    // ALSMIDI.COM があれば ALSMIDI 起動、そうでなければ通常の FM 起動（フォールバック）
+    currentAlsMidi=alsMidiPreferred() && folderHasAlsmidi(root);
+    alsMidiFallbackDone=NO; alsMidiLaunchTime=CACurrentMediaTime(); alsMidiMidiBase=g_midiMessageCount.load();
     if(currentAlsMidi) {
         // ALSMIDI 起動: ゲーム本体の前に常駐ドライバを読み込む。
         // ALSMIDI は MAKO が常駐していないと起動できない（INT 40h の "MK" 署名と
@@ -2298,6 +2320,7 @@ static void PC98ProducerEntry(void* context) {
         // DMC2 は MDA データ（AMUS.MDA）が無いと常駐できないうえ、データ転送に
         // DRI（INT 41h/61h）の常駐も要るので、揃っている時だけ DRI → DMC2 の順で
         ps.cfg.pre_start.clear();
+        ps.cfg.mute_opna = true;   // MAKO は ALSMIDI 常駐時もボードを鳴らし続ける（毎ティック通知フック方式）ため、実機でボード出力を繋がない状態を再現する
         if(folderHasDOSFile(root,@"MAKO.COM")) ps.cfg.pre_start.push_back("\\MAKO");
         ps.cfg.pre_start.push_back("\\ALSMIDI");
         if(folderHasDOSFile(root,@"DMC2.COM") && folderHasDOSFile(root,@"AMUS.MDA")) {
@@ -2488,6 +2511,7 @@ static void PC98ProducerEntry(void* context) {
     options.videoColors=player?player->m->cfg.video_colors:([NSUserDefaults.standardUserDefaults objectForKey:@"PC98VideoColors"]? [NSUserDefaults.standardUserDefaults integerForKey:@"PC98VideoColors"]:16);
     options.displayMode=[NSUserDefaults.standardUserDefaults integerForKey:displayModeKey];
     options.midiMode=midiUsesExternalOut()?1:0;
+    options.alsMidi=alsMidiPreferred();
     options.midiDestinationID=[NSUserDefaults.standardUserDefaults integerForKey:midiDestinationIDKey];
     options.midiDestinationName=[NSUserDefaults.standardUserDefaults stringForKey:midiDestinationNameKey] ?: @"";
     NSInteger defaultClock=[NSUserDefaults.standardUserDefaults integerForKey:defaultClockKey];
@@ -2521,7 +2545,7 @@ static void PC98ProducerEntry(void* context) {
         [s setNeedsUpdateOfSupportedInterfaceOrientations];[s setNeedsStatusBarAppearanceUpdate];[s.view setNeedsLayout];
         [NSUserDefaults.standardUserDefaults setInteger:sound forKey:@"PC98SoundBoard"];
         [NSUserDefaults.standardUserDefaults setInteger:colors forKey:@"PC98VideoColors"];
-        if(restart && s.currentCache && s.currentID) { s->launchAlsMidi=s->currentAlsMidi; [s openGameFolder:s.currentCache identifier:s.currentID direct:s.readingOriginal]; }
+        if(restart && s.currentCache && s.currentID) { [s openGameFolder:s.currentCache identifier:s.currentID direct:s.readingOriginal]; }
         else if(s->player) { s->paused=previousPause;if(!s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime(); }
         else s.status.text=@"オプションを保存しました。ゲームフォルダーを選択してください。";
         [s refreshMonitor];[s updateBossShield];
@@ -2539,14 +2563,13 @@ static void PC98ProducerEntry(void* context) {
         PlayerController* s=weak;if(!s) return;s->paused=previousPause;if(s->player && !s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime();
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"リセット" style:UIAlertActionStyleDestructive handler:^(UIAlertAction* action) {
-        PlayerController* s=weak;if(s) { s->launchAlsMidi=s->currentAlsMidi; [s openGameFolder:s.currentCache identifier:s.currentID direct:s.readingOriginal]; }
+        PlayerController* s=weak;if(s) { [s openGameFolder:s.currentCache identifier:s.currentID direct:s.readingOriginal]; }
     }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)addLibraryGameTo:(GameLocationsController*)menu identifier:(NSString*)identifier
                  folder:(NSURL*)folder cache:(NSURL*)cache catalogName:(NSString*)catalogName
-               fallback:(NSString*)fallback action:(void (^)(void))action
-             midiAction:(void (^)(void))midiAction {
+               fallback:(NSString*)fallback action:(void (^)(void))action {
     NSUserDefaults* defaults=NSUserDefaults.standardUserDefaults;
     NSString* hiddenKey=libraryHiddenKey(identifier);
     if([defaults boolForKey:hiddenKey]) return;
@@ -2574,7 +2597,7 @@ static void PC98ProducerEntry(void* context) {
         NSNumber* gameMode=[defaults objectForKey:displayKey];
         NSString* displayLabel=gameMode ? displayModeLabels[displayModeForGame(identifier)] : @"デフォルト";
         NSString* info=[NSString stringWithFormat:@"ソフト名  %@\nフォルダ名  %@\n作品DB  %@\nキャッシュ  %@\nCPUクロック  %@\n画面モード  %@\nALSMIDI  %@",
-            catalogName ?: fallback,folder.lastPathComponent,catalogName ? @"照合済み" : @"未確認",cached ? @"保存済み" : @"なし",clockLabel,displayLabel,alsMidi ? @"対応（MIDI起動あり）" : @"なし"];
+            catalogName ?: fallback,folder.lastPathComponent,catalogName ? @"照合済み" : @"未確認",cached ? @"保存済み" : @"なし",clockLabel,displayLabel,alsMidi ? @"対応" : @"なし"];
         UIAlertController* details=[UIAlertController alertControllerWithTitle:display message:info preferredStyle:UIAlertControllerStyleAlert];
         [details addAction:[UIAlertAction actionWithTitle:@"CPUクロックを設定" style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {
             UIAlertController* clocks=[UIAlertController alertControllerWithTitle:@"このゲームのCPUクロック"
@@ -2681,9 +2704,6 @@ static void PC98ProducerEntry(void* context) {
     };
     BOOL cachedFlag=cache && [GameLibrary isUsableCacheAtURL:cache];
     [menu addGame:display identifier:identifier cached:cachedFlag action:action info:infoBlock remove:removeGame];
-    if(alsMidi && midiAction)
-        [menu addGame:[display stringByAppendingString:@"（MIDI）"] identifier:identifier cached:cachedFlag badge:@"MIDI"
-               action:midiAction info:infoBlock remove:removeGame];
 }
 - (void)showLibrary {
     if(fetching || self.presentedViewController) return;
@@ -2721,9 +2741,6 @@ static void PC98ProducerEntry(void* context) {
                 catalogName:catalogNameForFolder(source) fallback:title action:^{
                 if(usesGameCache() && [GameLibrary isUsableCacheAtURL:cache]) [weak openCache:cache identifier:identifier];
                 else [weak openSource:source identifier:identifier];
-            } midiAction:^{
-                if(usesGameCache() && [GameLibrary isUsableCacheAtURL:cache] && folderHasAlsmidi(cache)) [weak openCacheAlsMidi:cache identifier:identifier];
-                else [weak openSourceAlsMidi:source identifier:identifier];
             }];
         }
     }
@@ -2743,12 +2760,6 @@ static void PC98ProducerEntry(void* context) {
             NSURL* source=[GameLibrary resolveEntry:entry error:&error];
             if(source) [weak openSource:source identifier:gameIdentifier];
             else [weak reportError:@"場所へのアクセスを復元できません。「開く」で再選択してください。" code:@"source_access" summary:@"登録したフォルダへのアクセスを復元できませんでした"];
-        } midiAction:^{
-            if(usesGameCache() && [GameLibrary isUsableCacheAtURL:cached] && folderHasAlsmidi(cached)) { [weak openCacheAlsMidi:cached identifier:gameIdentifier]; return; }
-            NSError* error=nil;
-            NSURL* source=[GameLibrary resolveEntry:entry error:&error];
-            if(source) [weak openSourceAlsMidi:source identifier:gameIdentifier];
-            else [weak reportError:@"場所へのアクセスを復元できません。「開く」で再選択してください。" code:@"source_access" summary:@"登録したフォルダへのアクセスを復元できませんでした"];
         }];
     }
     // Also expose complete caches staged for device testing.
@@ -2767,9 +2778,6 @@ static void PC98ProducerEntry(void* context) {
             catalogName:catalogNameForFolder(cache) fallback:title
             action:^{
                 if(usesGameCache()) [weak openCache:cache identifier:identifier];
-                else [weak reportError:@"元フォルダを「開く」から選び直してください。" code:@"source_access" summary:@"元フォルダを開けませんでした"];
-            } midiAction:^{
-                if(usesGameCache()) [weak openCacheAlsMidi:cache identifier:identifier];
                 else [weak reportError:@"元フォルダを「開く」から選び直してください。" code:@"source_access" summary:@"元フォルダを開けませんでした"];
             }];
     }
