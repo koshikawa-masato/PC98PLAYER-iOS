@@ -720,6 +720,10 @@ static BOOL showsLandscapeControllerByDefault(void) {
     NSNumber* enabled=[NSUserDefaults.standardUserDefaults objectForKey:landscapeControllerDefaultKey];
     return enabled ? enabled.boolValue : YES;
 }
+static NSString* const keepAwakeKey=@"PC98KeepAwake";
+static BOOL keepAwakePreferred(void) {
+    return [NSUserDefaults.standardUserDefaults boolForKey:keepAwakeKey];
+}
 static NSString* const launchFullscreenKey=@"PC98LaunchFullscreen";
 static NSString* const bluetoothBindingsKey=@"PC98BluetoothControllerBindings";
 
@@ -771,6 +775,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
 @property BOOL landscapeControllerDefault;
 @property BOOL portraitEdgeToEdge;
 @property BOOL cacheOnLaunch;
+@property BOOL keepAwake;
 @property(copy) NSArray<NSNumber*>* bluetoothBindings;
 @property content_filter::Settings filterSettings;
 @property(copy) void (^willApply)(content_filter::Settings);
@@ -785,7 +790,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"適用" style:UIBarButtonItemStyleDone target:self action:@selector(apply)];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 7; }
-- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==0?6:section==2?7:section==3?6:section==4?1:section==5?5:section==6?4:section==1?5:2; }
+- (NSInteger)tableView:(UITableView*)tableView numberOfRowsInSection:(NSInteger)section { return section==0?6:section==2?8:section==3?6:section==4?1:section==5?5:section==6?4:section==1?5:2; }
 - (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section { return @[@"音源",@"色数・画面モード",@"表示",@"コンテンツフィルター",@"Bluetoothコントローラー",@"CPUクロックのデフォルト",@"このアプリについて"][section]; }
 - (NSString*)tableView:(UITableView*)tableView titleForFooterInSection:(NSInteger)section {
     if(section==0)return @"MIDIは内蔵シンセか外部出力のどちらかへ送ります。外部出力は、他の音源アプリの仮想ポートやBluetooth／USB／ネットワークMIDI機器が対象です。MIDIの変更は次回のゲーム起動から適用します。";
@@ -837,7 +842,16 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     } else if(index.section==2) {
         cell.textLabel.text=index.row==0?@"自動判別":index.row==1?@"Duo上下表示を固定":@"ボスがきた";
         cell.detailTextLabel.text=index.row==0?@"端末とヒンジの状態に合わせる":index.row==1?@"上にモニタ、下にキーボード":@"Duoを閉じると一時停止・アウターを非表示";
-        if(index.row==6) {
+        if(index.row==7) {
+            cell.textLabel.text=@"無操作でもスリープしない";
+            cell.detailTextLabel.text=@"オンの間は画面の自動スリープを止めます（長時間の読み込み待ちなどに）";
+            UISwitch* toggle=[UISwitch new];
+            toggle.on=self.keepAwake;
+            toggle.accessibilityLabel=cell.textLabel.text;
+            [toggle addTarget:self action:@selector(changeKeepAwake:) forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView=toggle;
+            cell.selectionStyle=UITableViewCellSelectionStyleNone;
+        } else if(index.row==6) {
             cell.textLabel.text=@"横画面の全画面でコントローラーを表示";
             cell.textLabel.numberOfLines=0;
             cell.detailTextLabel.text=@"プレイ中は長押しメニューで切り替え";
@@ -1039,6 +1053,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     });
 }
 - (void)changeCacheOnLaunch:(UISwitch*)sender { self.cacheOnLaunch=sender.on; }
+- (void)changeKeepAwake:(UISwitch*)sender { self.keepAwake=sender.on; }
 - (void)changePortraitEdgeToEdge:(UISwitch*)sender { self.portraitEdgeToEdge=sender.on; }
 - (void)changeLandscapeControllerDefault:(UISwitch*)sender { self.landscapeControllerDefault=sender.on; }
 - (void)changeLaunchFullscreen:(UISwitch*)sender { self.launchFullscreen=sender.on; }
@@ -1053,6 +1068,7 @@ static void presentCustomClock(UIViewController* presenter, NSInteger clock, voi
     [NSUserDefaults.standardUserDefaults setBool:self.launchFullscreen forKey:launchFullscreenKey];
     [NSUserDefaults.standardUserDefaults setBool:self.portraitEdgeToEdge forKey:portraitEdgeToEdgeKey];
     [NSUserDefaults.standardUserDefaults setBool:self.cacheOnLaunch forKey:cacheOnLaunchKey];
+    [NSUserDefaults.standardUserDefaults setBool:self.keepAwake forKey:keepAwakeKey];
     [NSUserDefaults.standardUserDefaults setInteger:self.clockMHz forKey:defaultClockKey];
     [NSUserDefaults.standardUserDefaults setInteger:self.midiMode forKey:midiModeKey];
     [NSUserDefaults.standardUserDefaults setBool:self.alsMidi forKey:alsMidiKey];
@@ -1357,7 +1373,12 @@ static void PC98ProducerEntry(void* context) {
     if(!paused) pausedByInactive=YES;
     [self suspend];
 }
+- (void)updateIdleTimer {
+    // 「無操作でもスリープしない」がオンで、ゲーム実行中のときだけ画面の自動スリープを止める
+    UIApplication.sharedApplication.idleTimerDisabled=keepAwakePreferred() && player && !player->m->quit;
+}
 - (void)resumeAfterActivation {
+    [self updateIdleTimer];
     if(!pausedByInactive) return;
     pausedByInactive=NO;
     if(bossMode) return;   // 「ボスがきた」モードでは開き直しても自動再開しない（従来仕様）
@@ -1635,7 +1656,7 @@ static void PC98ProducerEntry(void* context) {
             (failure==GuestFailure::Command?@"Bad command or file name":failure==GuestFailure::Memory?@"Not enough memory":summary):text(player->m->status);
         [self reportError:message code:code summary:summary];
     }
-    paused=YES;[self releaseKeys]; { std::lock_guard<std::mutex> lock(playerMutex); audio.close(); midiSynth.allSoundOff(); midiOut.allSoundOff(); }
+    paused=YES;[self releaseKeys]; { std::lock_guard<std::mutex> lock(playerMutex); audio.close(); midiSynth.allSoundOff(); midiOut.allSoundOff(); } [self updateIdleTimer];
     self.status.text=player->m->quit>=2?text(player->m->status):@"実行が終了しました";
 }
 - (void)updateScan:(int)scan {
@@ -1944,6 +1965,7 @@ static void PC98ProducerEntry(void* context) {
     [self.scopedGameFolder stopAccessingSecurityScopedResource];
     self.scopedGameFolder=nil;
     self.readingOriginal=NO;
+    [self updateIdleTimer];
 }
 - (void)startProducer {
     [self stopProducer];
@@ -2428,7 +2450,7 @@ static void PC98ProducerEntry(void* context) {
     if(self.currentID.length && ![self.currentID isEqualToString:@"demo"])
         self.titleReference=[NSUserDefaults.standardUserDefaults dataForKey:titleReferenceKey(self.currentID)];
     self.titleCaptureAttempted=NO;
-    [self startAudio]; [self startProducer]; [self becomeFirstResponder];
+    [self startAudio]; [self startProducer]; [self becomeFirstResponder]; [self updateIdleTimer];
     NSString* warnings=@"";
     for(auto* e:{&player->floppy_error,&player->cd_error,&player->rhythm_error}) if(!e->empty()) warnings=[warnings stringByAppendingFormat:@"%@\n",text(*e)];
     if(warnings.length) [self reportError:warnings code:@"media_load" summary:@"ディスクまたは音源データを読み込めませんでした"];
@@ -2518,6 +2540,7 @@ static void PC98ProducerEntry(void* context) {
     options.clockMHz=validClockMHz(defaultClock) ? defaultClock : 0;
     __weak PlayerController* weak=self;
     options.cacheOnLaunch=usesGameCache();
+    options.keepAwake=keepAwakePreferred();
     options.portraitEdgeToEdge=usesPortraitEdgeToEdge();
     options.landscapeControllerDefault=showsLandscapeControllerByDefault();
     options.launchFullscreen=[NSUserDefaults.standardUserDefaults boolForKey:launchFullscreenKey];
@@ -2548,7 +2571,7 @@ static void PC98ProducerEntry(void* context) {
         if(restart && s.currentCache && s.currentID) { [s openGameFolder:s.currentCache identifier:s.currentID direct:s.readingOriginal]; }
         else if(s->player) { s->paused=previousPause;if(!s->paused) [s startAudio];s->nextFrame=CACurrentMediaTime(); }
         else s.status.text=@"オプションを保存しました。ゲームフォルダーを選択してください。";
-        [s refreshMonitor];[s updateBossShield];
+        [s refreshMonitor];[s updateBossShield];[s updateIdleTimer];
     };
     UINavigationController* nav=[[UINavigationController alloc] initWithRootViewController:options];nav.modalInPresentation=YES;
     if(nav.sheetPresentationController) nav.sheetPresentationController.detents=@[UISheetPresentationControllerDetent.largeDetent];
