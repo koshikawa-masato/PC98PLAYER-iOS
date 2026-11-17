@@ -397,6 +397,8 @@ struct Machine {
     // 音
     std::vector<RegWrite> regw;  // レンダラへ渡す書き込み
     std::atomic<uint8_t> opna_adpcm_status{0};  // レンダラが描画のたびに写す ADPCM-B 状態（18Ch の拡張ステータス読み用）
+    uint8_t  opna_adpcm_flag_control = 0x1C;    // フラグ制御レジスタ（110h）の控え。リセット値は 1Ch（EOS/BRDY/ZERO をマスク）
+    std::vector<uint8_t> adpcm_ram;             // ADPCM-B の DRAM（ちびおと相当 512KB）の CPU 側ミラー。初回アクセスで確保
     uint64_t audio_tick;         // ここまで音を作った
     std::vector<std::pair<uint64_t,int>> beepw;   // ビープの変化
 
@@ -416,6 +418,7 @@ Machine* machine_create(const Config& cfg);
 void     machine_destroy(Machine* m);
 void     machine_run_frame(Machine* m);          // 1 フレームぶん進める
 void     machine_raise_irq(Machine* m, int irq);
+void     opna_adpcm_set_status(Machine* m, uint8_t s);   // ADPCM-B 状態の更新（マスクされていないフラグの立ち上がりで音源 IRQ）
 void     machine_eoi(Machine* m, int irq);
 void     machine_key(Machine* m, uint8_t scancode, bool down);
 void     machine_mouse(Machine* m, int dx, int dy, int buttons);

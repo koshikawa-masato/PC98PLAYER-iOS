@@ -25,7 +25,7 @@ public:
     bool rhythm_on;                    // 切ると ADPCM-A の読み出しが 0 になる
     int  rhythm_kind;                  // 0=切 / 1=自前合成 / 2=渡された本物
 
-    YmfmHost() : adpcm_ram(256 * 1024, 0), rhythm_on(true), rhythm_kind(1) {
+    YmfmHost() : adpcm_ram(512 * 1024, 0), rhythm_on(true), rhythm_kind(1) {   // ADPCM-B の DRAM は ちびおと相当の 512KB
         // 何も渡されなくてもリズムが鳴るように、自前合成の 8KB を入れておく。
         // 本物の ROM を渡されたらそちらで上書きされる（rhythm_rom.h を参照）。
         rhythm_rom.resize(RHYTHM_ROM_BYTES);
@@ -192,6 +192,13 @@ bool OpnaRenderer::load_chip(const std::vector<uint8_t>& in) {
     p->chip_rate = p->chip.sample_rate(clock_);
     return true;
 }
+void OpnaRenderer::set_adpcm_ram(const uint8_t* data, size_t len) {
+    Impl* p = (Impl*)impl_;
+    if (!p) return;
+    size_t n = std::min(len, p->host.adpcm_ram.size());
+    if (data && n) memcpy(p->host.adpcm_ram.data(), data, n);
+    std::fill(p->host.adpcm_ram.begin() + (ptrdiff_t)n, p->host.adpcm_ram.end(), 0);
+}
 
 // 本物の ROM を渡されたらそちらを使う。NULL を渡すと自前合成へ戻る。
 //
@@ -276,6 +283,7 @@ void OpnaRenderer::set_rhythm_enabled(bool) {}
 int  OpnaRenderer::rhythm_source() const { return 0; }
 void OpnaRenderer::save_chip(std::vector<uint8_t>& out) { out.clear(); }
 bool OpnaRenderer::load_chip(const std::vector<uint8_t>&) { return false; }
+void OpnaRenderer::set_adpcm_ram(const uint8_t*, size_t) {}
 void OpnaRenderer::set_balance(double, double) {}
 int  OpnaRenderer::available() { return 0; }
 

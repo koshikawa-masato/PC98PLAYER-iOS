@@ -740,7 +740,7 @@ void Player::run_frame(bool render_video, bool render_audio) {
     for (; wi < m->regw.size(); wi++) opna->write(m->regw[wi].part, m->regw[wi].addr, m->regw[wi].val);
     // ADPCM-B の状態（BRDY 等）を CPU 側へ見えるように写しておく。音源の状態を
     // ポーリングで待つソフト（P88SR の DRAM 判定など）がこれを読む
-    m->opna_adpcm_status.store(opna->status_adpcm_bits(), std::memory_order_relaxed);
+    opna_adpcm_set_status(m, opna->status_adpcm_bits());
     for (; bi < m->beepw.size(); bi++) { int v = m->beepw[bi].second; if (v == 0) beep_state = false; else if (v == 1) beep_state = true; else if (v & 0x400000) { beep_pwm = true; pwm_lo_s = (double)m->beepw[bi].first; pwm_lo_e = (v & 1) ? 1e300 : pwm_lo_s; } else if (v & 0x200000) { uint32_t cnt = (uint16_t)v; if (!cnt) cnt = 0x10000; beep_pwm = true; pwm_lo_s = (double)m->beepw[bi].first; pwm_lo_e = pwm_lo_s + cnt * 4.0; } else if (v & 0x100000) { beep_reload = (uint16_t)v; beep_pwm = false; } }
     if (pi < m->pcm_out.size()) { pcm_l = m->pcm_out.back().l; pcm_r = m->pcm_out.back().r; }
     if (!(m->pcm86.ctrl & 0x80)) pcm_l = pcm_r = 0;
@@ -858,6 +858,9 @@ void Player::snapshot(std::vector<uint8_t>& out) {
     w.u32((uint32_t)chip.size()); w.bytes(chip.data(), chip.size());
     w.tag("FD2 ");                                   // 2 台目のドライブ（ブートモード）
     w.str(floppy::current_path_unit(1));
+    w.tag("ADPM");                                   // ADPCM-B の DRAM とフラグ制御（チップ保存には含まれない分）
+    w.u32((uint32_t)m->adpcm_ram.size()); w.bytes(m->adpcm_ram.data(), m->adpcm_ram.size());
+    w.pod(m->opna_adpcm_flag_control);
     w.tag("END ");
     out.swap(w.b);
 }
@@ -883,6 +886,16 @@ bool Player::restore(const uint8_t* data, size_t len) {
             if (!floppy::insert_unit(1, fp, &e)) plog("[state] 2 台目のフロッピーを入れ直せません: %s (%s)\n", fp.c_str(), e.c_str());
         }
     }
+    bool have_adpm = false;                          // ADPCM-B の DRAM（旧形式のステートには無い）
+    if (r.ok && r.peek_tag("ADPM")) {
+        r.tag("ADPM");
+        uint32_t n = r.u32();
+        if (r.ok && n <= 4 * 1024 * 1024) {
+            m->adpcm_ram.assign(n, 0);
+            if (n) r.bytes(m->adpcm_ram.data(), n);
+            if (r.ok) { r.pod(m->opna_adpcm_flag_control); have_adpm = r.ok; }
+        } else r.ok = false;
+    }
     r.tag("END ");
     floppy::clear_swap_flags();
     if (!r.ok) return false;
@@ -893,6 +906,8 @@ bool Player::restore(const uint8_t* data, size_t len) {
         opna->reload_from_registers(m->opna.reg[0], m->opna.reg[1]);
         for (int ch = 0; ch < 8; ch++) if ((ch & 3) != 3 && m->opna.keyon[ch]) opna->write(0, 0x28, (uint8_t)(m->opna.keyon[ch] | ch));
     }
+    // ADPCM-B の DRAM はチップ保存の対象外なので、CPU 側ミラーから戻す
+    if (have_adpm) opna->set_adpcm_ram(m->adpcm_ram.data(), m->adpcm_ram.size());
     fb_h = video_render(m, fb);
     return true;
 }

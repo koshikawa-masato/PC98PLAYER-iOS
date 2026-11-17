@@ -257,6 +257,20 @@ static void opna_recalc(Machine* m) {
 }
 unsigned g_opna_writes = 0, g_opna_keyon = 0, g_opna_hist[2][256];
 FILE* g_opna_log = nullptr;   // 確かめ用（harness の OPNALOG=）
+// ADPCM-B の状態バイト（拡張ステータスの並び: EOS=04h BRDY=08h ZERO=10h
+// PLAYING=20h）の更新。フラグ制御でマスクされていないフラグ（EOS/BRDY/ZERO）が
+// 新しく立ったら音源 IRQ を上げる（実機の割り込みもこの条件で出る）。
+void opna_adpcm_set_status(Machine* m, uint8_t s) {
+    uint8_t old = m->opna_adpcm_status.load(std::memory_order_relaxed);
+    m->opna_adpcm_status.store(s, std::memory_order_relaxed);
+    uint8_t live = (uint8_t)(s & ~m->opna_adpcm_flag_control & 0x1C);
+    uint8_t was  = (uint8_t)(old & ~m->opna_adpcm_flag_control & 0x1C);
+    if (live & ~was) machine_raise_irq(m, m->cfg.sound_irq);
+}
+// ADPCM-B の DRAM（512KB）の CPU 側ミラーを用意する
+static void adpcm_ram_ensure(Machine* m) {
+    if (m->adpcm_ram.size() != 512 * 1024) m->adpcm_ram.assign(512 * 1024, 0);
+}
 // ADPCM-B のフラグ（BRDY/EOS/PLAYING）の CPU 側の模型。レンダラ (ymfm) の状態は
 // 描画のたびに opna_adpcm_status へ写されるが、それだけだとポーリングの粒度が
 // 1 フレームになり、DRAM への書き込みを BRDY 待ちで回すソフトが実質止まる。
@@ -266,7 +280,7 @@ FILE* g_opna_log = nullptr;   // 確かめ用（harness の OPNALOG=）
 static void opna_adpcm_flag_model(Machine* m, uint8_t addr, uint8_t val) {
     const uint8_t* R = m->opna.reg[1];
     auto getst = [&] { return m->opna_adpcm_status.load(std::memory_order_relaxed); };
-    auto putst = [&](uint8_t s) { m->opna_adpcm_status.store(s, std::memory_order_relaxed); };
+    auto putst = [&](uint8_t s) { opna_adpcm_set_status(m, s); };
     auto shift = [&] { return (R[0x01] & 0x03) ? 5 : 2; };   // rom_ram / dram_8bit
     auto load_start = [&] {
         putst((uint8_t)((getst() & ~0x04) | 0x20));          // EOS を落として PLAYING
@@ -275,7 +289,7 @@ static void opna_adpcm_flag_model(Machine* m, uint8_t addr, uint8_t val) {
     if (addr == 0x00) {
         if (val & 0x80) load_start();
         else putst((uint8_t)(getst() & ~0x04));              // 実行中でなければ EOS を落とす
-        if (val & 0x01) putst(0x08);                         // リセット: BRDY のみ残る
+        if (val & 0x01) { putst(0x08); m->opna.adpcm_curaddr = 0; m->opna.adpcm_dummy = 0; }   // リセット: BRDY のみ残り、位置も戻る
         if (val & 0x20) m->opna.adpcm_dummy = 2;
     } else if (addr == 0x08) {
         bool execute = R[0x00] & 0x80, record = R[0x00] & 0x40, external = R[0x00] & 0x20;
@@ -284,9 +298,17 @@ static void opna_adpcm_flag_model(Machine* m, uint8_t addr, uint8_t val) {
         } else if (!execute && record && external) {
             if (m->opna.adpcm_dummy) { load_start(); m->opna.adpcm_dummy = 0; }
             uint32_t end = (uint32_t)(R[0x04] | (R[0x05] << 8));
-            if (m->opna.adpcm_curaddr == (((end + 1) << shift()) - 1)) putst(0x04 | 0x08);   // EOS | BRDY
-            else { m->opna.adpcm_curaddr++; putst(0x08); }                                   // BRDY
+            if (m->opna.adpcm_curaddr == (((end + 1) << shift()) - 1)) putst(0x04 | 0x08);   // EOS | BRDY（このバイトは書かない）
+            else {
+                adpcm_ram_ensure(m);
+                if (m->opna.adpcm_curaddr < m->adpcm_ram.size()) m->adpcm_ram[m->opna.adpcm_curaddr] = val;
+                m->opna.adpcm_curaddr++;
+                putst(0x08);                                 // BRDY
+            }
         }
+    } else if (addr == 0x10) {                               // フラグ制御（110h）
+        if (val & 0x80) putst((uint8_t)(getst() & ~(0x04 | 0x10)));   // フラグリセット: EOS/ZERO を落とす
+        else m->opna_adpcm_flag_control = val;
     }
 }
 void opna_write(Machine* m, int part, uint8_t addr, uint8_t val) {
@@ -332,6 +354,32 @@ static uint8_t opna_read_data(Machine* m, int part) {
         if (a == 0x0F) return 0xFF;
         if (a < 0x10) return m->opna.reg[0][a];
         return m->opna.reg[0][a];
+    }
+    if (a == 0x08) {
+        // ADPCM-B のメモリ読み出し（外部メモリ・再生でも記録でもないときだけ）。
+        // 並びと条件は ymfm の adpcm_b_channel::read と同じ: 最初の 2 回は
+        // ダミーで開始位置を合わせ、そのあと 1 バイトずつ進む。終わりで
+        // EOS|BRDY、リミットで位置が 0 に戻る
+        const uint8_t* R = m->opna.reg[1];
+        bool execute = R[0x00] & 0x80, record = R[0x00] & 0x40, external = R[0x00] & 0x20;
+        if (!execute && !record && external) {
+            int shift = (R[0x01] & 0x03) ? 5 : 2;
+            if (m->opna.adpcm_dummy) {
+                opna_adpcm_set_status(m, (uint8_t)((m->opna_adpcm_status.load(std::memory_order_relaxed) & ~0x04) | 0x20));
+                m->opna.adpcm_curaddr = (uint32_t)(R[0x02] | (R[0x03] << 8)) << shift;
+                m->opna.adpcm_dummy--;
+                return 0;
+            }
+            adpcm_ram_ensure(m);
+            uint8_t v = m->opna.adpcm_curaddr < m->adpcm_ram.size() ? m->adpcm_ram[m->opna.adpcm_curaddr] : 0;
+            m->opna.adpcm_curaddr++;
+            uint32_t end = (uint32_t)(R[0x04] | (R[0x05] << 8));
+            if (m->opna.adpcm_curaddr == (((end + 1) << shift) - 1)) opna_adpcm_set_status(m, 0x04 | 0x08);   // EOS | BRDY
+            else opna_adpcm_set_status(m, 0x08);                                                                // BRDY
+            uint32_t limit = (uint32_t)(R[0x0C] | (R[0x0D] << 8));
+            if (m->opna.adpcm_curaddr == (((limit + 1) << shift) - 1)) m->opna.adpcm_curaddr = 0;
+            return v;
+        }
     }
     return m->opna.reg[1][a];
 }
@@ -855,7 +903,14 @@ uint8_t io_in8_(Machine* m, uint16_t port) {
         case 0x188: return (uint8_t)(m->opna.status & 0x03);
         case 0x18A: return opna_read_data(m, 0);
         // 86 ボードは A460h bit0=0 の間 YM2203 互換で、拡張ポート 18Ch/18Eh が見えない（ONGCHK はこれで 86 を判別する）
-        case 0x18C: return (is26 || !(m->opna.reg[1][0xFE] & 1)) ? 0xFF : (uint8_t)((m->opna.status & 0x03) | m->opna_adpcm_status.load(std::memory_order_relaxed));
+        case 0x18C: {
+            if (is26 || !(m->opna.reg[1][0xFE] & 1)) return 0xFF;
+            // ADPCM-B のフラグはフラグ制御（110h）でマスクされた分を見せない。
+            // PLAYING（20h）はマスクの対象外
+            uint8_t st = m->opna_adpcm_status.load(std::memory_order_relaxed);
+            uint8_t bits = (uint8_t)((st & 0x20) | (st & 0x1C & ~m->opna_adpcm_flag_control));
+            return (uint8_t)((m->opna.status & 0x03) | bits);
+        }
         case 0x18E: return (is26 || !(m->opna.reg[1][0xFE] & 1)) ? 0xFF : opna_read_data(m, 1);
         case 0xA460: return is26 ? 0xFF : (uint8_t)(0x40 | (m->opna.reg[1][0xFE] & 0x01));
         case 0xA466: case 0xA468: case 0xA46A: case 0xA46C: return is26 ? 0xFF : pcm86_in(m, port);

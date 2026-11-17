@@ -45,6 +45,10 @@ public:
     void save_chip(std::vector<uint8_t>& out);
     bool load_chip(const std::vector<uint8_t>& in);
 
+    // ADPCM-B の DRAM の中身を差し替える（ステート復元で CPU 側ミラーと
+    // 揃えるため）。チップ内部の保存には外部メモリが含まれないので別に持つ。
+    void set_adpcm_ram(const uint8_t* data, size_t len);
+
     // FM と SSG の音量比。実機でもボードや本体のつまみで変わる部分なので開ける。
     void set_balance(double fm_gain, double ssg_gain);
 
