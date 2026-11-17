@@ -1,0 +1,30 @@
+diff --git a/src/ymfm.h b/src/ymfm.h
+index 6427e34..3cd2b0f 100644
+--- a/src/ymfm.h
++++ b/src/ymfm.h
+@@ -272,6 +272,7 @@ enum access_class : uint32_t
+ 	ACCESS_IO = 0,
+ 	ACCESS_ADPCM_A,
+ 	ACCESS_ADPCM_B,
++	ACCESS_ADPCM_B_STREAM,	// [PC98PLAYER local patch] byte stream for CPU-driven ADPCM-B playback (host FIFO)
+ 	ACCESS_PCM,
+ 	ACCESS_CLASSES
+ };
+diff --git a/src/ymfm_adpcm.cpp b/src/ymfm_adpcm.cpp
+index 4bc22be..d38dc9c 100644
+--- a/src/ymfm_adpcm.cpp
++++ b/src/ymfm_adpcm.cpp
+@@ -510,7 +510,12 @@ void adpcm_b_channel::clock()
+ 		// if CPU-driven, copy the next byte and request more
+ 		else
+ 		{
+-			m_curbyte = m_regs.cpudata();
++			// [PC98PLAYER local patch] take the byte from the host-side stream
++			// FIFO instead of cpudata: guest writes only reach the chip once
++			// per rendered frame, so a single cpudata byte cannot sustain a
++			// real-time feed (the host returns the last byte when its FIFO
++			// is empty, preserving the original hold behaviour)
++			m_curbyte = m_owner.intf().ymfm_external_read(ACCESS_ADPCM_B_STREAM, 0);
+ 			m_status |= STATUS_BRDY;
+ 		}
+ 	}

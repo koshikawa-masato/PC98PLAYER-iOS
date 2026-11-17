@@ -27,6 +27,7 @@ public:
     int  rhythm_kind;                  // 0=切 / 1=自前合成 / 2=渡された本物
     // ADPCM-B の CPU 駆動再生のバイト列。ゲストの書き込みはフレーム単位で
     // まとめて届くので、チップが delta-N の刻みで取り出せるよう FIFO で受ける
+    // （ymfm 側は third_party/patches/ の独自パッチでこの FIFO から読む）
     std::deque<uint8_t> stream_fifo;
     uint8_t  stream_last = 0;          // FIFO が空のときに返す最後のバイト
     uint64_t stream_consumed = 0;      // 消費＋破棄の累計（CPU 側の占有量と合わせる）
@@ -36,6 +37,7 @@ public:
         if (stream_fifo.size() >= (1u << 20)) { stream_consumed++; return; }   // 異常な溢れは捨てて数だけ合わせる
         stream_fifo.push_back(v);
     }
+
 
     YmfmHost() : adpcm_ram(512 * 1024, 0), rhythm_on(true), rhythm_kind(1) {   // ADPCM-B の DRAM は ちびおと相当の 512KB
         // 何も渡されなくてもリズムが鳴るように、自前合成の 8KB を入れておく。
@@ -331,6 +333,9 @@ int  OpnaRenderer::rhythm_source() const { return 0; }
 void OpnaRenderer::save_chip(std::vector<uint8_t>& out) { out.clear(); }
 bool OpnaRenderer::load_chip(const std::vector<uint8_t>&) { return false; }
 void OpnaRenderer::set_adpcm_ram(const uint8_t*, size_t) {}
+uint64_t OpnaRenderer::adpcm_stream_consumed() { return 0; }
+void OpnaRenderer::adpcm_stream_bytes(std::vector<uint8_t>& out) { out.clear(); }
+void OpnaRenderer::set_adpcm_stream(const uint8_t*, size_t) {}
 void OpnaRenderer::set_balance(double, double) {}
 int  OpnaRenderer::available() { return 0; }
 
