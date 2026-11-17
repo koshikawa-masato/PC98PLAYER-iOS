@@ -7,8 +7,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Fetch the existing optional ymfm dependency
-        run: git clone --depth 1 https://github.com/aaronsgiles/ymfm.git third_party/ymfm
+      - name: Fetch the pinned ymfm dependency (with local patches)
+        shell: bash
+        run: ./tools/fetch_ymfm.sh
       - name: Configure Windows application
         run: cmake -S . -B build/windows -A x64
       - name: Build Windows application

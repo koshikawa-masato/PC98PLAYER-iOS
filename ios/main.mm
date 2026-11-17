@@ -3060,8 +3060,11 @@ static void PC98ProducerEntry(void* context) {
         bool replayHasPc=false; for(auto& m: replay) if(m.size()==2 && m[0]==0xC0 && m[1]==42) replayHasPc=true;
         bool deleteClears=state_slot_delete(player->ps.cfg.root,7) && !state_slot_midi_load(player->ps.cfg.root,7,&blob2);
         midiStateOk=snapped && sidecarSaved && restored && valuesBack && replayOk && replayHasPc && deleteClears;
+        result[@"stateMidiState"]=@(midiStateOk);
     }
-    result[@"stateMidiState"]=@(midiStateOk);
+    // SoundFont が同梱されていないビルド（CI のクリーンチェックアウト等）では
+    // 内蔵シンセ自体が無効で、この検査は対象外。キーを出さないことで
+    // 「未実施」を「失敗」と誤判定しない（passed は全キーの AND で決まる）。
     manualDuo=NO; hingeDuo=NO; duoHardware=NO; [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     result[@"phoneRotationSupported"]=@((self.supportedInterfaceOrientations & UIInterfaceOrientationMaskPortrait) && (self.supportedInterfaceOrientations & UIInterfaceOrientationMaskLandscapeLeft) && (self.supportedInterfaceOrientations & UIInterfaceOrientationMaskLandscapeRight));
     bool landscape=true;
