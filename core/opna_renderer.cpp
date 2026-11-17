@@ -13,6 +13,7 @@
 #ifdef GMPV3_WITH_YMFM
 // tools/fetch_ymfm.ps1 で third_party/ymfm に取得したものを使う
 #include "ymfm_opn.h"
+#include <deque>
 #include <vector>
 
 namespace {
@@ -24,6 +25,17 @@ public:
     std::vector<uint8_t> adpcm_ram;    // ADPCM-B
     bool rhythm_on;                    // 切ると ADPCM-A の読み出しが 0 になる
     int  rhythm_kind;                  // 0=切 / 1=自前合成 / 2=渡された本物
+    // ADPCM-B の CPU 駆動再生のバイト列。ゲストの書き込みはフレーム単位で
+    // まとめて届くので、チップが delta-N の刻みで取り出せるよう FIFO で受ける
+    std::deque<uint8_t> stream_fifo;
+    uint8_t  stream_last = 0;          // FIFO が空のときに返す最後のバイト
+    uint64_t stream_consumed = 0;      // 消費＋破棄の累計（CPU 側の占有量と合わせる）
+    bool     stream_mode = false;      // 実行・非記録・非外部メモリの間だけ真
+    void stream_discard() { stream_consumed += stream_fifo.size(); stream_fifo.clear(); }
+    void stream_push(uint8_t v) {
+        if (stream_fifo.size() >= (1u << 20)) { stream_consumed++; return; }   // 異常な溢れは捨てて数だけ合わせる
+        stream_fifo.push_back(v);
+    }
 
     YmfmHost() : adpcm_ram(512 * 1024, 0), rhythm_on(true), rhythm_kind(1) {   // ADPCM-B の DRAM は ちびおと相当の 512KB
         // 何も渡されなくてもリズムが鳴るように、自前合成の 8KB を入れておく。
@@ -40,6 +52,10 @@ public:
             return (rhythm_on && offset < rhythm_rom.size()) ? rhythm_rom[offset] : 0;
         if (type == ymfm::ACCESS_ADPCM_B)
             return offset < adpcm_ram.size() ? adpcm_ram[offset] : 0;
+        if (type == ymfm::ACCESS_ADPCM_B_STREAM) {
+            if (!stream_fifo.empty()) { stream_last = stream_fifo.front(); stream_fifo.pop_front(); stream_consumed++; }
+            return stream_last;
+        }
         return 0;
     }
     void ymfm_external_write(ymfm::access_class type, uint32_t offset, uint8_t data) override {
@@ -86,6 +102,9 @@ void OpnaRenderer::reset() {
     if (!p) return;
     p->chip.reset();
     p->pos = 0;
+    p->host.stream_discard();
+    p->host.stream_last = 0;
+    p->host.stream_mode = false;
 }
 
 void OpnaRenderer::write(int part, uint8_t addr, uint8_t val) {
@@ -93,6 +112,15 @@ void OpnaRenderer::write(int part, uint8_t addr, uint8_t val) {
     if (!p) return;
     if (part == 0) { p->chip.write_address(addr);    p->chip.write_data(val); }
     else           { p->chip.write_address_hi(addr); p->chip.write_data_hi(val); }
+    // ADPCM-B の CPU 駆動再生のバイト列は FIFO で受ける（ノート開始で残りを捨てる）
+    if (part == 1) {
+        if (addr == 0x00) {
+            p->host.stream_mode = (val & 0xE0) == 0x80;
+            if (p->host.stream_mode) p->host.stream_discard();
+        } else if (addr == 0x08 && p->host.stream_mode) {
+            p->host.stream_push(val);
+        }
+    }
     // プリスケーラが変わるとチップのサンプルレートも変わる。取り直さないと
     // リサンプル比がずれて音程とテンポが狂う。
     if (part == 0 && addr >= 0x2D && addr <= 0x2F)
@@ -192,6 +220,25 @@ bool OpnaRenderer::load_chip(const std::vector<uint8_t>& in) {
     p->chip_rate = p->chip.sample_rate(clock_);
     return true;
 }
+uint64_t OpnaRenderer::adpcm_stream_consumed() {
+    Impl* p = (Impl*)impl_;
+    return p ? p->host.stream_consumed : 0;
+}
+void OpnaRenderer::adpcm_stream_bytes(std::vector<uint8_t>& out) {
+    Impl* p = (Impl*)impl_;
+    out.clear();
+    if (!p) return;
+    out.assign(p->host.stream_fifo.begin(), p->host.stream_fifo.end());
+}
+void OpnaRenderer::set_adpcm_stream(const uint8_t* data, size_t len) {
+    Impl* p = (Impl*)impl_;
+    if (!p) return;
+    p->host.stream_fifo.clear();
+    if (data) for (size_t i = 0; i < len; i++) p->host.stream_fifo.push_back(data[i]);
+    p->host.stream_consumed = 0;   // CPU 側の累計も復元側で合わせ直す
+    p->host.stream_last = 0;
+}
+
 void OpnaRenderer::set_adpcm_ram(const uint8_t* data, size_t len) {
     Impl* p = (Impl*)impl_;
     if (!p) return;

@@ -49,6 +49,13 @@ public:
     // 揃えるため）。チップ内部の保存には外部メモリが含まれないので別に持つ。
     void set_adpcm_ram(const uint8_t* data, size_t len);
 
+    // ADPCM-B の CPU 駆動再生（実行・非記録・非外部メモリ）でゲストが流す
+    // バイト列の FIFO。消費・破棄した累計（CPU 側の占有量計算と合わせる）、
+    // ステート保存用の中身の取り出しと復元。
+    uint64_t adpcm_stream_consumed();
+    void adpcm_stream_bytes(std::vector<uint8_t>& out);
+    void set_adpcm_stream(const uint8_t* data, size_t len);
+
     // FM と SSG の音量比。実機でもボードや本体のつまみで変わる部分なので開ける。
     void set_balance(double fm_gain, double ssg_gain);
 

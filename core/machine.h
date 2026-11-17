@@ -397,6 +397,8 @@ struct Machine {
     // 音
     std::vector<RegWrite> regw;  // レンダラへ渡す書き込み
     std::atomic<uint8_t> opna_adpcm_status{0};  // レンダラが描画のたびに写す ADPCM-B 状態（18Ch の拡張ステータス読み用）
+    uint64_t adpcm_stream_pushed = 0;    // CPU 駆動再生でゲストが渡したバイト数の累計
+    uint64_t adpcm_stream_consumed = 0;  // レンダラが消費・破棄した累計（描画のたびに写す）
     uint8_t  opna_adpcm_flag_control = 0x1C;    // フラグ制御レジスタ（110h）の控え。リセット値は 1Ch（EOS/BRDY/ZERO をマスク）
     std::vector<uint8_t> adpcm_ram;             // ADPCM-B の DRAM（ちびおと相当 512KB）の CPU 側ミラー。初回アクセスで確保
     uint64_t audio_tick;         // ここまで音を作った

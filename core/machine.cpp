@@ -277,6 +277,12 @@ static void adpcm_ram_ensure(Machine* m) {
 // 実機の DRAM は即時に受け付けるので、記録モードの受け付け (BRDY) と開始・
 // リセットの意味だけは、書いた瞬間に CPU 側でも反映する（意味は ymfm の
 // adpcm_b_channel::write と同じ並び・同じ条件）。
+// CPU 駆動再生の FIFO に何バイトまで溜めてよいか。これを超えると BRDY を
+// 落としてゲストを待たせる（実機でもチップが受け付けなければ CPU は待つ）
+static const uint64_t kAdpcmStreamCap = 4096;
+static bool opna_adpcm_stream_ready(const Machine* m) {
+    return (m->adpcm_stream_pushed - m->adpcm_stream_consumed) < kAdpcmStreamCap;
+}
 static void opna_adpcm_flag_model(Machine* m, uint8_t addr, uint8_t val) {
     const uint8_t* R = m->opna.reg[1];
     auto getst = [&] { return m->opna_adpcm_status.load(std::memory_order_relaxed); };
@@ -291,10 +297,15 @@ static void opna_adpcm_flag_model(Machine* m, uint8_t addr, uint8_t val) {
         else putst((uint8_t)(getst() & ~0x04));              // 実行中でなければ EOS を落とす
         if (val & 0x01) { putst(0x08); m->opna.adpcm_curaddr = 0; m->opna.adpcm_dummy = 0; }   // リセット: BRDY のみ残り、位置も戻る
         if (val & 0x20) m->opna.adpcm_dummy = 2;
+        if ((val & 0xE0) == 0x80) putst((uint8_t)((getst() & ~0x08) | (opna_adpcm_stream_ready(m) ? 0x08 : 0)));   // CPU 駆動再生の開始: BRDY は FIFO の空きで決める
     } else if (addr == 0x08) {
         bool execute = R[0x00] & 0x80, record = R[0x00] & 0x40, external = R[0x00] & 0x20;
         if (execute && !record && !external) {
-            putst((uint8_t)(getst() & ~0x08));               // CPU 駆動再生: 渡したら BRDY を落とす（消費されると戻る）
+            // CPU 駆動再生: バイトはレンダラ側 FIFO が受け、BRDY はその空きで決める。
+            // 従来は「渡したら落として消費（＝描画）で戻る」で、供給が
+            // 1 バイト/フレームに落ち、実時間の刻みに全く追いつかなかった
+            m->adpcm_stream_pushed++;
+            putst((uint8_t)((getst() & ~0x08) | (opna_adpcm_stream_ready(m) ? 0x08 : 0)));
         } else if (!execute && record && external) {
             if (m->opna.adpcm_dummy) { load_start(); m->opna.adpcm_dummy = 0; }
             uint32_t end = (uint32_t)(R[0x04] | (R[0x05] << 8));
@@ -908,6 +919,10 @@ uint8_t io_in8_(Machine* m, uint16_t port) {
             // ADPCM-B のフラグはフラグ制御（110h）でマスクされた分を見せない。
             // PLAYING（20h）はマスクの対象外
             uint8_t st = m->opna_adpcm_status.load(std::memory_order_relaxed);
+            // CPU 駆動再生中は BRDY を FIFO の空きから作り直す（レンダラから
+            // 写した値は描画時点のもので、フレーム内の供給可否を表せない）
+            if ((m->opna.reg[1][0x00] & 0xE0) == 0x80)
+                st = (uint8_t)((st & ~0x08) | (opna_adpcm_stream_ready(m) ? 0x08 : 0));
             uint8_t bits = (uint8_t)((st & 0x20) | (st & 0x1C & ~m->opna_adpcm_flag_control));
             return (uint8_t)((m->opna.status & 0x03) | bits);
         }

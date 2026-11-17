@@ -741,6 +741,7 @@ void Player::run_frame(bool render_video, bool render_audio) {
     // ADPCM-B の状態（BRDY 等）を CPU 側へ見えるように写しておく。音源の状態を
     // ポーリングで待つソフト（P88SR の DRAM 判定など）がこれを読む
     opna_adpcm_set_status(m, opna->status_adpcm_bits());
+    m->adpcm_stream_consumed = opna->adpcm_stream_consumed();   // CPU 駆動再生 FIFO の占有量を CPU 側と合わせる
     for (; bi < m->beepw.size(); bi++) { int v = m->beepw[bi].second; if (v == 0) beep_state = false; else if (v == 1) beep_state = true; else if (v & 0x400000) { beep_pwm = true; pwm_lo_s = (double)m->beepw[bi].first; pwm_lo_e = (v & 1) ? 1e300 : pwm_lo_s; } else if (v & 0x200000) { uint32_t cnt = (uint16_t)v; if (!cnt) cnt = 0x10000; beep_pwm = true; pwm_lo_s = (double)m->beepw[bi].first; pwm_lo_e = pwm_lo_s + cnt * 4.0; } else if (v & 0x100000) { beep_reload = (uint16_t)v; beep_pwm = false; } }
     if (pi < m->pcm_out.size()) { pcm_l = m->pcm_out.back().l; pcm_r = m->pcm_out.back().r; }
     if (!(m->pcm86.ctrl & 0x80)) pcm_l = pcm_r = 0;
@@ -861,6 +862,8 @@ void Player::snapshot(std::vector<uint8_t>& out) {
     w.tag("ADPM");                                   // ADPCM-B の DRAM とフラグ制御（チップ保存には含まれない分）
     w.u32((uint32_t)m->adpcm_ram.size()); w.bytes(m->adpcm_ram.data(), m->adpcm_ram.size());
     w.pod(m->opna_adpcm_flag_control);
+    std::vector<uint8_t> sfifo; opna->adpcm_stream_bytes(sfifo);   // CPU 駆動再生の FIFO（未消費分）
+    w.u32((uint32_t)sfifo.size()); w.bytes(sfifo.data(), sfifo.size());
     w.tag("END ");
     out.swap(w.b);
 }
@@ -887,6 +890,7 @@ bool Player::restore(const uint8_t* data, size_t len) {
         }
     }
     bool have_adpm = false;                          // ADPCM-B の DRAM（旧形式のステートには無い）
+    std::vector<uint8_t> stream_fifo; bool have_stream = false;
     if (r.ok && r.peek_tag("ADPM")) {
         r.tag("ADPM");
         uint32_t n = r.u32();
@@ -894,6 +898,14 @@ bool Player::restore(const uint8_t* data, size_t len) {
             m->adpcm_ram.assign(n, 0);
             if (n) r.bytes(m->adpcm_ram.data(), n);
             if (r.ok) { r.pod(m->opna_adpcm_flag_control); have_adpm = r.ok; }
+            if (r.ok && !r.peek_tag("END ")) {       // CPU 駆動再生の FIFO（新しい形式だけにある）
+                uint32_t fn = r.u32();
+                if (r.ok && fn <= (1u << 20)) {
+                    stream_fifo.resize(fn);
+                    if (fn) r.bytes(stream_fifo.data(), fn);
+                    have_stream = r.ok;
+                } else r.ok = false;
+            }
         } else r.ok = false;
     }
     r.tag("END ");
@@ -908,6 +920,11 @@ bool Player::restore(const uint8_t* data, size_t len) {
     }
     // ADPCM-B の DRAM はチップ保存の対象外なので、CPU 側ミラーから戻す
     if (have_adpm) opna->set_adpcm_ram(m->adpcm_ram.data(), m->adpcm_ram.size());
+    if (have_stream) {   // CPU 駆動再生の FIFO と占有量の累計も戻す
+        opna->set_adpcm_stream(stream_fifo.data(), stream_fifo.size());
+        m->adpcm_stream_pushed = stream_fifo.size();
+        m->adpcm_stream_consumed = 0;
+    }
     fb_h = video_render(m, fb);
     return true;
 }
