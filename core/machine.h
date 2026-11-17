@@ -421,6 +421,7 @@ void     machine_destroy(Machine* m);
 void     machine_run_frame(Machine* m);          // 1 フレームぶん進める
 void     machine_raise_irq(Machine* m, int irq);
 void     opna_adpcm_set_status(Machine* m, uint8_t s);   // ADPCM-B 状態の更新（マスクされていないフラグの立ち上がりで音源 IRQ）
+bool     opna_adpcm_stream_ready(const Machine* m);      // CPU 駆動再生中、FIFO に空きがあり BRDY を立ててよいか
 void     machine_eoi(Machine* m, int irq);
 void     machine_key(Machine* m, uint8_t scancode, bool down);
 void     machine_mouse(Machine* m, int dx, int dy, int buttons);

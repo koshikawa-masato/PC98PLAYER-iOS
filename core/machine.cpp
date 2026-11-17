@@ -279,8 +279,11 @@ static void adpcm_ram_ensure(Machine* m) {
 // adpcm_b_channel::write と同じ並び・同じ条件）。
 // CPU 駆動再生の FIFO に何バイトまで溜めてよいか。これを超えると BRDY を
 // 落としてゲストを待たせる（実機でもチップが受け付けなければ CPU は待つ）
-static const uint64_t kAdpcmStreamCap = 4096;
-static bool opna_adpcm_stream_ready(const Machine* m) {
+// 余剰を大きく許すと、その分だけ発音がゲストの拍から遅れ、余剰の変動が
+// タイミングの揺れになる（実機の cpudata は 1 バイトで供給が消費に同期する）。
+// 256 は 1 フレーム分の消費（約 190 バイト）と tick 1 回分を賄う最小限の深さ
+static const uint64_t kAdpcmStreamCap = 256;
+bool opna_adpcm_stream_ready(const Machine* m) {
     return (m->adpcm_stream_pushed - m->adpcm_stream_consumed) < kAdpcmStreamCap;
 }
 static void opna_adpcm_flag_model(Machine* m, uint8_t addr, uint8_t val) {

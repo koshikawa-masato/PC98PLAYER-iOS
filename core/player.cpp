@@ -739,8 +739,16 @@ void Player::run_frame(bool render_video, bool render_audio) {
     }
     for (; wi < m->regw.size(); wi++) opna->write(m->regw[wi].part, m->regw[wi].addr, m->regw[wi].val);
     // ADPCM-B の状態（BRDY 等）を CPU 側へ見えるように写しておく。音源の状態を
-    // ポーリングで待つソフト（P88SR の DRAM 判定など）がこれを読む
-    opna_adpcm_set_status(m, opna->status_adpcm_bits());
+    // ポーリングで待つソフト（P88SR の DRAM 判定など）がこれを読む。
+    // CPU 駆動再生中は BRDY を FIFO の占有で決める（読み出し側と同じ）。
+    // チップ側の BRDY は cpudata の消費で出る別物で、そのまま写すと音源 IRQ の
+    // 誤発（タイマと誤認される）や状態のちらつきの元になる
+    {
+        uint8_t sbits = opna->status_adpcm_bits();
+        if ((m->opna.reg[1][0x00] & 0xE0) == 0x80)
+            sbits = (uint8_t)((sbits & ~0x08) | (opna_adpcm_stream_ready(m) ? 0x08 : 0x00));
+        opna_adpcm_set_status(m, sbits);
+    }
     m->adpcm_stream_consumed = opna->adpcm_stream_consumed();   // CPU 駆動再生 FIFO の占有量を CPU 側と合わせる
     for (; bi < m->beepw.size(); bi++) { int v = m->beepw[bi].second; if (v == 0) beep_state = false; else if (v == 1) beep_state = true; else if (v & 0x400000) { beep_pwm = true; pwm_lo_s = (double)m->beepw[bi].first; pwm_lo_e = (v & 1) ? 1e300 : pwm_lo_s; } else if (v & 0x200000) { uint32_t cnt = (uint16_t)v; if (!cnt) cnt = 0x10000; beep_pwm = true; pwm_lo_s = (double)m->beepw[bi].first; pwm_lo_e = pwm_lo_s + cnt * 4.0; } else if (v & 0x100000) { beep_reload = (uint16_t)v; beep_pwm = false; } }
     if (pi < m->pcm_out.size()) { pcm_l = m->pcm_out.back().l; pcm_r = m->pcm_out.back().r; }
