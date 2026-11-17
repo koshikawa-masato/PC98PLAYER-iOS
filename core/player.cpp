@@ -738,6 +738,9 @@ void Player::run_frame(bool render_video, bool render_audio) {
         sample_acc += step;
     }
     for (; wi < m->regw.size(); wi++) opna->write(m->regw[wi].part, m->regw[wi].addr, m->regw[wi].val);
+    // ADPCM-B の状態（BRDY 等）を CPU 側へ見えるように写しておく。音源の状態を
+    // ポーリングで待つソフト（P88SR の DRAM 判定など）がこれを読む
+    m->opna_adpcm_status.store(opna->status_adpcm_bits(), std::memory_order_relaxed);
     for (; bi < m->beepw.size(); bi++) { int v = m->beepw[bi].second; if (v == 0) beep_state = false; else if (v == 1) beep_state = true; else if (v & 0x400000) { beep_pwm = true; pwm_lo_s = (double)m->beepw[bi].first; pwm_lo_e = (v & 1) ? 1e300 : pwm_lo_s; } else if (v & 0x200000) { uint32_t cnt = (uint16_t)v; if (!cnt) cnt = 0x10000; beep_pwm = true; pwm_lo_s = (double)m->beepw[bi].first; pwm_lo_e = pwm_lo_s + cnt * 4.0; } else if (v & 0x100000) { beep_reload = (uint16_t)v; beep_pwm = false; } }
     if (pi < m->pcm_out.size()) { pcm_l = m->pcm_out.back().l; pcm_r = m->pcm_out.back().r; }
     if (!(m->pcm86.ctrl & 0x80)) pcm_l = pcm_r = 0;

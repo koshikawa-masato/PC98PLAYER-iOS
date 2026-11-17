@@ -29,6 +29,11 @@ public:
     // part: 0 = 188h/18Ah 側、1 = 18Ch/18Eh 側
     void write(int part, uint8_t addr, uint8_t val);
 
+    // ADPCM-B の状態ビット（拡張ステータス読みの並び: EOS=04h / BRDY=08h /
+    // ZERO=10h / PLAYING=20h だけを抜いたもの）。CPU 側が 18Ch の読みで
+    // タイマフラグと合成して返すための値。ymfm が無いときは 0。
+    uint8_t status_adpcm_bits();
+
     // 1 フレーム分のステレオサンプルを生成する（-1.0 .. +1.0）
     void render_one(float* left, float* right);
 

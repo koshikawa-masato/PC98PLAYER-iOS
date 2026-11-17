@@ -11,6 +11,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <atomic>
 #include <vector>
 #include <string>
 #include "cpu.h"
@@ -103,6 +104,8 @@ struct Opna {
     uint8_t  addr[2];
     uint8_t  reg[2][256];
     uint8_t  status;
+    uint32_t adpcm_curaddr;   // ADPCM-B のメモリアクセス位置（CPU 側フラグ模型用）
+    uint8_t  adpcm_dummy;     // ADPCM-B のダミーリード残り（同上）
     uint8_t  irq_enable_a, irq_enable_b, timer_a_run, timer_b_run;
     uint8_t  prescale;
     int32_t  timer_a_period, timer_a_count;
@@ -393,6 +396,7 @@ struct Machine {
 
     // 音
     std::vector<RegWrite> regw;  // レンダラへ渡す書き込み
+    std::atomic<uint8_t> opna_adpcm_status{0};  // レンダラが描画のたびに写す ADPCM-B 状態（18Ch の拡張ステータス読み用）
     uint64_t audio_tick;         // ここまで音を作った
     std::vector<std::pair<uint64_t,int>> beepw;   // ビープの変化
 

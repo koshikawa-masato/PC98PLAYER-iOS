@@ -99,6 +99,14 @@ void OpnaRenderer::write(int part, uint8_t addr, uint8_t val) {
         p->chip_rate = p->chip.sample_rate(clock_);
 }
 
+uint8_t OpnaRenderer::status_adpcm_bits() {
+    Impl* p = (Impl*)impl_;
+    if (!p) return 0;
+    // ym2608 の拡張ステータスから ADPCM-B のビットだけを抜く（タイマと BUSY は
+    // CPU 側のモデルが持っているので混ぜない）
+    return (uint8_t)(p->chip.read_status_hi() & 0x3C);
+}
+
 void OpnaRenderer::render_one(float* left, float* right) {
     Impl* p = (Impl*)impl_;
     if (!p) { *left = *right = 0.0f; return; }
@@ -260,6 +268,7 @@ void OpnaRenderer::init(uint32_t chip_clock, int sample_rate) {
 }
 void OpnaRenderer::reset() {}
 void OpnaRenderer::write(int, uint8_t, uint8_t) {}
+uint8_t OpnaRenderer::status_adpcm_bits() { return 0; }
 void OpnaRenderer::render_one(float* left, float* right) { *left = 0.0f; *right = 0.0f; }
 void OpnaRenderer::reload_from_registers(const uint8_t*, const uint8_t*) {}
 bool OpnaRenderer::set_rhythm_rom(const uint8_t*, int) { return false; }
